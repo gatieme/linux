@@ -35,6 +35,7 @@ struct thread_info {
 	void __user		*sysenter_return;
 	unsigned int		sig_on_uaccess_error:1;
 	unsigned int		uaccess_err:1;	/* uaccess failed */
+	unsigned long		kgr_in_progress;
 };
 
 #define INIT_THREAD_INFO(tsk)			\
