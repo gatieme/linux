@@ -52,7 +52,7 @@ static void kgr_stub_slow(unsigned long ip, unsigned long parent_ip,
 		struct ftrace_ops *ops, struct pt_regs *regs)
 {
 	struct kgr_patch_fun *p = ops->private;
-	bool go_old = kgr_task_in_progress(current) && current->mm;
+	bool go_old = kgr_task_in_progress(current);
 
 	if (go_old) {
 		pr_debug("kgr: slow stub: calling old code at %lx\n",
@@ -102,11 +102,7 @@ static bool kgr_still_patching(void)
 
 	read_lock(&tasklist_lock);
 	for_each_process(p) {
-		/*
-		 * TODO
-		 *   kernel thread codepaths not supported and silently ignored
-		 */
-		if (kgr_task_in_progress(p) && p->mm) {
+		if (kgr_task_in_progress(p)) {
 			pr_info("pid %d (%s) still in kernel after timeout\n",
 					p->pid, p->comm);
 			failed = true;
@@ -151,13 +147,23 @@ static void kgr_work_fn(struct work_struct *work)
 	kgr_finalize();
 }
 
-static void kgr_mark_processes(void)
+static void kgr_handle_processes(void)
 {
 	struct task_struct *p;
 
 	read_lock(&tasklist_lock);
-	for_each_process(p)
+	for_each_process(p) {
 		kgr_mark_task_in_progress(p);
+
+		/* wake up kthreads, they will clean the progress flag */
+		if (p->flags & PF_KTHREAD) {
+			/*
+			 * this is incorrect for kthreads waiting still for
+			 * their first wake_up.
+			 */
+			wake_up_process(p);
+		}
+	}
 	read_unlock(&tasklist_lock);
 }
 
@@ -280,8 +286,7 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
  * kgr_patch_kernel -- the entry for a kgraft patch
  * @patch: patch to be applied
  *
- * Start patching of code that is neither running in IRQ context nor
- * kernel thread.
+ * Start patching of code that is not running in IRQ context.
  */
 int kgr_patch_kernel(struct kgr_patch *patch)
 {
@@ -324,7 +329,7 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	kgr_patch = patch;
 	mutex_unlock(&kgr_in_progress_lock);
 
-	kgr_mark_processes();
+	kgr_handle_processes();
 
 	/*
 	 * give everyone time to exit kernel, and check after a while
