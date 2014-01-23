@@ -329,7 +329,7 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	/*
 	 * give everyone time to exit kernel, and check after a while
 	 */
-	queue_delayed_work(kgr_wq, &kgr_work, KGR_TIMEOUT * HZ);
+	queue_delayed_work(kgr_wq, &kgr_work, 10 * HZ);
 
 	return 0;
 err_unlock:
