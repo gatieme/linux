@@ -27,6 +27,7 @@
 #include <linux/delay.h>
 #include <linux/gfp.h>
 #include <linux/oom.h>
+#include <linux/sched.h>
 #include <linux/smpboot.h>
 #include "../time/tick-internal.h"
 
@@ -1228,7 +1229,8 @@ static int rcu_boost_kthread(void *arg)
 	for (;;) {
 		rnp->boost_kthread_status = RCU_KTHREAD_WAITING;
 		trace_rcu_utilization(TPS("End boost kthread@rcu_wait"));
-		rcu_wait(rnp->boost_tasks || rnp->exp_tasks);
+		rcu_wait(({ kgr_task_safe(current);
+					rnp->boost_tasks || rnp->exp_tasks; }));
 		trace_rcu_utilization(TPS("Start boost kthread@rcu_wait"));
 		rnp->boost_kthread_status = RCU_KTHREAD_RUNNING;
 		more2boost = rcu_boost(rnp);
@@ -2252,8 +2254,10 @@ wait_again:
 	/* Wait for callbacks to appear. */
 	if (!rcu_nocb_poll) {
 		trace_rcu_nocb_wake(my_rdp->rsp->name, my_rdp->cpu, "Sleep");
-		wait_event_interruptible(my_rdp->nocb_wq,
-				!ACCESS_ONCE(my_rdp->nocb_leader_sleep));
+		wait_event_interruptible(my_rdp->nocb_wq, ({
+				kgr_task_safe(current);
+				!ACCESS_ONCE(my_rdp->nocb_leader_sleep);
+			 }));
 		/* Memory barrier handled by smp_mb() calls below and repoll. */
 	} else if (firsttime) {
 		firsttime = false; /* Don't drown trace log with "Poll"! */
@@ -2353,8 +2357,10 @@ static void nocb_follower_wait(struct rcu_data *rdp)
 		if (!rcu_nocb_poll) {
 			trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
 					    "FollowerSleep");
-			wait_event_interruptible(rdp->nocb_wq,
-						 ACCESS_ONCE(rdp->nocb_follower_head));
+			wait_event_interruptible(rdp->nocb_wq, ({
+						 kgr_task_safe(current);
+						 ACCESS_ONCE(rdp->nocb_follower_head);
+					}));
 		} else if (firsttime) {
 			/* Don't drown trace log with "Poll"! */
 			firsttime = false;
@@ -2388,6 +2394,8 @@ static int rcu_nocb_kthread(void *arg)
 
 	/* Each pass through this loop invokes one batch of callbacks */
 	for (;;) {
+		kgr_task_safe(current);
+
 		/* Wait for callbacks. */
 		if (rdp->nocb_leader == rdp)
 			nocb_leader_wait(rdp);

@@ -111,6 +111,8 @@ bool kthread_freezable_should_stop(bool *was_frozen)
 {
 	bool frozen = false;
 
+	kgr_task_safe(current);
+
 	might_sleep();
 
 	if (unlikely(freezing(current)))
@@ -497,6 +499,7 @@ int kthreadd(void *unused)
 		if (list_empty(&kthread_create_list))
 			schedule();
 		__set_current_state(TASK_RUNNING);
+		kgr_task_safe(current);
 
 		spin_lock(&kthread_create_lock);
 		while (!list_empty(&kthread_create_list)) {

@@ -2769,6 +2769,7 @@ static void khugepaged_do_scan(void)
 			break;
 
 		cond_resched();
+		kgr_task_safe(current);
 
 		if (unlikely(kthread_should_stop() || freezing(current)))
 			break;
@@ -2797,8 +2798,9 @@ static void khugepaged_wait_work(void)
 		if (!khugepaged_scan_sleep_millisecs)
 			return;
 
-		wait_event_freezable_timeout(khugepaged_wait,
-					     kthread_should_stop(),
+		wait_event_freezable_timeout(khugepaged_wait, ({
+					kgr_task_safe(current);
+					     kthread_should_stop(); }),
 			msecs_to_jiffies(khugepaged_scan_sleep_millisecs));
 		return;
 	}

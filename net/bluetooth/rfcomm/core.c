@@ -2098,6 +2098,8 @@ static int rfcomm_run(void *unused)
 		if (kthread_should_stop())
 			break;
 
+		kgr_task_safe(current);
+
 		/* Process stuff */
 		rfcomm_process_sessions();
 

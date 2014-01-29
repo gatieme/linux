@@ -1779,9 +1779,10 @@ static int __noreturn rcu_gp_kthread(void *arg)
 					       ACCESS_ONCE(rsp->gpnum),
 					       TPS("reqwait"));
 			rsp->gp_state = RCU_GP_WAIT_GPS;
-			wait_event_interruptible(rsp->gp_wq,
+			wait_event_interruptible(rsp->gp_wq, ({
+						 kgr_task_safe(current);
 						 ACCESS_ONCE(rsp->gp_flags) &
-						 RCU_GP_FLAG_INIT);
+						 RCU_GP_FLAG_INIT; }));
 			/* Locking provides needed memory barrier. */
 			if (rcu_gp_init(rsp))
 				break;
@@ -1813,6 +1814,7 @@ static int __noreturn rcu_gp_kthread(void *arg)
 					(!ACCESS_ONCE(rnp->qsmask) &&
 					 !rcu_preempt_blocked_readers_cgp(rnp)),
 					j);
+			kgr_task_safe(current);
 			/* Locking provides needed memory barriers. */
 			/* If grace period done, leave loop. */
 			if (!ACCESS_ONCE(rnp->qsmask) &&
