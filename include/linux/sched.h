@@ -2970,6 +2970,15 @@ static inline void mm_update_next_owner(struct mm_struct *mm)
 }
 #endif /* CONFIG_MEMCG */
 
+#if IS_ENABLED(CONFIG_KGRAFT)
+static inline void kgr_task_safe(struct task_struct *p)
+{
+	clear_bit(0, &task_thread_info(p)->kgr_in_progress);
+}
+#else
+static inline void kgr_task_safe(struct task_struct *p) { }
+#endif /* IS_ENABLED(CONFIG_KGRAFT) */
+
 static inline unsigned long task_rlimit(const struct task_struct *tsk,
 		unsigned int limit)
 {
