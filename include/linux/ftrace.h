@@ -148,6 +148,8 @@ enum ftrace_tracing_type_t {
 /* Current tracing type, default is FTRACE_TYPE_ENTER */
 extern enum ftrace_tracing_type_t ftrace_tracing_type;
 
+extern int ftrace_is_dead(void);
+
 /*
  * The ftrace_ops must be a static and should also
  * be read_mostly.  These functions do modify read_mostly variables
@@ -223,6 +225,7 @@ static inline int ftrace_nr_registered_ops(void)
 	return 0;
 }
 static inline void clear_ftrace_function(void) { }
+static inline int ftrace_is_dead(void) { return 0; }
 static inline void ftrace_kill(void) { }
 #endif /* CONFIG_FUNCTION_TRACER */
 
