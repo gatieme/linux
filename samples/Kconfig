@@ -55,6 +55,10 @@ config SAMPLE_KDB
 	  Build an example of how to dynamically add the hello
 	  command to the kdb shell.
 
+config SAMPLE_KGRAFT_PATCHER
+	tristate "Build kGraft patcher example -- loadable modules only"
+	depends on KGRAFT && m
+
 config SAMPLE_RPMSG_CLIENT
 	tristate "Build rpmsg client sample -- loadable modules only"
 	depends on RPMSG && m
