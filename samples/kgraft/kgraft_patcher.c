@@ -62,6 +62,11 @@ static bool kgr_new_capable(int cap)
 	return ns_capable(&init_user_ns, cap);
 }
 
+static void kgr_new_function(unsigned long data)
+{
+	pr_info("kgr-patcher: %s\n", __func__);
+}
+
 static struct kgr_patch patch = {
 	.owner = THIS_MODULE,
 	.patches = {
@@ -69,6 +74,7 @@ static struct kgr_patch patch = {
 		KGR_PATCH(SyS_iopl, kgr_new_sys_iopl, true),
 #endif
 		KGR_PATCH(capable, kgr_new_capable, true),
+		KGR_PATCH(unknown_function, kgr_new_function, false),
 		KGR_PATCH_END
 	}
 };
