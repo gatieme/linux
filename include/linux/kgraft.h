@@ -46,6 +46,9 @@ struct kgr_patch_fun {
 	const char *name;
 	void *new_fun;
 
+	bool abort_if_missing;
+	bool applied;
+
 	unsigned long loc_old;
 	unsigned long loc_new;
 
@@ -72,9 +75,10 @@ struct kgr_patch {
 #define kgr_for_each_patch_fun(p, pf)	\
 	for (pf = p->patches; pf->name; pf++)
 
-#define KGR_PATCH(_name, _new_function)		{			\
+#define KGR_PATCH(_name, _new_function, abort)	{			\
 		.name = #_name,						\
 		.new_fun = _new_function,				\
+		.abort_if_missing = abort,				\
 	}
 #define KGR_PATCH_END				{ }
 
