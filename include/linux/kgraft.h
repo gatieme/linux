@@ -82,7 +82,11 @@ struct kgr_patch {
 	}
 #define KGR_PATCH_END				{ }
 
+extern bool kgr_in_progress;
+
 extern int kgr_patch_kernel(struct kgr_patch *);
+extern int kgr_add_files(void);
+extern void kgr_remove_files(void);
 
 static inline void kgr_mark_task_in_progress(struct task_struct *p)
 {

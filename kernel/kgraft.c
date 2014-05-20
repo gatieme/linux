@@ -33,7 +33,7 @@ static void kgr_work_fn(struct work_struct *work);
 static struct workqueue_struct *kgr_wq;
 static DECLARE_DELAYED_WORK(kgr_work, kgr_work_fn);
 static DEFINE_MUTEX(kgr_in_progress_lock);
-static bool kgr_in_progress;
+bool kgr_in_progress;
 static bool kgr_initialized;
 static struct kgr_patch *kgr_patch;
 
@@ -399,20 +399,31 @@ EXPORT_SYMBOL_GPL(kgr_patch_kernel);
 
 static int __init kgr_init(void)
 {
+	int ret;
+
 	if (ftrace_is_dead()) {
 		pr_warn("kgr: enabled, but no fentry locations found ... aborting\n");
 		return -ENODEV;
 	}
 
+	ret = kgr_add_files();
+	if (ret)
+		return ret;
+
 	kgr_wq = create_singlethread_workqueue("kgraft");
 	if (!kgr_wq) {
 		pr_err("kgr: cannot allocate a work queue, aborting!\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_remove_files;
 	}
 
 	kgr_initialized = true;
 	pr_info("kgr: successfully initialized\n");
 
 	return 0;
+err_remove_files:
+	kgr_remove_files();
+
+	return ret;
 }
 module_init(kgr_init);
