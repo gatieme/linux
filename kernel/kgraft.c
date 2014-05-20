@@ -155,14 +155,22 @@ static void kgr_work_fn(struct work_struct *work)
 	kgr_finalize();
 }
 
+static void kgr_mark_processes(void)
+{
+	struct task_struct *p;
+
+	read_lock(&tasklist_lock);
+	for_each_process(p)
+		kgr_mark_task_in_progress(p);
+	read_unlock(&tasklist_lock);
+}
+
 static void kgr_handle_processes(void)
 {
 	struct task_struct *p;
 
 	read_lock(&tasklist_lock);
 	for_each_process(p) {
-		kgr_mark_task_in_progress(p);
-
 		/* wake up kthreads, they will clean the progress flag */
 		if (p->flags & PF_KTHREAD) {
 			/*
@@ -345,6 +353,8 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 		ret = -ENOMEM;
 		goto err_unlock;
 	}
+
+	kgr_mark_processes();
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
 		patch_fun->patch = patch;
