@@ -179,6 +179,9 @@ static void kgr_handle_processes(void)
 			 */
 			wake_up_process(p);
 		}
+		/* mark tasks wandering in userspace as already migrated */
+		if (!kgr_needs_lazy_migration(p))
+			kgr_task_safe(p);
 	}
 	read_unlock(&tasklist_lock);
 }
