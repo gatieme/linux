@@ -27,7 +27,8 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
-static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final);
+static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
+		bool revert);
 static void kgr_work_fn(struct work_struct *work);
 
 static struct workqueue_struct *kgr_wq;
@@ -36,6 +37,7 @@ static DEFINE_MUTEX(kgr_in_progress_lock);
 bool kgr_in_progress;
 static bool kgr_initialized;
 static struct kgr_patch *kgr_patch;
+static bool kgr_revert;
 
 /*
  * The stub needs to modify the RIP value stored in struct pt_regs
@@ -60,6 +62,9 @@ static void kgr_stub_slow(unsigned long ip, unsigned long parent_ip,
 		go_old = !*this_cpu_ptr(p->patch->irq_use_new);
 	else
 		go_old = kgr_task_in_progress(current);
+
+	if (p->state == KGR_PATCH_REVERT_SLOW)
+		go_old = !go_old;
 
 	if (go_old) {
 		pr_debug("kgr: slow stub: calling old code at %lx\n",
@@ -123,7 +128,7 @@ static void kgr_finalize(void)
 	struct kgr_patch_fun *patch_fun;
 
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
-		int ret = kgr_patch_code(patch_fun, true);
+		int ret = kgr_patch_code(patch_fun, true, kgr_revert);
 
 		if (ret < 0)
 			pr_err("kgr: finalize for %s failed, trying to continue\n",
@@ -131,6 +136,9 @@ static void kgr_finalize(void)
 	}
 
 	free_percpu(kgr_patch->irq_use_new);
+
+	if (kgr_revert)
+		module_put(kgr_patch->owner);
 
 	mutex_lock(&kgr_in_progress_lock);
 	kgr_in_progress = false;
@@ -271,7 +279,8 @@ static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 	return 0;
 }
 
-static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
+static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
+		bool revert)
 {
 	struct ftrace_ops *new_ops = NULL, *unreg_ops = NULL;
 	enum kgr_patch_state next_state;
@@ -279,7 +288,7 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 
 	switch (patch_fun->state) {
 	case KGR_PATCH_INIT:
-		if (final)
+		if (revert || final)
 			return -EINVAL;
 		err = kgr_init_ftrace_ops(patch_fun);
 		if (err) {
@@ -294,10 +303,23 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 		new_ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_SLOW:
-		if (!final)
+		if (revert || !final)
 			return -EINVAL;
 		next_state = KGR_PATCH_APPLIED;
 		new_ops = &patch_fun->ftrace_ops_fast;
+		unreg_ops = &patch_fun->ftrace_ops_slow;
+		break;
+	case KGR_PATCH_APPLIED:
+		if (!revert || final)
+			return -EINVAL;
+		next_state = KGR_PATCH_REVERT_SLOW;
+		new_ops = &patch_fun->ftrace_ops_slow;
+		unreg_ops = &patch_fun->ftrace_ops_fast;
+		break;
+	case KGR_PATCH_REVERT_SLOW:
+		if (!revert || !final)
+			return -EINVAL;
+		next_state = KGR_PATCH_REVERTED;
 		unreg_ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_SKIPPED:
@@ -337,13 +359,7 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 	return 0;
 }
 
-/**
- * kgr_patch_kernel -- the entry for a kgraft patch
- * @patch: patch to be applied
- *
- * Start patching of code.
- */
-int kgr_patch_kernel(struct kgr_patch *patch)
+int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 {
 	struct kgr_patch_fun *patch_fun;
 	int ret;
@@ -351,11 +367,6 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	if (!kgr_initialized) {
 		pr_err("kgr: can't patch, not initialized\n");
 		return -EINVAL;
-	}
-
-	if (!try_module_get(patch->owner)) {
-		pr_err("kgr: can't increase patch module refcount\n");
-		return -EBUSY;
 	}
 
 	mutex_lock(&kgr_in_progress_lock);
@@ -372,14 +383,12 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 		goto err_unlock;
 	}
 
-	init_completion(&patch->finish);
-
 	kgr_mark_processes();
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
 		patch_fun->patch = patch;
 
-		ret = kgr_patch_code(patch_fun, false);
+		ret = kgr_patch_code(patch_fun, false, revert);
 		/*
 		 * In case any of the symbol resolutions in the set
 		 * has failed, patch all the previously replaced fentry
@@ -396,9 +405,8 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	}
 	kgr_in_progress = true;
 	kgr_patch = patch;
+	kgr_revert = revert;
 	mutex_unlock(&kgr_in_progress_lock);
-
-	kgr_patch_dir_add(patch);
 
 	kgr_handle_irqs();
 	kgr_handle_processes();
@@ -413,6 +421,39 @@ err_free:
 	free_percpu(patch->irq_use_new);
 err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
+
+	return ret;
+}
+
+/**
+ * kgr_patch_kernel -- the entry for a kgraft patch
+ * @patch: patch to be applied
+ *
+ * Start patching of code.
+ */
+int kgr_patch_kernel(struct kgr_patch *patch)
+{
+	int ret;
+
+	if (!try_module_get(patch->owner)) {
+		pr_err("kgr: can't increase patch module refcount\n");
+		return -EBUSY;
+	}
+
+	init_completion(&patch->finish);
+
+	ret = kgr_patch_dir_add(patch);
+	if (ret)
+		goto err_put;
+
+	ret = kgr_modify_kernel(patch, false);
+	if (ret)
+		goto err_dir_del;
+
+	return ret;
+err_dir_del:
+	kgr_patch_dir_del(patch);
+err_put:
 	module_put(patch->owner);
 
 	return ret;

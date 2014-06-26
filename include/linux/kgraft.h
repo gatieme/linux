@@ -53,6 +53,9 @@ struct kgr_patch_fun {
 		KGR_PATCH_SLOW,
 		KGR_PATCH_APPLIED,
 
+		KGR_PATCH_REVERT_SLOW,
+		KGR_PATCH_REVERTED,
+
 		KGR_PATCH_SKIPPED,
 	} state;
 
@@ -99,6 +102,8 @@ extern bool kgr_in_progress;
 
 extern int kgr_patch_kernel(struct kgr_patch *);
 extern void kgr_patch_remove(struct kgr_patch *);
+
+extern int kgr_modify_kernel(struct kgr_patch *patch, bool revert);
 extern int kgr_patch_dir_add(struct kgr_patch *patch);
 extern void kgr_patch_dir_del(struct kgr_patch *patch);
 extern int kgr_add_files(void);

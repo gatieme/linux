@@ -88,7 +88,6 @@ static int __init kgr_patcher_init(void)
 static void __exit kgr_patcher_cleanup(void)
 {
 	kgr_patch_remove(&patch);
-	pr_err("removing now buggy!\n");
 }
 
 module_init(kgr_patcher_init);

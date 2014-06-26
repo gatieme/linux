@@ -56,10 +56,23 @@ static ssize_t state_show(struct kobject *kobj, struct kobj_attribute *attr,
 	return size;
 }
 
+static ssize_t revert_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	struct kgr_patch *p = kobj_to_patch(kobj);
+	int ret;
+
+	ret = kgr_modify_kernel(p, true);
+
+	return ret < 0 ? ret : count;
+}
+
 static struct kobj_attribute kgr_attr_state = __ATTR_RO(state);
+static struct kobj_attribute kgr_attr_revert = __ATTR_WO(revert);
 
 static struct attribute *kgr_patch_sysfs_entries[] = {
 	&kgr_attr_state.attr,
+	&kgr_attr_revert.attr,
 	NULL
 };
 
