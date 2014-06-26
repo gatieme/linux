@@ -279,6 +279,15 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 
 	switch (patch_fun->state) {
 	case KGR_PATCH_INIT:
+		err = kgr_init_ftrace_ops(patch_fun);
+		if (err) {
+			if (err == -ENOENT && !patch_fun->abort_if_missing) {
+				patch_fun->state = KGR_PATCH_SKIPPED;
+				return 0;
+			}
+			return err;
+		}
+
 		next_state = KGR_PATCH_SLOW;
 		break;
 	case KGR_PATCH_SLOW:
@@ -292,14 +301,6 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 
 	/* Choose between slow and fast stub */
 	if (!final) {
-		err = kgr_init_ftrace_ops(patch_fun);
-		if (err) {
-			if (err == -ENOENT && !patch_fun->abort_if_missing) {
-				patch_fun->state = KGR_PATCH_SKIPPED;
-				return 0;
-			}
-			return err;
-		}
 		pr_debug("kgr: patching %s to slow stub\n", patch_fun->name);
 		new_ops = &patch_fun->ftrace_ops_slow;
 	} else {
