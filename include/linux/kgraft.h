@@ -47,7 +47,13 @@ struct kgr_patch_fun {
 	void *new_fun;
 
 	bool abort_if_missing;
-	bool applied;
+	enum kgr_patch_state {
+		KGR_PATCH_INIT,
+		KGR_PATCH_SLOW,
+		KGR_PATCH_APPLIED,
+
+		KGR_PATCH_SKIPPED,
+	} state;
 
 	unsigned long loc_old;
 	unsigned long loc_new;
