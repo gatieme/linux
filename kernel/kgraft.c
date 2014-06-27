@@ -273,12 +273,14 @@ static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 
 static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 {
-	struct ftrace_ops *new_ops;
+	struct ftrace_ops *new_ops = NULL, *unreg_ops = NULL;
 	enum kgr_patch_state next_state;
 	int err;
 
 	switch (patch_fun->state) {
 	case KGR_PATCH_INIT:
+		if (final)
+			return -EINVAL;
 		err = kgr_init_ftrace_ops(patch_fun);
 		if (err) {
 			if (err == -ENOENT && !patch_fun->abort_if_missing) {
@@ -289,9 +291,14 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 		}
 
 		next_state = KGR_PATCH_SLOW;
+		new_ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_SLOW:
+		if (!final)
+			return -EINVAL;
 		next_state = KGR_PATCH_APPLIED;
+		new_ops = &patch_fun->ftrace_ops_fast;
+		unreg_ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_SKIPPED:
 		return 0;
@@ -299,21 +306,14 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 		return -EINVAL;
 	}
 
-	/* Choose between slow and fast stub */
-	if (!final) {
-		pr_debug("kgr: patching %s to slow stub\n", patch_fun->name);
-		new_ops = &patch_fun->ftrace_ops_slow;
-	} else {
-		pr_debug("kgr: patching %s to fast stub\n", patch_fun->name);
-		new_ops = &patch_fun->ftrace_ops_fast;
-	}
-
-	/* Flip the switch */
-	err = kgr_ftrace_enable(patch_fun, new_ops);
-	if (err) {
-		pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
-				patch_fun->loc_old, patch_fun->name);
-		return err;
+	if (new_ops) {
+		/* Flip the switch */
+		err = kgr_ftrace_enable(patch_fun, new_ops);
+		if (err) {
+			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
+					patch_fun->loc_old, patch_fun->name);
+			return err;
+		}
 	}
 
 	/*
@@ -321,9 +321,8 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final)
 	 * the last one always "wins", as it'll be dragged earlier from the
 	 * ftrace hashtable
 	 */
-	if (final) {
-		err = kgr_ftrace_disable(patch_fun,
-				&patch_fun->ftrace_ops_slow);
+	if (unreg_ops) {
+		err = kgr_ftrace_disable(patch_fun, unreg_ops);
 		if (err) {
 			pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
 					patch_fun->name, err);
