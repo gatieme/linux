@@ -19,6 +19,7 @@
 
 #include <linux/bitops.h>
 #include <linux/compiler.h>
+#include <linux/kobject.h>
 #include <linux/ftrace.h>
 #include <linux/sched.h>
 
@@ -65,15 +66,21 @@ struct kgr_patch_fun {
 /**
  * struct kgr_patch -- a kGraft patch
  *
+ * @kobj: object representing the sysfs entry
+ * @finish: waiting till it is safe to remove the module with the patch
  * @irq_use_new: per-cpu array to remember kGraft state for interrupts
+ * @name: name of the patch (to appear in sysfs)
  * @owner: module to refcount on patching
  * @patches: array of @kgr_patch_fun structures
  */
 struct kgr_patch {
 	/* internal state information */
+	struct kobject kobj;
+	struct completion finish;
 	bool __percpu *irq_use_new;
 
 	/* a patch shall set these */
+	const char *name;
 	struct module *owner;
 	struct kgr_patch_fun patches[];
 };
@@ -91,6 +98,9 @@ struct kgr_patch {
 extern bool kgr_in_progress;
 
 extern int kgr_patch_kernel(struct kgr_patch *);
+extern void kgr_patch_remove(struct kgr_patch *);
+extern int kgr_patch_dir_add(struct kgr_patch *patch);
+extern void kgr_patch_dir_del(struct kgr_patch *patch);
 extern int kgr_add_files(void);
 extern void kgr_remove_files(void);
 

@@ -68,6 +68,7 @@ static void kgr_new_function(unsigned long data)
 }
 
 static struct kgr_patch patch = {
+	.name = "sample_patcher",
 	.owner = THIS_MODULE,
 	.patches = {
 #if defined(CONFIG_X86)
@@ -86,6 +87,7 @@ static int __init kgr_patcher_init(void)
 
 static void __exit kgr_patcher_cleanup(void)
 {
+	kgr_patch_remove(&patch);
 	pr_err("removing now buggy!\n");
 }
 

@@ -372,6 +372,8 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 		goto err_unlock;
 	}
 
+	init_completion(&patch->finish);
+
 	kgr_mark_processes();
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
@@ -396,6 +398,8 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	kgr_patch = patch;
 	mutex_unlock(&kgr_in_progress_lock);
 
+	kgr_patch_dir_add(patch);
+
 	kgr_handle_irqs();
 	kgr_handle_processes();
 
@@ -414,6 +418,17 @@ err_unlock:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(kgr_patch_kernel);
+
+/**
+ * kgr_patch_remove -- module with this patch is leaving
+ *
+ * @patch: this patch is going away
+ */
+void kgr_patch_remove(struct kgr_patch *patch)
+{
+	kgr_patch_dir_del(patch);
+}
+EXPORT_SYMBOL_GPL(kgr_patch_remove);
 
 static int __init kgr_init(void)
 {
