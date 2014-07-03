@@ -142,9 +142,10 @@ struct _lowcore {
 	__u32	percpu_offset;			/* 0x02f0 */
 	__u32	machine_flags;			/* 0x02f4 */
 	__u32	ftrace_func;			/* 0x02f8 */
-	__u32	spinlock_lockval;		/* 0x02fc */
+	__u32	ftrace_regs_func;		/* 0x02fc */
+	__u32	spinlock_lockval;		/* 0x0300 */
 
-	__u8	pad_0x0300[0x0e00-0x0300];	/* 0x0300 */
+	__u8	pad_0x0304[0x0e00-0x0304];	/* 0x0304 */
 
 	/*
 	 * 0xe00 contains the address of the IPL Parameter Information
@@ -287,9 +288,10 @@ struct _lowcore {
 	__u64	vdso_per_cpu_data;		/* 0x0380 */
 	__u64	machine_flags;			/* 0x0388 */
 	__u64	ftrace_func;			/* 0x0390 */
-	__u64	gmap;				/* 0x0398 */
-	__u32	spinlock_lockval;		/* 0x03a0 */
-	__u8	pad_0x03a0[0x0400-0x03a4];	/* 0x03a4 */
+	__u64	ftrace_regs_func;		/* 0x0398 */
+	__u64	gmap;				/* 0x03a0 */
+	__u32	spinlock_lockval;		/* 0x03a8 */
+	__u8	pad_0x03ac[0x0400-0x03ac];	/* 0x03ac */
 
 	/* Per cpu primary space access list */
 	__u32	paste[16];			/* 0x0400 */
