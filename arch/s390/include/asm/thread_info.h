@@ -89,6 +89,7 @@ static inline struct thread_info *current_thread_info(void)
 #define TIF_RESTORE_SIGMASK	18	/* restore signal mask in do_signal() */
 #define TIF_SINGLE_STEP		19	/* This task is single stepped */
 #define TIF_BLOCK_STEP		20	/* This task is block stepped */
+#define TIF_KGR_IN_PROGRESS	21	/* This task has not finished patching */
 
 #define _TIF_NOTIFY_RESUME	(1<<TIF_NOTIFY_RESUME)
 #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
@@ -99,6 +100,7 @@ static inline struct thread_info *current_thread_info(void)
 #define _TIF_SYSCALL_TRACEPOINT	(1<<TIF_SYSCALL_TRACEPOINT)
 #define _TIF_31BIT		(1<<TIF_31BIT)
 #define _TIF_SINGLE_STEP	(1<<TIF_SINGLE_STEP)
+#define _TIF_KGR_IN_PROGRESS	(1<<TIF_KGR_IN_PROGRESS)
 
 #ifdef CONFIG_64BIT
 #define is_32bit_task()		(test_thread_flag(TIF_31BIT))

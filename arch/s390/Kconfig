@@ -125,6 +125,7 @@ config S390
 	select HAVE_KERNEL_LZMA
 	select HAVE_KERNEL_LZO
 	select HAVE_KERNEL_XZ
+	select HAVE_KGRAFT
 	select HAVE_KPROBES
 	select HAVE_KRETPROBES
 	select HAVE_KVM if 64BIT
@@ -154,6 +155,8 @@ config SCHED_OMIT_FRAME_POINTER
 source "init/Kconfig"
 
 source "kernel/Kconfig.freezer"
+
+source "kernel/Kconfig.kgraft"
 
 menu "Processor type and features"
 
