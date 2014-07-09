@@ -80,6 +80,7 @@ struct kgr_patch_fun {
  * @refs: how many patches need to be reverted before this one
  * @name: name of the patch (to appear in sysfs)
  * @owner: module to refcount on patching
+ * @replace_all: revert everything applied before and apply this one instead
  * @patches: array of @kgr_patch_fun structures
  */
 struct kgr_patch {
@@ -93,6 +94,7 @@ struct kgr_patch {
 	/* a patch shall set these */
 	const char *name;
 	struct module *owner;
+	bool replace_all;
 	struct kgr_patch_fun patches[];
 };
 
@@ -111,7 +113,7 @@ extern bool kgr_in_progress;
 extern int kgr_patch_kernel(struct kgr_patch *);
 extern void kgr_patch_remove(struct kgr_patch *);
 
-extern int kgr_modify_kernel(struct kgr_patch *patch, bool revert);
+extern int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force);
 extern void kgr_module_init(const struct module *mod);
 extern int kgr_patch_dir_add(struct kgr_patch *patch);
 extern void kgr_patch_dir_del(struct kgr_patch *patch);
