@@ -410,6 +410,12 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		break;
 	case KGR_PATCH_SKIPPED:
 		return 0;
+	case KGR_PATCH_APPLIED_NON_FINALIZED:
+		/* like KGR_PATCH_SLOW but ops changes are already in place */
+		if (revert || !final)
+			return -EINVAL;
+		next_state = KGR_PATCH_APPLIED;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -597,7 +603,11 @@ static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 			continue;
 		}
 
-		patch_fun->state = KGR_PATCH_APPLIED;
+		if (patch == kgr_patch)
+			patch_fun->state = KGR_PATCH_APPLIED_NON_FINALIZED;
+		else
+			patch_fun->state = KGR_PATCH_APPLIED;
+
 		pr_debug("kgr: fast redirection for %s done\n", patch_fun->name);
 	}
 }
@@ -626,6 +636,10 @@ void kgr_module_init(const struct module *mod)
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_handle_patch_for_loaded_module(p, mod);
 
+	/* also check the patch in progress that is being applied */
+	if (kgr_patch && !kgr_revert)
+		kgr_handle_patch_for_loaded_module(kgr_patch, mod);
+
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
@@ -649,6 +663,7 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 		ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_APPLIED:
+	case KGR_PATCH_APPLIED_NON_FINALIZED:
 		ops = &patch_fun->ftrace_ops_fast;
 		break;
 	default:
@@ -713,6 +728,10 @@ static void kgr_handle_going_module(const struct module *mod)
 
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_handle_patch_for_going_module(p, mod);
+
+	/* also check the patch in progress for removed functions */
+	if (kgr_patch)
+		kgr_handle_patch_for_going_module(kgr_patch, mod);
 
 	mutex_unlock(&kgr_in_progress_lock);
 }
