@@ -145,6 +145,8 @@ static void kgr_finalize(void)
 {
 	struct kgr_patch_fun *patch_fun;
 
+	mutex_lock(&kgr_in_progress_lock);
+
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
 		int ret = kgr_patch_code(patch_fun, true, kgr_revert);
 
@@ -155,16 +157,16 @@ static void kgr_finalize(void)
 
 	free_percpu(kgr_patch->irq_use_new);
 
-	if (kgr_revert)
-		module_put(kgr_patch->owner);
-
-	mutex_lock(&kgr_in_progress_lock);
-	kgr_in_progress = false;
 	if (kgr_revert) {
 		list_del(&kgr_patch->list);
 		kgr_refs_dec();
+		module_put(kgr_patch->owner);
 	} else
 		list_add_tail(&kgr_patch->list, &kgr_patches);
+
+	kgr_patch = NULL;
+	kgr_in_progress = false;
+
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
