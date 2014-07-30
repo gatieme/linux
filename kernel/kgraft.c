@@ -629,7 +629,119 @@ void kgr_module_init(const struct module *mod)
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
+/*
+ * Disable the patch immediately. It does not matter in which state it is.
+ *
+ * This function is used when a module is being removed and the code is
+ * no longer called.
+ */
+static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
+{
+	struct ftrace_ops *ops;
+	int err;
+
+	switch (patch_fun->state) {
+	case KGR_PATCH_INIT:
+	case KGR_PATCH_SKIPPED:
+		return 0;
+	case KGR_PATCH_SLOW:
+	case KGR_PATCH_REVERT_SLOW:
+		ops = &patch_fun->ftrace_ops_slow;
+		break;
+	case KGR_PATCH_APPLIED:
+		ops = &patch_fun->ftrace_ops_fast;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	err = kgr_ftrace_disable(patch_fun, ops);
+	if (err) {
+		pr_warn("kgr: forced disabling of ftrace function for %s failed with %d\n",
+			patch_fun->name, err);
+		return err;
+	}
+
+	patch_fun->state = KGR_PATCH_SKIPPED;
+	pr_debug("kgr: forced disabling for %s done\n", patch_fun->name);
+	return 0;
+}
+
+/*
+ * Check the given patch and disable pieces related to the module
+ * that is being removed.
+ */
+static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
+					     const struct module *mod)
+{
+	struct kgr_patch_fun *patch_fun;
+	unsigned long addr;
+
+	kgr_for_each_patch_fun(patch, patch_fun) {
+		addr = kallsyms_lookup_name(patch_fun->name);
+		if (!within_module(addr, mod))
+			continue;
+		/*
+		 * FIXME: It should schedule the patch removal or block
+		 *	  the module removal or taint kernel or so.
+		 */
+		if (patch_fun->abort_if_missing) {
+			pr_err("kgr: removing function %s that is required for the patch %s\n",
+			       patch_fun->name, patch->name);
+		}
+
+		kgr_forced_code_patch_removal(patch_fun);
+	}
+}
+
+/*
+ * Disable patches for the module that is being removed.
+ *
+ * FIXME: The module removal cannot be stopped at this stage. All affected
+ * patches have to be removed. Therefore, the operation continues even in
+ * case of errors.
+ */
+static void kgr_handle_going_module(const struct module *mod)
+{
+	struct kgr_patch *p;
+
+	/* Nope when kGraft has not been initialized yet */
+	if (!kgr_initialized)
+		return;
+
+	mutex_lock(&kgr_in_progress_lock);
+
+	list_for_each_entry(p, &kgr_patches, list)
+		kgr_handle_patch_for_going_module(p, mod);
+
+	mutex_unlock(&kgr_in_progress_lock);
+}
+
+static int kgr_module_notify_exit(struct notifier_block *self,
+				  unsigned long val, void *data)
+{
+	const struct module *mod = data;
+
+	if (val == MODULE_STATE_GOING)
+		kgr_handle_going_module(mod);
+
+	return 0;
+}
+
+#else
+
+static int kgr_module_notify_exit(struct notifier_block *self,
+		unsigned long val, void *data)
+{
+	return 0;
+}
+
 #endif /* CONFIG_MODULES */
+
+static struct notifier_block kgr_module_exit_nb = {
+	.notifier_call = kgr_module_notify_exit,
+	.priority = 0,
+};
 
 static int __init kgr_init(void)
 {
@@ -650,6 +762,10 @@ static int __init kgr_init(void)
 		ret = -ENOMEM;
 		goto err_remove_files;
 	}
+
+	ret = register_module_notifier(&kgr_module_exit_nb);
+	if (ret)
+		pr_warn("Failed to register kGraft module exit notifier\n");
 
 	kgr_initialized = true;
 	pr_info("kgr: successfully initialized\n");
