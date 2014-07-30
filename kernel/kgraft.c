@@ -565,6 +565,72 @@ void kgr_patch_remove(struct kgr_patch *patch)
 }
 EXPORT_SYMBOL_GPL(kgr_patch_remove);
 
+#ifdef CONFIG_MODULES
+
+/*
+ * This function is called when new module is loaded but before it is used.
+ * Therefore it could set the fast path directly.
+ */
+static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
+					       const struct module *mod)
+{
+	struct kgr_patch_fun *patch_fun;
+	unsigned long addr;
+	int err;
+
+	kgr_for_each_patch_fun(patch, patch_fun) {
+		if (patch_fun->state != KGR_PATCH_SKIPPED)
+			continue;
+
+		addr =  kallsyms_lookup_name(patch_fun->name);
+		if (!within_module(addr, mod))
+			continue;
+
+		err = kgr_init_ftrace_ops(patch_fun);
+		if (err)
+			continue;
+
+		err = kgr_ftrace_enable(patch_fun, &patch_fun->ftrace_ops_fast);
+		if (err) {
+			pr_err("kgr: cannot enable ftrace function for the originally skipped %lx (%s)\n",
+			       patch_fun->loc_old, patch_fun->name);
+			continue;
+		}
+
+		patch_fun->state = KGR_PATCH_APPLIED;
+		pr_debug("kgr: fast redirection for %s done\n", patch_fun->name);
+	}
+}
+
+/**
+ * kgr_module_init -- apply skipped patches for newly loaded modules
+ *
+ * It must be called when symbols are visible to kallsyms but before the module
+ * init is called. Otherwise, it would not be able to use the fast stub.
+ */
+void kgr_module_init(const struct module *mod)
+{
+	struct kgr_patch *p;
+
+	/* early modules will be patched once KGraft is initialized */
+	if (!kgr_initialized)
+		return;
+
+	mutex_lock(&kgr_in_progress_lock);
+
+	/*
+	 * Check already applied patches for skipped functions. If there are
+	 * more patches we want to set them all. They need to be in place when
+	 * we remove some patch.
+	 */
+	list_for_each_entry(p, &kgr_patches, list)
+		kgr_handle_patch_for_loaded_module(p, mod);
+
+	mutex_unlock(&kgr_in_progress_lock);
+}
+
+#endif /* CONFIG_MODULES */
+
 static int __init kgr_init(void)
 {
 	int ret;
