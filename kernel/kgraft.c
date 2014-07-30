@@ -158,7 +158,6 @@ static void kgr_finalize(void)
 	free_percpu(kgr_patch->irq_use_new);
 
 	if (kgr_revert) {
-		list_del(&kgr_patch->list);
 		kgr_refs_dec();
 		module_put(kgr_patch->owner);
 	} else
@@ -504,7 +503,9 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	kgr_in_progress = true;
 	kgr_patch = patch;
 	kgr_revert = revert;
-	if (!revert)
+	if (revert)
+		list_del(&kgr_patch->list);
+	else
 		kgr_refs_inc();
 	mutex_unlock(&kgr_in_progress_lock);
 
