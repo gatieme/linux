@@ -189,6 +189,8 @@ static void kgr_finalize(void)
 	struct kgr_patch_fun *patch_fun;
 	struct kgr_patch *p_to_revert = NULL;
 
+	pr_info("kgr succeeded\n");
+
 	mutex_lock(&kgr_in_progress_lock);
 
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
@@ -246,7 +248,6 @@ static void kgr_work_fn(struct work_struct *work)
 	 * victory, patching finished, put everything back in shape
 	 * with as less performance impact as possible again
 	 */
-	pr_info("kgr succeeded\n");
 	kgr_finalize();
 }
 
@@ -553,7 +554,12 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force)
 		goto err_unlock;
 	}
 
-	kgr_mark_processes();
+	/*
+	 * If the patch has immediate flag set, avoid the lazy-switching
+	 * between universes completely.
+	 */
+	if (!patch->immediate)
+		kgr_mark_processes();
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
 		patch_fun->patch = patch;
@@ -583,12 +589,16 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force)
 	mutex_unlock(&kgr_in_progress_lock);
 
 	kgr_handle_irqs();
-	kgr_handle_processes();
 
-	/*
-	 * give everyone time to exit kernel, and check after a while
-	 */
-	queue_delayed_work(kgr_wq, &kgr_work, 10 * HZ);
+	if (patch->immediate) {
+		kgr_finalize();
+	} else {
+		kgr_handle_processes();
+		/*
+		 * give everyone time to exit kernel, and check after a while
+		 */
+		queue_delayed_work(kgr_wq, &kgr_work, 10 * HZ);
+	}
 
 	return 0;
 err_free:
