@@ -581,6 +581,7 @@ EXPORT_SYMBOL_GPL(kgr_patch_remove);
 static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 					       const struct module *mod)
 {
+	struct ftrace_ops *unreg_ops;
 	struct kgr_patch_fun *patch_fun;
 	unsigned long addr;
 	int err;
@@ -597,11 +598,21 @@ static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 		if (err)
 			continue;
 
+		unreg_ops = kgr_get_old_fops(patch_fun);
+
 		err = kgr_ftrace_enable(patch_fun, &patch_fun->ftrace_ops_fast);
 		if (err) {
 			pr_err("kgr: cannot enable ftrace function for the originally skipped %lx (%s)\n",
 			       patch_fun->loc_old, patch_fun->name);
 			continue;
+		}
+
+		if (unreg_ops) {
+			err = kgr_ftrace_disable(patch_fun, unreg_ops);
+			if (err) {
+				pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
+					   patch_fun->name, err);
+			}
 		}
 
 		if (patch == kgr_patch)
