@@ -169,6 +169,10 @@ static bool kgr_patch_contains(const struct kgr_patch *p, const char *name)
 	return false;
 }
 
+/*
+ * All patches from kgr_patches are obsoleted and will get replaced
+ * by kgr_patch.
+ */
 static void kgr_replace_all(void)
 {
 	struct kgr_patch_fun *pf;
@@ -189,9 +193,6 @@ static void kgr_replace_all(void)
 			/* the fast ftrace fops were disabled during patching */
 			pf->state = KGR_PATCH_REVERTED;
 		}
-
-		/* decrease the reference this patch increased earlier */
-		p->refs--;
 
 		if (needs_revert)
 			list_move(&p->list, &kgr_to_revert);
@@ -592,7 +593,8 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force)
 	kgr_revert = revert;
 	if (revert)
 		list_del(&kgr_patch->list);
-	else
+	else if (!patch->replace_all)
+		/* block all older patches if they are not replaced */
 		kgr_refs_inc();
 	mutex_unlock(&kgr_in_progress_lock);
 
