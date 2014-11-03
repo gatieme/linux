@@ -578,6 +578,12 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force)
 		goto err_unlock;
 	}
 
+	if (revert && list_empty(&patch->list)) {
+		pr_err("kgr: can't patch, this one was already reverted\n");
+		ret = -EINVAL;
+		goto err_unlock;
+	}
+
 	patch->irq_use_new = alloc_percpu(bool);
 	if (!patch->irq_use_new) {
 		pr_err("kgr: can't patch, cannot allocate percpu data\n");
@@ -616,7 +622,7 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert, bool force)
 	kgr_patch = patch;
 	kgr_revert = revert;
 	if (revert)
-		list_del(&kgr_patch->list);
+		list_del_init(&patch->list); /* init for list_empty() above */
 	else if (!patch->replace_all)
 		/* block all older patches if they are not replaced */
 		kgr_refs_inc();
