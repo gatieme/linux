@@ -681,6 +681,8 @@ static int rtsx_usb_detect_ms_card(void *__host)
 	int err;
 
 	for (;;) {
+		kgr_task_safe(current);
+
 		mutex_lock(&ucr->dev_mutex);
 
 		/* Check pending MS card changes */

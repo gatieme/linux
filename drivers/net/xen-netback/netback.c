@@ -2012,11 +2012,12 @@ int xenvif_kthread_guest_rx(void *data)
 	struct sk_buff *skb;
 
 	while (!kthread_should_stop()) {
-		wait_event_interruptible(queue->wq,
+		wait_event_interruptible(queue->wq, ({
+					 kgr_task_safe(current);
 					 rx_work_todo(queue) ||
 					 queue->vif->disabled ||
 					 test_bit(QUEUE_STATUS_RX_PURGE_EVENT, &queue->status) ||
-					 kthread_should_stop());
+					 kthread_should_stop(); }));
 
 		if (kthread_should_stop())
 			break;
@@ -2075,9 +2076,10 @@ int xenvif_dealloc_kthread(void *data)
 	struct xenvif_queue *queue = data;
 
 	for (;;) {
-		wait_event_interruptible(queue->dealloc_wq,
+		wait_event_interruptible(queue->dealloc_wq, ({
+					 kgr_task_safe(current);
 					 tx_dealloc_work_todo(queue) ||
-					 xenvif_dealloc_kthread_should_stop(queue));
+					 xenvif_dealloc_kthread_should_stop(queue); }));
 		if (xenvif_dealloc_kthread_should_stop(queue))
 			break;
 

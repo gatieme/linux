@@ -170,6 +170,7 @@ static void rsi_tx_scheduler_thread(struct rsi_common *common)
 	u32 timeout = EVENT_WAIT_FOREVER;
 
 	do {
+		kgr_task_safe(current);
 		if (adapter->determine_event_timeout)
 			timeout = adapter->determine_event_timeout(adapter);
 		rsi_wait_event(&common->tx_thread.event, timeout);

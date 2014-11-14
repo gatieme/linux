@@ -93,6 +93,7 @@ void rsi_usb_rx_thread(struct rsi_common *common)
 	int status;
 
 	do {
+		kgr_task_safe(current);
 		rsi_wait_event(&dev->rx_thread.event, EVENT_WAIT_FOREVER);
 
 		if (atomic_read(&dev->rx_thread.thread_done))

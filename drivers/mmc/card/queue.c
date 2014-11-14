@@ -96,6 +96,7 @@ static int mmc_queue_thread(void *d)
 			}
 			up(&mq->thread_sem);
 			schedule();
+			kgr_task_safe(current);
 			down(&mq->thread_sem);
 		}
 	} while (1);

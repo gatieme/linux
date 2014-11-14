@@ -1406,6 +1406,7 @@ max3421_spi_thread(void *dev_id)
 		 BIT(MAX3421_PINCTL_INTLEVEL_BIT)));	/* low-active irq */
 
 	while (!kthread_should_stop()) {
+		kgr_task_safe(current);
 		max3421_hcd->rev = spi_rd8(hcd, MAX3421_REG_REVISION);
 		if (max3421_hcd->rev == 0x12 || max3421_hcd->rev == 0x13)
 			break;
@@ -1417,6 +1418,7 @@ max3421_spi_thread(void *dev_id)
 		 spi->irq);
 
 	while (!kthread_should_stop()) {
+		kgr_task_safe(current);
 		if (!i_worked) {
 			/*
 			 * We'll be waiting for wakeups from the hard

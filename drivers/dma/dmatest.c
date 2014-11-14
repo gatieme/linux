@@ -488,6 +488,8 @@ static int dmatest_func(void *data)
 
 		total_tests++;
 
+		kgr_task_safe(current);
+
 		/* honor alignment restrictions */
 		if (thread->type == DMA_MEMCPY)
 			align = dev->copy_align;

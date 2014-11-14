@@ -1348,6 +1348,7 @@ process_incoming_rsps(void *v)
 	}
 	mask = ULTRA_CHANNEL_ENABLE_INTS;
 	while (1) {
+		kgr_task_safe(current);
 		wait_event_interruptible_timeout(virthbainfo->rsp_queue,
 			 (atomic_read(&virthbainfo->interrupt_rcvd) == 1),
 					 usecs_to_jiffies(rsltq_wait_usecs));

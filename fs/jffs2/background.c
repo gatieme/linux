@@ -90,6 +90,7 @@ static int jffs2_garbage_collect_thread(void *_c)
 
 	set_freezable();
 	for (;;) {
+		kgr_task_safe(current);
 		sigprocmask(SIG_UNBLOCK, &hupmask, NULL);
 	again:
 		spin_lock(&c->erase_completion_lock);

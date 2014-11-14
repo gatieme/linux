@@ -1049,6 +1049,7 @@ static int trace_wakeup_test_thread(void *data)
 
 	/* we are awake, now wait to disappear */
 	while (!kthread_should_stop()) {
+		kgr_task_safe(current);
 		/*
 		 * This will likely be the system top priority
 		 * task, do short sleeps to let others run.

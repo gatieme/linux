@@ -809,8 +809,9 @@ static int xenwatch_thread(void *unused)
 	struct xs_stored_msg *msg;
 
 	for (;;) {
-		wait_event_interruptible(watch_events_waitq,
-					 !list_empty(&watch_events));
+		wait_event_interruptible(watch_events_waitq, ({
+					 kgr_task_safe(current);
+					 !list_empty(&watch_events); }));
 
 		if (kthread_should_stop())
 			break;

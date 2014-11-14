@@ -741,9 +741,10 @@ static int k_mode_thread(void *arg)
 
 			spin_lock_irqsave(&k_lock, flags2);
 		}
-		wait_event_interruptible_lock_irq(k_wait,
+		wait_event_interruptible_lock_irq(k_wait, ({
+						  kgr_task_safe(current);
 						  !list_empty(&k_list) ||
-						  k_mode_stop, k_lock);
+						  k_mode_stop; }), k_lock);
 		spin_unlock_irqrestore(&k_lock, flags2);
 	}
 	return 0;

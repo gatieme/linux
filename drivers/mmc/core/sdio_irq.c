@@ -176,6 +176,7 @@ static int sdio_irq_thread(void *_host)
 		}
 		if (!kthread_should_stop())
 			schedule_timeout(period);
+		kgr_task_safe(current);
 		set_current_state(TASK_RUNNING);
 	} while (!kthread_should_stop());
 

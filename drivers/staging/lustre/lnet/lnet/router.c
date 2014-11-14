@@ -1174,6 +1174,7 @@ lnet_router_checker(void *arg)
 		int	cpt;
 		int	cpt2;
 
+		kgr_task_safe(current);
 		cpt = lnet_net_lock_current();
 rescan:
 		version = the_lnet.ln_routers_version;

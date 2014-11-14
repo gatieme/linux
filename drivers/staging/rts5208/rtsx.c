@@ -425,6 +425,7 @@ static int rtsx_control_thread(void *__dev)
 	struct Scsi_Host *host = rtsx_to_host(dev);
 
 	for (;;) {
+		kgr_task_safe(current);
 		if (wait_for_completion_interruptible(&dev->cmnd_ready))
 			break;
 
@@ -544,6 +545,7 @@ static int rtsx_polling_thread(void *__dev)
 
 	for (;;) {
 
+		kgr_task_safe(current);
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(POLLING_INTERVAL);
 

@@ -533,9 +533,10 @@ static int nbd_thread(void *data)
 	set_user_nice(current, MIN_NICE);
 	while (!kthread_should_stop() || !list_empty(&nbd->waiting_queue)) {
 		/* wait for something to do */
-		wait_event_interruptible(nbd->waiting_wq,
+		wait_event_interruptible(nbd->waiting_wq, ({
+					 kgr_task_safe(current);
 					 kthread_should_stop() ||
-					 !list_empty(&nbd->waiting_queue));
+					 !list_empty(&nbd->waiting_queue); }));
 
 		/* extract request */
 		if (list_empty(&nbd->waiting_queue))

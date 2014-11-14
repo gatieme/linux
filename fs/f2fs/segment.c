@@ -229,8 +229,8 @@ repeat:
 		fcc->dispatch_list = NULL;
 	}
 
-	wait_event_interruptible(*q,
-			kthread_should_stop() || fcc->issue_list);
+	wait_event_interruptible(*q, ({ kgr_task_safe(current);
+			kthread_should_stop() || fcc->issue_list; }));
 	goto repeat;
 }
 
