@@ -907,7 +907,7 @@ void kgr_module_init(const struct module *mod)
  */
 static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 {
-	struct ftrace_ops *ops;
+	struct ftrace_ops *ops = NULL;
 	int err;
 
 	switch (patch_fun->state) {
@@ -916,20 +916,24 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 		return 0;
 	case KGR_PATCH_SLOW:
 	case KGR_PATCH_REVERT_SLOW:
-		ops = &patch_fun->ftrace_ops_slow;
+		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING))
+			ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_APPLIED:
-		ops = &patch_fun->ftrace_ops_fast;
+		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING))
+			ops = &patch_fun->ftrace_ops_fast;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	err = kgr_ftrace_disable(patch_fun, ops);
-	if (err) {
-		pr_warn("kgr: forced disabling of ftrace function for %s failed with %d\n",
-			patch_fun->name, err);
-		return err;
+	if (ops) {
+		err = kgr_ftrace_disable(patch_fun, ops);
+		if (err) {
+			pr_warn("kgr: forced disabling of ftrace function for %s failed with %d\n",
+				patch_fun->name, err);
+			return err;
+		}
 	}
 
 	patch_fun->state = KGR_PATCH_SKIPPED;
