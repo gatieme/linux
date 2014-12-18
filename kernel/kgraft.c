@@ -368,29 +368,97 @@ static void kgr_handle_irqs(void)
 	schedule_on_each_cpu(kgr_handle_irq_cpu);
 }
 
+/*
+ * There might be different variants of a function in different patches.
+ * The patches are stacked in the order in which they are added. The variant
+ * of a function from a newer patch takes precedence over the older variants
+ * and makes the older variants unused.
+ *
+ * There might be an interim time when two variants of the same function
+ * might be used by the system. Therefore we split the patches into two
+ * categories.
+ *
+ * One patch might be in progress. It is either being added or being reverted.
+ * In each case, there might be threads that are using the code from this patch
+ * and also threads that are using the old code. Where the old code is the
+ * original code or the code from the previous patch if any. This patch
+ * might be found in the variable kgr_patch.
+ *
+ * The other patches are finalized. It means that the whole system started
+ * using them at some point. Note that some parts of the patches might be
+ * unused when there appeared new variants in newer patches. Also some threads
+ * might already started using the patch in progress. Anyway, the finalized
+ * patches might be found in the list kgr_patches.
+ *
+ * When manipulating the patches, we need to search and check the right variant
+ * of a function on the stack. The following types are used to define
+ * the requested variant.
+ */
+enum kgr_find_type {
+	/*
+	 * Find previous function variant in respect to stacking. Take
+	 * into account even the patch in progress that is considered to be
+	 * on top of the stack.
+	 */
+	KGR_PREVIOUS,
+	/* Find the last finalized variant of the function on the stack. */
+	KGR_LAST_FINALIZED,
+	/*
+	 * Find the last variant of the function on the stack. Take into
+	 * account even the patch in progress.
+	 */
+	KGR_LAST_EXISTING,
+	/* Find the variant of the function _only_ in the patch in progress. */
+	KGR_IN_PROGRESS,
+	/*
+	 * This is the first unused find type. It can be used to check for
+	 * invalid value.
+	 */
+	KGR_LAST_TYPE
+};
+
+/*
+ * This function takes information about the patched function from the given
+ * struct kgr_patch_fun and tries to find the requested variant of the
+ * function. It returns NULL when the requested variant cannot be found.
+ */
 static struct kgr_patch_fun *
-kgr_get_last_pf(const struct kgr_patch_fun *patch_fun)
+kgr_get_patch_fun(const struct kgr_patch_fun *patch_fun,
+		  enum kgr_find_type type)
 {
 	const char *name = patch_fun->name;
-	struct kgr_patch_fun *pf, *last_pf = NULL;
+	struct kgr_patch_fun *pf, *found_pf = NULL;
 	struct kgr_patch *p;
+
+	if (type < 0 || type >= KGR_LAST_TYPE) {
+		pr_warn("kgr_get_patch_fun: invalid find type: %d\n", type);
+		return NULL;
+	}
+
+	if (kgr_patch && (type == KGR_IN_PROGRESS || type == KGR_LAST_EXISTING))
+		kgr_for_each_patch_fun(kgr_patch, pf)
+			if (!strcmp(pf->name, name))
+				return pf;
+
+	if (type == KGR_IN_PROGRESS)
+		goto out;
 
 	list_for_each_entry(p, &kgr_patches, list) {
 		kgr_for_each_patch_fun(p, pf) {
-			if (pf->state != KGR_PATCH_APPLIED)
-				continue;
+			if (type == KGR_PREVIOUS && pf == patch_fun)
+				goto out;
 
 			if (!strcmp(pf->name, name))
-				last_pf = pf;
+				found_pf = pf;
 		}
 	}
-
-	return last_pf;
+out:
+	return found_pf;
 }
 
 static unsigned long kgr_get_old_fun(const struct kgr_patch_fun *patch_fun)
 {
-	struct kgr_patch_fun *pf = kgr_get_last_pf(patch_fun);
+	struct kgr_patch_fun *pf = kgr_get_patch_fun(patch_fun, KGR_PREVIOUS);
 
 	if (pf)
 		return ftrace_function_to_fentry((unsigned long)pf->new_fun);
@@ -405,7 +473,7 @@ static unsigned long kgr_get_old_fun(const struct kgr_patch_fun *patch_fun)
 static struct ftrace_ops *
 kgr_get_old_fops(const struct kgr_patch_fun *patch_fun)
 {
-	struct kgr_patch_fun *pf = kgr_get_last_pf(patch_fun);
+	struct kgr_patch_fun *pf = kgr_get_patch_fun(patch_fun, KGR_PREVIOUS);
 
 	return pf ? &pf->ftrace_ops_fast : NULL;
 }
