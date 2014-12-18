@@ -456,6 +456,22 @@ out:
 	return found_pf;
 }
 
+/*
+ * Check if the given struct patch_fun is the given type.
+ * Note that it does not make sense for KGR_PREVIOUS.
+ */
+static bool kgr_is_patch_fun(const struct kgr_patch_fun *patch_fun,
+		 enum kgr_find_type type)
+{
+	struct kgr_patch_fun *found_pf;
+
+	if (type == KGR_IN_PROGRESS)
+		return patch_fun->patch == kgr_patch;
+
+	found_pf = kgr_get_patch_fun(patch_fun, type);
+	return patch_fun == found_pf;
+}
+
 static unsigned long kgr_get_old_fun(const struct kgr_patch_fun *patch_fun)
 {
 	struct kgr_patch_fun *pf = kgr_get_patch_fun(patch_fun, KGR_PREVIOUS);
@@ -589,12 +605,6 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		return 0;
 	case KGR_PATCH_SKIPPED:
 		return 0;
-	case KGR_PATCH_APPLIED_NON_FINALIZED:
-		/* like KGR_PATCH_SLOW but ops changes are already in place */
-		if (revert || !final)
-			return -EINVAL;
-		next_state = KGR_PATCH_APPLIED;
-		break;
 	default:
 		return -EINVAL;
 	}
@@ -781,13 +791,63 @@ EXPORT_SYMBOL_GPL(kgr_patch_remove);
 #ifdef CONFIG_MODULES
 
 /*
+ * Put the patch into the same state that the related patch is in.
+ * It means that we need to use fast stub if the patch is finalized
+ * and slow stub when the patch is in progress. Also we need to
+ * register the ftrace stub only for the last patch on the stack
+ * for the given function.
+ *
+ * Note the patched function from this module might call another
+ * patched function from the kernel core. Some thread might still
+ * use an old variant for the core functions. This is why we need to
+ * use the slow stub when the patch is in progress. Both the core
+ * kernel and module functions must be from the same universe.
+ */
+static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
+{
+	struct ftrace_ops *new_ops = NULL;
+	enum kgr_patch_state next_state;
+	int err;
+
+	if (kgr_is_patch_fun(patch_fun, KGR_IN_PROGRESS)) {
+		if (kgr_revert)
+			next_state = KGR_PATCH_REVERT_SLOW;
+		else
+			next_state = KGR_PATCH_SLOW;
+		/* this must be the last existing patch on the stack */
+		new_ops = &patch_fun->ftrace_ops_slow;
+	} else {
+		next_state = KGR_PATCH_APPLIED;
+		/*
+		 * Check for the last existing and not the last finalized
+		 * patch_fun here! There might be another patch_fun in the
+		 * patch in progress that will be handled in the next calls.
+		 */
+		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING))
+			new_ops = &patch_fun->ftrace_ops_fast;
+	}
+
+	if (new_ops) {
+		err = kgr_ftrace_enable(patch_fun, new_ops);
+		if (err) {
+			pr_err("kgr: enabling of ftrace function for the originally skipped %lx (%s) failed with %d\n",
+			       patch_fun->loc_old, patch_fun->name, err);
+			return err;
+		}
+	}
+
+	patch_fun->state = next_state;
+	pr_debug("kgr: delayed redirection for %s done\n", patch_fun->name);
+	return 0;
+}
+
+/*
  * This function is called when new module is loaded but before it is used.
- * Therefore it could set the fast path directly.
+ * Therefore it could set the fast path for already finalized patches.
  */
 static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 					       const struct module *mod)
 {
-	struct ftrace_ops *unreg_ops;
 	struct kgr_patch_fun *patch_fun;
 	unsigned long addr;
 	int err;
@@ -804,29 +864,7 @@ static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 		if (err)
 			continue;
 
-		unreg_ops = kgr_get_old_fops(patch_fun);
-
-		err = kgr_ftrace_enable(patch_fun, &patch_fun->ftrace_ops_fast);
-		if (err) {
-			pr_err("kgr: cannot enable ftrace function for the originally skipped %lx (%s)\n",
-			       patch_fun->loc_old, patch_fun->name);
-			continue;
-		}
-
-		if (unreg_ops) {
-			err = kgr_ftrace_disable(patch_fun, unreg_ops);
-			if (err) {
-				pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
-					   patch_fun->name, err);
-			}
-		}
-
-		if (patch == kgr_patch)
-			patch_fun->state = KGR_PATCH_APPLIED_NON_FINALIZED;
-		else
-			patch_fun->state = KGR_PATCH_APPLIED;
-
-		pr_debug("kgr: fast redirection for %s done\n", patch_fun->name);
+		kgr_patch_code_delayed(patch_fun);
 	}
 }
 
@@ -855,7 +893,7 @@ void kgr_module_init(const struct module *mod)
 		kgr_handle_patch_for_loaded_module(p, mod);
 
 	/* also check the patch in progress that is being applied */
-	if (kgr_patch && !kgr_revert)
+	if (kgr_patch)
 		kgr_handle_patch_for_loaded_module(kgr_patch, mod);
 
 	mutex_unlock(&kgr_in_progress_lock);
@@ -881,7 +919,6 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 		ops = &patch_fun->ftrace_ops_slow;
 		break;
 	case KGR_PATCH_APPLIED:
-	case KGR_PATCH_APPLIED_NON_FINALIZED:
 		ops = &patch_fun->ftrace_ops_fast;
 		break;
 	default:
