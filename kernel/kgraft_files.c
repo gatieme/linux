@@ -79,7 +79,7 @@ static ssize_t revert_store(struct kobject *kobj,
 	struct kgr_patch *p = kobj_to_patch(kobj);
 	int ret;
 
-	ret = kgr_modify_kernel(p, true, false);
+	ret = kgr_modify_kernel(p, true);
 
 	return ret < 0 ? ret : count;
 }
