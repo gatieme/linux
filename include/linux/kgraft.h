@@ -75,7 +75,6 @@ struct kgr_patch_fun {
  * @kobj: object representing the sysfs entry
  * @list: member in patches list
  * @finish: waiting till it is safe to remove the module with the patch
- * @irq_use_new: per-cpu array to remember kGraft state for interrupts
  * @refs: how many patches need to be reverted before this one
  * @name: name of the patch (to appear in sysfs)
  * @owner: module to refcount on patching
@@ -88,7 +87,6 @@ struct kgr_patch {
 	struct kobject kobj;
 	struct list_head list;
 	struct completion finish;
-	bool __percpu *irq_use_new;
 	unsigned int refs;
 
 	/* a patch shall set these */
