@@ -774,12 +774,9 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 
 				ret = kgr_patch_code(pf, false, true, true);
 				if (ret < 0) {
-					/*
-					 * No need to fail with grace as in
-					 * kgr_modify_kernel
-					 */
 					pr_err("kgr: cannot revert function %s in patch %s\n",
 					      pf->name, p->name);
+					kgr_patching_failed(p, pf, true);
 					return ret;
 				}
 			}
@@ -837,6 +834,8 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		wmb(); /* set_bit before kgr_handle_processes */
 	}
 
+	kgr_patch = patch;
+
 	/*
 	 * We need to revert patches of functions not patched in replace_all
 	 * patch. Do that only while applying the replace_all patch.
@@ -851,22 +850,13 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		patch_fun->patch = patch;
 
 		ret = kgr_patch_code(patch_fun, false, revert, false);
-		/*
-		 * In case any of the symbol resolutions in the set
-		 * has failed, patch all the previously replaced fentry
-		 * callsites back to nops and fail with grace
-		 */
 		if (ret < 0) {
-			for (patch_fun--; patch_fun >= patch->patches;
-					patch_fun--)
-				if (patch_fun->state == KGR_PATCH_SLOW)
-					kgr_ftrace_disable(patch_fun,
-						&patch_fun->ftrace_ops_slow);
+			kgr_patching_failed(patch, patch_fun,
+				patch->replace_all && !revert);
 			goto err_free;
 		}
 	}
 	kgr_in_progress = true;
-	kgr_patch = patch;
 	kgr_revert = revert;
 	if (revert)
 		list_del_init(&patch->list); /* init for list_empty() above */
@@ -891,6 +881,7 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 
 	return 0;
 err_free:
+	kgr_patch = NULL;
 	free_percpu(kgr_irq_use_new);
 err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
