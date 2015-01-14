@@ -473,6 +473,37 @@ kgr_get_old_fops(const struct kgr_patch_fun *patch_fun)
 	return pf ? &pf->ftrace_ops_fast : NULL;
 }
 
+static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
+		struct ftrace_ops *new_fops, struct ftrace_ops *unreg_fops)
+{
+	int err;
+
+	if (new_fops) {
+		err = kgr_ftrace_enable(patch_fun, new_fops);
+		if (err) {
+			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
+				patch_fun->loc_old, patch_fun->name);
+			return err;
+		}
+	}
+
+	/*
+	 * Get rid of the other stub. Having two stubs in the interim is fine,
+	 * the last one always "wins", as it'll be dragged earlier from the
+	 * ftrace hashtable.
+	 */
+	if (unreg_fops) {
+		err = kgr_ftrace_disable(patch_fun, unreg_fops);
+		if (err) {
+			pr_err("kgr: disabling ftrace function for %s failed with %d\n",
+				patch_fun->name, err);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
 static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 {
 	struct ftrace_ops *fops;
@@ -632,6 +663,77 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 	pr_debug("kgr: redirection for %s done\n", patch_fun->name);
 
 	return 0;
+}
+
+static void kgr_patch_code_failed(struct kgr_patch_fun *patch_fun)
+{
+	struct ftrace_ops *new_fops = NULL, *unreg_fops = NULL;
+	enum kgr_patch_state next_state;
+	int err;
+
+	switch (patch_fun->state) {
+	case KGR_PATCH_SLOW:
+		new_fops = kgr_get_old_fops(patch_fun);
+		unreg_fops = &patch_fun->ftrace_ops_slow;
+		next_state = KGR_PATCH_INIT;
+		break;
+	case KGR_PATCH_REVERT_SLOW:
+		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING)) {
+			new_fops = &patch_fun->ftrace_ops_fast;
+			unreg_fops = &patch_fun->ftrace_ops_slow;
+		}
+		next_state = KGR_PATCH_APPLIED;
+		break;
+	case KGR_PATCH_APPLIED:
+		/* Nothing to do */
+		return;
+	default:
+		pr_warn("kgr: kgr_patch_code_failed: unexpected patch function state\n");
+		return;
+	}
+
+	err = kgr_switch_fops(patch_fun, new_fops, unreg_fops);
+	if (err)
+		BUG();
+
+	patch_fun->state = next_state;
+}
+
+/*
+ * In case kgr_patch_code call has failed (due to any of the symbol resolutions
+ * or something else), return all the functions patched up to now back to
+ * previous state so we can fail with grace.
+ */
+static void kgr_patching_failed(struct kgr_patch *patch,
+		struct kgr_patch_fun *patch_fun, bool process_all)
+{
+	struct kgr_patch_fun *pf;
+	struct kgr_patch *p = patch;
+
+	for (patch_fun--; patch_fun >= p->patches; patch_fun--)
+		kgr_patch_code_failed(patch_fun);
+
+	if (process_all) {
+		/*
+		 * kgr_patching_failed may be called during application of
+		 * replace_all patch. In this case all reverted patch_funs not
+		 * present in the patch have to be returned back to the previous
+		 * states. The variable patch contains patch in progress which
+		 * is not in the kgr_patches list. We add it here temporarily to
+		 * ensure that everything works as expected.
+		 */
+		if (patch == kgr_patch)
+			list_add_tail(&patch->list, &kgr_patches);
+
+		list_for_each_entry_continue_reverse(p, &kgr_patches, list)
+			kgr_for_each_patch_fun(p, pf)
+				kgr_patch_code_failed(pf);
+
+		if (patch == kgr_patch)
+			list_del(&patch->list);
+	}
+
+	WARN(1, "kgr: patching failed. Previous state was recovered.\n");
 }
 
 static bool kgr_patch_contains(const struct kgr_patch *p, const char *name)
