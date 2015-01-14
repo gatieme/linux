@@ -670,29 +670,9 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		return -EINVAL;
 	}
 
-	if (new_ops) {
-		/* Flip the switch */
-		err = kgr_ftrace_enable(patch_fun, new_ops);
-		if (err) {
-			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
-					patch_fun->loc_old, patch_fun->name);
-			return err;
-		}
-	}
-
-	/*
-	 * Get rid of the slow stub. Having two stubs in the interim is fine,
-	 * the last one always "wins", as it'll be dragged earlier from the
-	 * ftrace hashtable
-	 */
-	if (unreg_ops) {
-		err = kgr_ftrace_disable(patch_fun, unreg_ops);
-		if (err) {
-			pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
-					patch_fun->name, err);
-			/* don't fail: we are only slower */
-		}
-	}
+	err = kgr_switch_fops(patch_fun, new_ops, unreg_ops);
+	if (err)
+		return err;
 
 	patch_fun->state = next_state;
 
