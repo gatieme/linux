@@ -40,6 +40,7 @@ static LIST_HEAD(kgr_patches);
 static bool __percpu *kgr_irq_use_new;
 bool kgr_in_progress;
 bool kgr_enabled;
+bool kgr_force_load_module;
 static bool kgr_initialized;
 static struct kgr_patch *kgr_patch;
 static bool kgr_revert;
@@ -1059,7 +1060,7 @@ static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
  * This function is called when new module is loaded but before it is used.
  * Therefore it could set the fast path for already finalized patches.
  */
-static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
+static int kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 					       const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
@@ -1075,11 +1076,25 @@ static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 			continue;
 
 		err = kgr_init_ftrace_ops(patch_fun);
-		if (err)
-			continue;
+		if (err) {
+			if (kgr_force_load_module) {
+				WARN_ONCE(1, "kgr: delayed patching of the module failed. Insertion of the module forced.\n");
+				continue;
+			} else {
+				return err;
+			}
+		}
 
-		kgr_patch_code_delayed(patch_fun);
+		err = kgr_patch_code_delayed(patch_fun);
+		if (err) {
+			if (kgr_force_load_module)
+				WARN_ONCE(1, "kgr: delayed patching of the module failed. Insertion of the module forced.\n");
+			else
+				return err;
+		}
 	}
+
+	return 0;
 }
 
 /*
@@ -1120,6 +1135,7 @@ static bool kgr_is_module_patched(const struct module *mod)
 int kgr_module_init(const struct module *mod)
 {
 	struct kgr_patch *p;
+	int err;
 
 	/* early modules will be patched once KGraft is initialized */
 	if (!kgr_initialized)
@@ -1144,12 +1160,22 @@ int kgr_module_init(const struct module *mod)
 	 * more patches we want to set them all. They need to be in place when
 	 * we remove some patch.
 	 */
-	list_for_each_entry(p, &kgr_patches, list)
-		kgr_handle_patch_for_loaded_module(p, mod);
+	list_for_each_entry(p, &kgr_patches, list) {
+		err = kgr_handle_patch_for_loaded_module(p, mod);
+		if (err) {
+			pr_err("kgr: delayed patching of the module failed. Module was not inserted.\n");
+			goto err_unlock;
+		}
+	}
 
 	/* also check the patch in progress that is being applied */
-	if (kgr_patch)
-		kgr_handle_patch_for_loaded_module(kgr_patch, mod);
+	if (kgr_patch) {
+		err = kgr_handle_patch_for_loaded_module(kgr_patch, mod);
+		if (err) {
+			pr_err("kgr: delayed patching of the module failed. Module was not inserted.\n");
+			goto err_unlock;
+		}
+	}
 
 	mutex_unlock(&kgr_in_progress_lock);
 
@@ -1205,11 +1231,12 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
  * Check the given patch and disable pieces related to the module
  * that is being removed.
  */
-static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
+static int kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 					     const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
 	unsigned long addr;
+	int err;
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
 		addr = kallsyms_lookup_name(patch_fun->name);
@@ -1224,20 +1251,28 @@ static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 			       patch_fun->name, patch->name);
 		}
 
-		kgr_forced_code_patch_removal(patch_fun);
+		err = kgr_forced_code_patch_removal(patch_fun);
+		if (err)
+			return err;
 	}
+
+	return 0;
 }
 
 /*
  * Disable patches for the module that is being removed.
  *
- * FIXME: The module removal cannot be stopped at this stage. All affected
- * patches have to be removed. Therefore, the operation continues even in
- * case of errors.
+ * The module removal cannot be stopped at this stage. All affected patches have
+ * to be removed. In case of errors further patching is disabled.  Ftrace does
+ * not unregister stubs itself in order to optimize when the affected module
+ * gets loaded again. We have to do it ourselves. If we fail here and the module
+ * is loaded once more, we are going to to patch it. This could lead to the
+ * conflicts with ftrace and more errors.
  */
 static void kgr_handle_going_module(const struct module *mod)
 {
 	struct kgr_patch *p;
+	int err;
 
 	/* Nope when kGraft has not been initialized yet */
 	if (!kgr_initialized)
@@ -1254,15 +1289,24 @@ static void kgr_handle_going_module(const struct module *mod)
 		goto err_unlock;
 	}
 
-	list_for_each_entry(p, &kgr_patches, list)
-		kgr_handle_patch_for_going_module(p, mod);
+	list_for_each_entry(p, &kgr_patches, list) {
+		err = kgr_handle_patch_for_going_module(p, mod);
+		if (err)
+			goto err_warn;
+	}
 
 	/* also check the patch in progress for removed functions */
-	if (kgr_patch)
-		kgr_handle_patch_for_going_module(kgr_patch, mod);
+	if (kgr_patch) {
+		err = kgr_handle_patch_for_going_module(kgr_patch, mod);
+		if (err)
+			goto err_warn;
+	}
 
 	mutex_unlock(&kgr_in_progress_lock);
 	return;
+err_warn:
+	kgr_enabled = false;
+	WARN(1, "kgr: unpatching of the going module failed. Patching is disabled from now on.\n");
 err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
 }

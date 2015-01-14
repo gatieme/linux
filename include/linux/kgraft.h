@@ -109,6 +109,7 @@ struct kgr_patch {
 
 extern bool kgr_in_progress;
 extern bool kgr_enabled;
+extern bool kgr_force_load_module;
 
 extern int kgr_patch_kernel(struct kgr_patch *);
 extern void kgr_patch_remove(struct kgr_patch *);
