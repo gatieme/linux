@@ -178,12 +178,15 @@ static void kgr_remove_patches_fast(void)
  * mark the former as REVERTED and finalize the latter. Afterwards the patches
  * can be safely removed from the patches list (by calling
  * kgr_remove_patches_fast as in kgr_finalize).
+ *
+ * In case of error during finalization we try to finish as best as we can. The
+ * error is returned nevertheless and further patching is disabled.
  */
-static void kgr_finalize_replaced_funs(void)
+static int kgr_finalize_replaced_funs(void)
 {
 	struct kgr_patch_fun *pf;
 	struct kgr_patch *p;
-	int ret;
+	int ret = 0, err;
 
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_for_each_patch_fun(p, pf) {
@@ -197,18 +200,26 @@ static void kgr_finalize_replaced_funs(void)
 				continue;
 			}
 
-			ret = kgr_patch_code(pf, true, true, true);
-			if (ret < 0)
-				pr_err("kgr: finalize for %s failed, trying to continue\n",
-				      pf->name);
+			err = kgr_patch_code(pf, true, true, true);
+			if (err < 0) {
+				ret = err;
+				pr_err("kgr: finalization for %s failed. Trying to finish the rest.\n",
+					pf->name);
+			}
 		}
+
+	if (ret) {
+		kgr_enabled = false;
+		WARN(1, "kgr: finalization failed. The patching is disabled from now on.\n");
+	}
+
+	return ret;
 }
 
 static void kgr_finalize(void)
 {
 	struct kgr_patch_fun *patch_fun;
-
-	pr_info("kgr succeeded\n");
+	int ret;
 
 	mutex_lock(&kgr_in_progress_lock);
 
@@ -218,11 +229,14 @@ static void kgr_finalize(void)
 	}
 
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
-		int ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
+		ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
 
-		if (ret < 0)
-			pr_err("kgr: finalize for %s failed, trying to continue\n",
-					patch_fun->name);
+		if (ret < 0) {
+			kgr_enabled = false;
+			pr_err("kgr: finalization for %s failed. Trying to finish the rest.\n",
+				patch_fun->name);
+			WARN_ONCE(1, "kgr: finalization failed. The patching is disabled from now on.\n");
+		}
 
 		/*
 		 * When applying the replace_all patch all older patches are
@@ -237,9 +251,21 @@ static void kgr_finalize(void)
 	}
 
 	if (kgr_patch->replace_all && !kgr_revert) {
-		kgr_finalize_replaced_funs();
-		kgr_remove_patches_fast();
+		ret = kgr_finalize_replaced_funs();
+		/*
+		 * We can remove older patches only if their finalization was
+		 * successful.
+		 */
+		if (!ret)
+			kgr_remove_patches_fast();
 	}
+
+	/*
+	 * Finalization failed so don't do anything else and return. It makes
+	 * sense even not to touch kgr_patch and kgr_in_progress.
+	 */
+	if (!kgr_enabled)
+		goto out;
 
 	free_percpu(kgr_irq_use_new);
 
@@ -252,6 +278,8 @@ static void kgr_finalize(void)
 
 	kgr_patch = NULL;
 	kgr_in_progress = false;
+
+	pr_info("kgr succeeded\n");
 
 out:
 	mutex_unlock(&kgr_in_progress_lock);
