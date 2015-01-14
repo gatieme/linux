@@ -165,10 +165,18 @@ static ssize_t in_progress_store(struct kobject *kobj,
 	return count;
 }
 
+static ssize_t enabled_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kgr_enabled);
+}
+
 static struct kobj_attribute kgr_attr_in_progress = __ATTR_RW(in_progress);
+static struct kobj_attribute kgr_attr_enabled = __ATTR_RO(enabled);
 
 static struct attribute *kgr_sysfs_entries[] = {
 	&kgr_attr_in_progress.attr,
+	&kgr_attr_enabled.attr,
 	NULL
 };
 

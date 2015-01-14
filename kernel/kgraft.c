@@ -39,6 +39,7 @@ static DEFINE_MUTEX(kgr_in_progress_lock);
 static LIST_HEAD(kgr_patches);
 static bool __percpu *kgr_irq_use_new;
 bool kgr_in_progress;
+bool kgr_enabled;
 static bool kgr_initialized;
 static struct kgr_patch *kgr_patch;
 static bool kgr_revert;
@@ -211,6 +212,11 @@ static void kgr_finalize(void)
 
 	mutex_lock(&kgr_in_progress_lock);
 
+	if (!kgr_enabled) {
+		pr_err("kgr: patching is disabled, system possibly in inconsistent state. No more finalization allowed.\n");
+		goto out;
+	}
+
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
 		int ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
 
@@ -247,6 +253,7 @@ static void kgr_finalize(void)
 	kgr_patch = NULL;
 	kgr_in_progress = false;
 
+out:
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
@@ -800,6 +807,12 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	}
 
 	mutex_lock(&kgr_in_progress_lock);
+	if (!kgr_enabled) {
+		pr_err("kgr: can't proceed, patching is disabled\n");
+		ret = -EINVAL;
+		goto err_unlock;
+	}
+
 	if (patch->refs) {
 		pr_err("kgr: can't patch, this patch is still referenced\n");
 		ret = -EBUSY;
@@ -1041,21 +1054,62 @@ static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 	}
 }
 
+/*
+ * The function returns true if the module is supposed to be patched, i.e. if
+ * there is a patch_fun in kgr_patches list or in the patch in progress which is
+ * intended to patch some function in the given module.
+ */
+static bool kgr_is_module_patched(const struct module *mod)
+{
+	struct kgr_patch *p;
+	struct kgr_patch_fun *pf;
+	unsigned long addr;
+
+	list_for_each_entry(p, &kgr_patches, list)
+		kgr_for_each_patch_fun(p, pf) {
+			addr = kallsyms_lookup_name(pf->name);
+			if (within_module(addr, mod))
+				return true;
+		}
+
+	/* also check the patch in progress that is being applied */
+	if (kgr_patch)
+		kgr_for_each_patch_fun(kgr_patch, pf) {
+			addr = kallsyms_lookup_name(pf->name);
+			if (within_module(addr, mod))
+				return true;
+		}
+
+	return false;
+}
+
 /**
  * kgr_module_init -- apply skipped patches for newly loaded modules
  *
  * It must be called when symbols are visible to kallsyms but before the module
  * init is called. Otherwise, it would not be able to use the fast stub.
  */
-void kgr_module_init(const struct module *mod)
+int kgr_module_init(const struct module *mod)
 {
 	struct kgr_patch *p;
 
 	/* early modules will be patched once KGraft is initialized */
 	if (!kgr_initialized)
-		return;
+		return -EBUSY;
 
 	mutex_lock(&kgr_in_progress_lock);
+
+	/*
+	 * If the patching is disabled only the modules with no function to be
+	 * patched are allowed for insertion.
+	 * Note that kgraft module could thus be inserted. However the patching
+	 * would not be executed thanks to the check in kgr_modify_kernel and
+	 * the module would be removed immediately.
+	 */
+	if (!kgr_enabled && kgr_is_module_patched(mod)) {
+		pr_err("kgr: patching is disabled, system possibly in inconsistent state. Loading of patched modules is not allowed.\n");
+		goto err_unlock;
+	}
 
 	/*
 	 * Check already applied patches for skipped functions. If there are
@@ -1070,6 +1124,11 @@ void kgr_module_init(const struct module *mod)
 		kgr_handle_patch_for_loaded_module(kgr_patch, mod);
 
 	mutex_unlock(&kgr_in_progress_lock);
+
+	return 0;
+err_unlock:
+	mutex_unlock(&kgr_in_progress_lock);
+	return -EINVAL;
 }
 
 /*
@@ -1158,6 +1217,15 @@ static void kgr_handle_going_module(const struct module *mod)
 
 	mutex_lock(&kgr_in_progress_lock);
 
+	/*
+	 * If the patching is disabled only the modules with no patched function
+	 * are allowed to go away.
+	 */
+	if (!kgr_enabled && kgr_is_module_patched(mod)) {
+		pr_err("kgr: patching is disabled, system possibly in inconsistent state. Removal of patched modules is not allowed.\n");
+		goto err_unlock;
+	}
+
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_handle_patch_for_going_module(p, mod);
 
@@ -1165,6 +1233,9 @@ static void kgr_handle_going_module(const struct module *mod)
 	if (kgr_patch)
 		kgr_handle_patch_for_going_module(kgr_patch, mod);
 
+	mutex_unlock(&kgr_in_progress_lock);
+	return;
+err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
@@ -1219,6 +1290,7 @@ static int __init kgr_init(void)
 		pr_warn("Failed to register kGraft module exit notifier\n");
 
 	kgr_initialized = true;
+	kgr_enabled = true;
 	pr_info("kgr: successfully initialized\n");
 
 	return 0;
