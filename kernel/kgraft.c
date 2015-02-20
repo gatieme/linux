@@ -326,9 +326,7 @@ static void kgr_handle_processes(void)
 
 	read_lock(&tasklist_lock);
 	for_each_process(p) {
-		/* skip tasks wandering in userspace as already migrated */
-		if (kgr_needs_lazy_migration(p))
-			kgr_mark_task_in_progress(p);
+		kgr_mark_task_in_progress(p);
 		/* wake up kthreads, they will clean the progress flag */
 		if (p->flags & PF_KTHREAD) {
 			/*
