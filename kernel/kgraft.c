@@ -39,8 +39,6 @@ static DEFINE_MUTEX(kgr_in_progress_lock);
 static LIST_HEAD(kgr_patches);
 static bool __percpu *kgr_irq_use_new;
 bool kgr_in_progress;
-bool kgr_enabled;
-bool kgr_force_load_module;
 static bool kgr_initialized;
 static struct kgr_patch *kgr_patch;
 static bool kgr_revert;
@@ -179,15 +177,12 @@ static void kgr_remove_patches_fast(void)
  * mark the former as REVERTED and finalize the latter. Afterwards the patches
  * can be safely removed from the patches list (by calling
  * kgr_remove_patches_fast as in kgr_finalize).
- *
- * In case of error during finalization we try to finish as best as we can. The
- * error is returned nevertheless and further patching is disabled.
  */
-static int kgr_finalize_replaced_funs(void)
+static void kgr_finalize_replaced_funs(void)
 {
 	struct kgr_patch_fun *pf;
 	struct kgr_patch *p;
-	int ret = 0, err;
+	int ret;
 
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_for_each_patch_fun(p, pf) {
@@ -201,43 +196,27 @@ static int kgr_finalize_replaced_funs(void)
 				continue;
 			}
 
-			err = kgr_patch_code(pf, true, true, true);
-			if (err < 0) {
-				ret = err;
-				pr_err("kgr: finalization for %s failed. Trying to finish the rest.\n",
-					pf->name);
-			}
+			ret = kgr_patch_code(pf, true, true, true);
+			if (ret < 0)
+				pr_err("kgr: finalize for %s failed, trying to continue\n",
+				      pf->name);
 		}
-
-	if (ret) {
-		kgr_enabled = false;
-		WARN(1, "kgr: finalization failed. The patching is disabled from now on.\n");
-	}
-
-	return ret;
 }
 
 static void kgr_finalize(void)
 {
 	struct kgr_patch_fun *patch_fun;
-	int ret;
+
+	pr_info("kgr succeeded\n");
 
 	mutex_lock(&kgr_in_progress_lock);
 
-	if (!kgr_enabled) {
-		pr_err("kgr: patching is disabled, system possibly in inconsistent state. No more finalization allowed.\n");
-		goto out;
-	}
-
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
-		ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
+		int ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
 
-		if (ret < 0) {
-			kgr_enabled = false;
-			pr_err("kgr: finalization for %s failed. Trying to finish the rest.\n",
-				patch_fun->name);
-			WARN_ONCE(1, "kgr: finalization failed. The patching is disabled from now on.\n");
-		}
+		if (ret < 0)
+			pr_err("kgr: finalize for %s failed, trying to continue\n",
+					patch_fun->name);
 
 		/*
 		 * When applying the replace_all patch all older patches are
@@ -252,21 +231,9 @@ static void kgr_finalize(void)
 	}
 
 	if (kgr_patch->replace_all && !kgr_revert) {
-		ret = kgr_finalize_replaced_funs();
-		/*
-		 * We can remove older patches only if their finalization was
-		 * successful.
-		 */
-		if (!ret)
-			kgr_remove_patches_fast();
+		kgr_finalize_replaced_funs();
+		kgr_remove_patches_fast();
 	}
-
-	/*
-	 * Finalization failed so don't do anything else and return. It makes
-	 * sense even not to touch kgr_patch and kgr_in_progress.
-	 */
-	if (!kgr_enabled)
-		goto out;
 
 	free_percpu(kgr_irq_use_new);
 
@@ -280,9 +247,6 @@ static void kgr_finalize(void)
 	kgr_patch = NULL;
 	kgr_in_progress = false;
 
-	pr_info("kgr succeeded\n");
-
-out:
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
@@ -507,37 +471,6 @@ kgr_get_old_fops(const struct kgr_patch_fun *patch_fun)
 	return pf ? &pf->ftrace_ops_fast : NULL;
 }
 
-static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
-		struct ftrace_ops *new_fops, struct ftrace_ops *unreg_fops)
-{
-	int err;
-
-	if (new_fops) {
-		err = kgr_ftrace_enable(patch_fun, new_fops);
-		if (err) {
-			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
-				patch_fun->loc_old, patch_fun->name);
-			return err;
-		}
-	}
-
-	/*
-	 * Get rid of the other stub. Having two stubs in the interim is fine,
-	 * the last one always "wins", as it'll be dragged earlier from the
-	 * ftrace hashtable.
-	 */
-	if (unreg_fops) {
-		err = kgr_ftrace_disable(patch_fun, unreg_fops);
-		if (err) {
-			pr_err("kgr: disabling ftrace function for %s failed with %d\n",
-				patch_fun->name, err);
-			return err;
-		}
-	}
-
-	return 0;
-}
-
 static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 {
 	struct ftrace_ops *fops;
@@ -668,86 +601,35 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		return -EINVAL;
 	}
 
-	err = kgr_switch_fops(patch_fun, new_ops, unreg_ops);
-	if (err)
-		return err;
+	if (new_ops) {
+		/* Flip the switch */
+		err = kgr_ftrace_enable(patch_fun, new_ops);
+		if (err) {
+			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
+					patch_fun->loc_old, patch_fun->name);
+			return err;
+		}
+	}
+
+	/*
+	 * Get rid of the slow stub. Having two stubs in the interim is fine,
+	 * the last one always "wins", as it'll be dragged earlier from the
+	 * ftrace hashtable
+	 */
+	if (unreg_ops) {
+		err = kgr_ftrace_disable(patch_fun, unreg_ops);
+		if (err) {
+			pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
+					patch_fun->name, err);
+			/* don't fail: we are only slower */
+		}
+	}
 
 	patch_fun->state = next_state;
 
 	pr_debug("kgr: redirection for %s done\n", patch_fun->name);
 
 	return 0;
-}
-
-static void kgr_patch_code_failed(struct kgr_patch_fun *patch_fun)
-{
-	struct ftrace_ops *new_fops = NULL, *unreg_fops = NULL;
-	enum kgr_patch_state next_state;
-	int err;
-
-	switch (patch_fun->state) {
-	case KGR_PATCH_SLOW:
-		new_fops = kgr_get_old_fops(patch_fun);
-		unreg_fops = &patch_fun->ftrace_ops_slow;
-		next_state = KGR_PATCH_INIT;
-		break;
-	case KGR_PATCH_REVERT_SLOW:
-		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING)) {
-			new_fops = &patch_fun->ftrace_ops_fast;
-			unreg_fops = &patch_fun->ftrace_ops_slow;
-		}
-		next_state = KGR_PATCH_APPLIED;
-		break;
-	case KGR_PATCH_APPLIED:
-		/* Nothing to do */
-		return;
-	default:
-		pr_warn("kgr: kgr_patch_code_failed: unexpected patch function state\n");
-		return;
-	}
-
-	err = kgr_switch_fops(patch_fun, new_fops, unreg_fops);
-	if (err)
-		BUG();
-
-	patch_fun->state = next_state;
-}
-
-/*
- * In case kgr_patch_code call has failed (due to any of the symbol resolutions
- * or something else), return all the functions patched up to now back to
- * previous state so we can fail with grace.
- */
-static void kgr_patching_failed(struct kgr_patch *patch,
-		struct kgr_patch_fun *patch_fun, bool process_all)
-{
-	struct kgr_patch_fun *pf;
-	struct kgr_patch *p = patch;
-
-	for (patch_fun--; patch_fun >= p->patches; patch_fun--)
-		kgr_patch_code_failed(patch_fun);
-
-	if (process_all) {
-		/*
-		 * kgr_patching_failed may be called during application of
-		 * replace_all patch. In this case all reverted patch_funs not
-		 * present in the patch have to be returned back to the previous
-		 * states. The variable patch contains patch in progress which
-		 * is not in the kgr_patches list. We add it here temporarily to
-		 * ensure that everything works as expected.
-		 */
-		if (patch == kgr_patch)
-			list_add_tail(&patch->list, &kgr_patches);
-
-		list_for_each_entry_continue_reverse(p, &kgr_patches, list)
-			kgr_for_each_patch_fun(p, pf)
-				kgr_patch_code_failed(pf);
-
-		if (patch == kgr_patch)
-			list_del(&patch->list);
-	}
-
-	WARN(1, "kgr: patching failed. Previous state was recovered.\n");
 }
 
 static bool kgr_patch_contains(const struct kgr_patch *p, const char *name)
@@ -788,9 +670,12 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 
 				ret = kgr_patch_code(pf, false, true, true);
 				if (ret < 0) {
+					/*
+					 * No need to fail with grace as in
+					 * kgr_modify_kernel
+					 */
 					pr_err("kgr: cannot revert function %s in patch %s\n",
 					      pf->name, p->name);
-					kgr_patching_failed(p, pf, true);
 					return ret;
 				}
 			}
@@ -814,12 +699,6 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	}
 
 	mutex_lock(&kgr_in_progress_lock);
-	if (!kgr_enabled) {
-		pr_err("kgr: can't proceed, patching is disabled\n");
-		ret = -EINVAL;
-		goto err_unlock;
-	}
-
 	if (patch->refs) {
 		pr_err("kgr: can't patch, this patch is still referenced\n");
 		ret = -EBUSY;
@@ -854,8 +733,6 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		wmb(); /* set_bit before kgr_handle_processes */
 	}
 
-	kgr_patch = patch;
-
 	/*
 	 * We need to revert patches of functions not patched in replace_all
 	 * patch. Do that only while applying the replace_all patch.
@@ -870,13 +747,22 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		patch_fun->patch = patch;
 
 		ret = kgr_patch_code(patch_fun, false, revert, false);
+		/*
+		 * In case any of the symbol resolutions in the set
+		 * has failed, patch all the previously replaced fentry
+		 * callsites back to nops and fail with grace
+		 */
 		if (ret < 0) {
-			kgr_patching_failed(patch, patch_fun,
-				patch->replace_all && !revert);
+			for (patch_fun--; patch_fun >= patch->patches;
+					patch_fun--)
+				if (patch_fun->state == KGR_PATCH_SLOW)
+					kgr_ftrace_disable(patch_fun,
+						&patch_fun->ftrace_ops_slow);
 			goto err_free;
 		}
 	}
 	kgr_in_progress = true;
+	kgr_patch = patch;
 	kgr_revert = revert;
 	if (revert)
 		list_del_init(&patch->list); /* init for list_empty() above */
@@ -901,7 +787,6 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 
 	return 0;
 err_free:
-	kgr_patch = NULL;
 	free_percpu(kgr_irq_use_new);
 err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
@@ -1038,7 +923,7 @@ static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
  * This function is called when new module is loaded but before it is used.
  * Therefore it could set the fast path for already finalized patches.
  */
-static int kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
+static void kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 					       const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
@@ -1054,54 +939,11 @@ static int kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 			continue;
 
 		err = kgr_init_ftrace_ops(patch_fun);
-		if (err) {
-			if (kgr_force_load_module) {
-				WARN_ONCE(1, "kgr: delayed patching of the module failed. Insertion of the module forced.\n");
-				continue;
-			} else {
-				return err;
-			}
-		}
+		if (err)
+			continue;
 
-		err = kgr_patch_code_delayed(patch_fun);
-		if (err) {
-			if (kgr_force_load_module)
-				WARN_ONCE(1, "kgr: delayed patching of the module failed. Insertion of the module forced.\n");
-			else
-				return err;
-		}
+		kgr_patch_code_delayed(patch_fun);
 	}
-
-	return 0;
-}
-
-/*
- * The function returns true if the module is supposed to be patched, i.e. if
- * there is a patch_fun in kgr_patches list or in the patch in progress which is
- * intended to patch some function in the given module.
- */
-static bool kgr_is_module_patched(const struct module *mod)
-{
-	struct kgr_patch *p;
-	struct kgr_patch_fun *pf;
-	unsigned long addr;
-
-	list_for_each_entry(p, &kgr_patches, list)
-		kgr_for_each_patch_fun(p, pf) {
-			addr = kallsyms_lookup_name(pf->name);
-			if (within_module(addr, mod))
-				return true;
-		}
-
-	/* also check the patch in progress that is being applied */
-	if (kgr_patch)
-		kgr_for_each_patch_fun(kgr_patch, pf) {
-			addr = kallsyms_lookup_name(pf->name);
-			if (within_module(addr, mod))
-				return true;
-		}
-
-	return false;
 }
 
 /**
@@ -1110,57 +952,29 @@ static bool kgr_is_module_patched(const struct module *mod)
  * It must be called when symbols are visible to kallsyms but before the module
  * init is called. Otherwise, it would not be able to use the fast stub.
  */
-int kgr_module_init(const struct module *mod)
+void kgr_module_init(const struct module *mod)
 {
 	struct kgr_patch *p;
-	int err;
 
 	/* early modules will be patched once KGraft is initialized */
 	if (!kgr_initialized)
-		return -EBUSY;
+		return;
 
 	mutex_lock(&kgr_in_progress_lock);
-
-	/*
-	 * If the patching is disabled only the modules with no function to be
-	 * patched are allowed for insertion.
-	 * Note that kgraft module could thus be inserted. However the patching
-	 * would not be executed thanks to the check in kgr_modify_kernel and
-	 * the module would be removed immediately.
-	 */
-	if (!kgr_enabled && kgr_is_module_patched(mod)) {
-		pr_err("kgr: patching is disabled, system possibly in inconsistent state. Loading of patched modules is not allowed.\n");
-		goto err_unlock;
-	}
 
 	/*
 	 * Check already applied patches for skipped functions. If there are
 	 * more patches we want to set them all. They need to be in place when
 	 * we remove some patch.
 	 */
-	list_for_each_entry(p, &kgr_patches, list) {
-		err = kgr_handle_patch_for_loaded_module(p, mod);
-		if (err) {
-			pr_err("kgr: delayed patching of the module failed. Module was not inserted.\n");
-			goto err_unlock;
-		}
-	}
+	list_for_each_entry(p, &kgr_patches, list)
+		kgr_handle_patch_for_loaded_module(p, mod);
 
 	/* also check the patch in progress that is being applied */
-	if (kgr_patch) {
-		err = kgr_handle_patch_for_loaded_module(kgr_patch, mod);
-		if (err) {
-			pr_err("kgr: delayed patching of the module failed. Module was not inserted.\n");
-			goto err_unlock;
-		}
-	}
+	if (kgr_patch)
+		kgr_handle_patch_for_loaded_module(kgr_patch, mod);
 
 	mutex_unlock(&kgr_in_progress_lock);
-
-	return 0;
-err_unlock:
-	mutex_unlock(&kgr_in_progress_lock);
-	return -EINVAL;
 }
 
 /*
@@ -1209,12 +1023,11 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
  * Check the given patch and disable pieces related to the module
  * that is being removed.
  */
-static int kgr_handle_patch_for_going_module(struct kgr_patch *patch,
+static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 					     const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
 	unsigned long addr;
-	int err;
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
 		addr = kallsyms_lookup_name(patch_fun->name);
@@ -1229,28 +1042,20 @@ static int kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 			       patch_fun->name, patch->name);
 		}
 
-		err = kgr_forced_code_patch_removal(patch_fun);
-		if (err)
-			return err;
+		kgr_forced_code_patch_removal(patch_fun);
 	}
-
-	return 0;
 }
 
 /*
  * Disable patches for the module that is being removed.
  *
- * The module removal cannot be stopped at this stage. All affected patches have
- * to be removed. In case of errors further patching is disabled.  Ftrace does
- * not unregister stubs itself in order to optimize when the affected module
- * gets loaded again. We have to do it ourselves. If we fail here and the module
- * is loaded once more, we are going to to patch it. This could lead to the
- * conflicts with ftrace and more errors.
+ * FIXME: The module removal cannot be stopped at this stage. All affected
+ * patches have to be removed. Therefore, the operation continues even in
+ * case of errors.
  */
 static void kgr_handle_going_module(const struct module *mod)
 {
 	struct kgr_patch *p;
-	int err;
 
 	/* Nope when kGraft has not been initialized yet */
 	if (!kgr_initialized)
@@ -1258,34 +1063,13 @@ static void kgr_handle_going_module(const struct module *mod)
 
 	mutex_lock(&kgr_in_progress_lock);
 
-	/*
-	 * If the patching is disabled only the modules with no patched function
-	 * are allowed to go away.
-	 */
-	if (!kgr_enabled && kgr_is_module_patched(mod)) {
-		pr_err("kgr: patching is disabled, system possibly in inconsistent state. Removal of patched modules is not allowed.\n");
-		goto err_unlock;
-	}
-
-	list_for_each_entry(p, &kgr_patches, list) {
-		err = kgr_handle_patch_for_going_module(p, mod);
-		if (err)
-			goto err_warn;
-	}
+	list_for_each_entry(p, &kgr_patches, list)
+		kgr_handle_patch_for_going_module(p, mod);
 
 	/* also check the patch in progress for removed functions */
-	if (kgr_patch) {
-		err = kgr_handle_patch_for_going_module(kgr_patch, mod);
-		if (err)
-			goto err_warn;
-	}
+	if (kgr_patch)
+		kgr_handle_patch_for_going_module(kgr_patch, mod);
 
-	mutex_unlock(&kgr_in_progress_lock);
-	return;
-err_warn:
-	kgr_enabled = false;
-	WARN(1, "kgr: unpatching of the going module failed. Patching is disabled from now on.\n");
-err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
@@ -1340,7 +1124,6 @@ static int __init kgr_init(void)
 		pr_warn("Failed to register kGraft module exit notifier\n");
 
 	kgr_initialized = true;
-	kgr_enabled = true;
 	pr_info("kgr: successfully initialized\n");
 
 	return 0;

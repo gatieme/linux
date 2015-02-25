@@ -3282,9 +3282,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	 * to kallsyms but before the module init is called. Then the
 	 * changes can be applied immediately.
 	 */
-	err = kgr_module_init(mod);
-	if (err)
-		goto bug_cleanup;
+	kgr_module_init(mod);
 #endif
 
 	/* Module is ready to execute: parsing args may do that. */
