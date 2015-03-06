@@ -17,6 +17,7 @@ config X86_64
 	depends on 64BIT
 	select X86_DEV_DMA_OPS
 	select ARCH_USE_CMPXCHG_LOCKREF
+	select HAVE_KGRAFT
 
 ### Arch settings
 config X86
@@ -136,7 +137,6 @@ config X86
 	select HAVE_ACPI_APEI if ACPI
 	select HAVE_ACPI_APEI_NMI if ACPI
 	select ACPI_LEGACY_TABLES_LOOKUP if ACPI
-	select HAVE_KGRAFT
 
 config INSTRUCTION_DECODER
 	def_bool y
