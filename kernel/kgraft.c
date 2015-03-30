@@ -28,6 +28,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
+#include <linux/bug.h>
 
 static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		bool revert, bool replace_revert);
@@ -471,6 +472,43 @@ kgr_get_old_fops(const struct kgr_patch_fun *patch_fun)
 	return pf ? &pf->ftrace_ops_fast : NULL;
 }
 
+static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
+		struct ftrace_ops *new_fops, struct ftrace_ops *unreg_fops)
+{
+	int err;
+
+	if (new_fops) {
+		err = kgr_ftrace_enable(patch_fun, new_fops);
+		if (err) {
+			pr_err("kgr: cannot enable ftrace function for %s (%lx, %d)\n",
+				patch_fun->name, patch_fun->loc_old, err);
+			return err;
+		}
+	}
+
+	/*
+	 * Get rid of the other stub. Having two stubs in the interim is fine.
+	 * The first one registered always "wins", as it'll be dragged last from
+	 * the ftrace hashtable. The redirected RIP however currently points to
+	 * the same function in both stubs.
+	 */
+	if (unreg_fops) {
+		err = kgr_ftrace_disable(patch_fun, unreg_fops);
+		if (err) {
+			pr_err("kgr: disabling ftrace function for %s failed (%d)\n",
+				patch_fun->name, err);
+			/*
+			 * In case of failure we do not know which state we are
+			 * in. There is something wrong going on in kGraft of
+			 * ftrace, so better BUG.
+			 */
+			BUG();
+		}
+	}
+
+	return 0;
+}
+
 static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 {
 	struct ftrace_ops *fops;
@@ -601,29 +639,13 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		return -EINVAL;
 	}
 
-	if (new_ops) {
-		/* Flip the switch */
-		err = kgr_ftrace_enable(patch_fun, new_ops);
-		if (err) {
-			pr_err("kgr: cannot enable ftrace function for %lx (%s)\n",
-					patch_fun->loc_old, patch_fun->name);
-			return err;
-		}
-	}
-
 	/*
-	 * Get rid of the slow stub. Having two stubs in the interim is fine,
-	 * the last one always "wins", as it'll be dragged earlier from the
-	 * ftrace hashtable
+	 * In case of error the caller can still have a chance to restore the
+	 * previous consistent state.
 	 */
-	if (unreg_ops) {
-		err = kgr_ftrace_disable(patch_fun, unreg_ops);
-		if (err) {
-			pr_warning("kgr: disabling ftrace function for %s failed with %d\n",
-					patch_fun->name, err);
-			/* don't fail: we are only slower */
-		}
-	}
+	err = kgr_switch_fops(patch_fun, new_ops, unreg_ops);
+	if (err)
+		return err;
 
 	patch_fun->state = next_state;
 
