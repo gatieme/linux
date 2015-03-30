@@ -654,6 +654,133 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 	return 0;
 }
 
+/*
+ * The patching failed so we need to go one step back for the affected
+ * patch_fun. It means to switch the present slow stubs to previous fast stubs
+ * for KGR_PATCH_SLOW and KGR_PATCH_REVERT_SLOW states. Nothing has to be done
+ * for KGR_PATCH_APPLIED and KGR_PATCH_SKIPPED.
+ *
+ * This function is intended for the first stage of patching. It must not be
+ * used during the finalization (kgr_finalize).
+ */
+static void kgr_patch_code_failed(struct kgr_patch_fun *patch_fun)
+{
+	struct ftrace_ops *new_fops = NULL, *unreg_fops = NULL;
+	enum kgr_patch_state next_state;
+	unsigned long old_fun;
+	int err;
+
+	switch (patch_fun->state) {
+	case KGR_PATCH_SLOW:
+		new_fops = kgr_get_old_fops(patch_fun);
+		unreg_fops = &patch_fun->ftrace_ops_slow;
+		next_state = KGR_PATCH_INIT;
+		break;
+	case KGR_PATCH_REVERT_SLOW:
+		/*
+		 * There is a check for KGR_LAST_FINALIZED at similar place in
+		 * kgr_patch_code. Here we need to test for KGR_LAST_EXISTING,
+		 * because kgr_patch_code_failed can be called also on patch_fun
+		 * from kgr_patch (which is in reverting process).
+		 */
+		if (kgr_is_patch_fun(patch_fun, KGR_LAST_EXISTING)) {
+			new_fops = &patch_fun->ftrace_ops_fast;
+			unreg_fops = &patch_fun->ftrace_ops_slow;
+		}
+		/*
+		 * Set loc_old back to the previous stacked function. The check
+		 * is not optimal, because loc_name is valid for some
+		 * patch_funs, but it is not wrong and certainly the simplest.
+		 */
+		if (patch_fun->loc_old == patch_fun->loc_name) {
+			old_fun = kgr_get_old_fun(patch_fun);
+			/*
+			 * This should not happen. loc_old had been correctly
+			 * set before (by kgr_init_ftrace_ops).
+			 */
+			WARN(!old_fun, "kgr: loc_old is set incorrectly for %s. Do not revert anything!",
+				patch_fun->name);
+			patch_fun->loc_old = old_fun;
+		}
+		next_state = KGR_PATCH_APPLIED;
+		break;
+	case KGR_PATCH_APPLIED:
+		/*
+		 * Nothing to do. Although kgr_patching_failed is called from
+		 * kgr_revert_replaced_funs, it does not touch non-replaced
+		 * functions at all.
+		 */
+		return;
+	case KGR_PATCH_SKIPPED:
+		/*
+		 * patch_fun can be in SKIPPED state, because affected module
+		 * can be missing. Nothing to do here.
+		 */
+		return;
+	default:
+		/*
+		 * patch_fun cannot be in any other state given the
+		 * circumstances (all is (being) applied/reverted)
+		 */
+		pr_warn("kgr: kgr_patch_code_failed: unexpected patch function state (%d)\n",
+			patch_fun->state);
+		return;
+	}
+
+	err = kgr_switch_fops(patch_fun, new_fops, unreg_fops);
+	/*
+	 * Patching failed, attempt to handle the failure failed as well. We do
+	 * not know which patch_funs were (partially) (un)patched and which were
+	 * not. The system can be in unstable state so we BUG().
+	 */
+	BUG_ON(err);
+
+	patch_fun->state = next_state;
+}
+
+/*
+ * In case kgr_patch_code call has failed (due to any of the symbol resolutions
+ * or something else), return all the functions patched up to now back to
+ * previous state so we can fail with grace.
+ *
+ * This function is intended for the first stage of patching. It must not be
+ * used during the finalization (kgr_finalize).
+ */
+static void kgr_patching_failed(struct kgr_patch *patch,
+		struct kgr_patch_fun *patch_fun, bool process_all)
+{
+	struct kgr_patch_fun *pf;
+	struct kgr_patch *p = patch;
+
+	for (patch_fun--; patch_fun >= p->patches; patch_fun--)
+		kgr_patch_code_failed(patch_fun);
+
+	if (process_all) {
+		/*
+		 * kgr_patching_failed may be called during application of
+		 * replace_all patch. In this case all reverted patch_funs not
+		 * present in the patch have to be returned back to the previous
+		 * states. The variable patch contains patch in progress which
+		 * is not in the kgr_patches list.
+		 * list_for_each_entry_continue_reverse continues with the
+		 * previous entry in the list. This would crash when called on
+		 * replace_all patch. So we add it to the list temporarily to
+		 * ensure the list traversal works.
+		 */
+		if (patch == kgr_patch)
+			list_add_tail(&patch->list, &kgr_patches);
+
+		list_for_each_entry_continue_reverse(p, &kgr_patches, list)
+			kgr_for_each_patch_fun(p, pf)
+				kgr_patch_code_failed(pf);
+
+		if (patch == kgr_patch)
+			list_del(&patch->list);
+	}
+
+	WARN(1, "kgr: patching failed. Previous state was recovered.\n");
+}
+
 static bool kgr_patch_contains(const struct kgr_patch *p, const char *name)
 {
 	const struct kgr_patch_fun *pf;
@@ -674,6 +801,7 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 {
 	struct kgr_patch *p;
 	struct kgr_patch_fun *pf;
+	unsigned long loc_old_temp;
 	int ret;
 
 	list_for_each_entry(p, &kgr_patches, list)
@@ -688,16 +816,15 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 				 * loc_name.  Fast stub is still used, so change
 				 * of loc_old is safe.
 				 */
+				loc_old_temp = pf->loc_old;
 				pf->loc_old = pf->loc_name;
 
 				ret = kgr_patch_code(pf, false, true, true);
 				if (ret < 0) {
-					/*
-					 * No need to fail with grace as in
-					 * kgr_modify_kernel
-					 */
 					pr_err("kgr: cannot revert function %s in patch %s\n",
 					      pf->name, p->name);
+					pf->loc_old = loc_old_temp;
+					kgr_patching_failed(p, pf, true);
 					return ret;
 				}
 			}
@@ -756,6 +883,12 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	}
 
 	/*
+	 * Set kgr_patch before it can be used in kgr_patching_failed if
+	 * something bad happens.
+	 */
+	kgr_patch = patch;
+
+	/*
 	 * We need to revert patches of functions not patched in replace_all
 	 * patch. Do that only while applying the replace_all patch.
 	 */
@@ -769,22 +902,13 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		patch_fun->patch = patch;
 
 		ret = kgr_patch_code(patch_fun, false, revert, false);
-		/*
-		 * In case any of the symbol resolutions in the set
-		 * has failed, patch all the previously replaced fentry
-		 * callsites back to nops and fail with grace
-		 */
 		if (ret < 0) {
-			for (patch_fun--; patch_fun >= patch->patches;
-					patch_fun--)
-				if (patch_fun->state == KGR_PATCH_SLOW)
-					kgr_ftrace_disable(patch_fun,
-						&patch_fun->ftrace_ops_slow);
+			kgr_patching_failed(patch, patch_fun,
+				patch->replace_all && !revert);
 			goto err_free;
 		}
 	}
 	kgr_in_progress = true;
-	kgr_patch = patch;
 	kgr_revert = revert;
 	if (revert)
 		list_del_init(&patch->list); /* init for list_empty() above */
@@ -809,6 +933,9 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 
 	return 0;
 err_free:
+	kgr_patch = NULL;
+	/* No need for barrier as there are no slow stubs involved */
+	clear_bit(0, kgr_immutable);
 	free_percpu(kgr_irq_use_new);
 err_unlock:
 	mutex_unlock(&kgr_in_progress_lock);
