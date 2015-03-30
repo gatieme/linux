@@ -178,6 +178,9 @@ static void kgr_remove_patches_fast(void)
  * mark the former as REVERTED and finalize the latter. Afterwards the patches
  * can be safely removed from the patches list (by calling
  * kgr_remove_patches_fast as in kgr_finalize).
+ *
+ * In case finalization fails the system is in inconsistent state with no way
+ * out. It is better to BUG() in this situation.
  */
 static void kgr_finalize_replaced_funs(void)
 {
@@ -198,26 +201,35 @@ static void kgr_finalize_replaced_funs(void)
 			}
 
 			ret = kgr_patch_code(pf, true, true, true);
-			if (ret < 0)
-				pr_err("kgr: finalize for %s failed, trying to continue\n",
-				      pf->name);
+			if (ret < 0) {
+				/*
+				 * Note: This should not happen. We only disable
+				 * slow stubs and if this failed we would BUG in
+				 * kgr_switch_fops called by kgr_patch_code. But
+				 * leave it here to be sure.
+				 */
+				pr_err("kgr: finalization for %s failed (%d). System in inconsistent state with no way out.\n",
+					pf->name, ret);
+				BUG();
+			}
 		}
 }
 
 static void kgr_finalize(void)
 {
 	struct kgr_patch_fun *patch_fun;
-
-	pr_info("kgr succeeded\n");
+	int ret;
 
 	mutex_lock(&kgr_in_progress_lock);
 
 	kgr_for_each_patch_fun(kgr_patch, patch_fun) {
-		int ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
+		ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
 
-		if (ret < 0)
-			pr_err("kgr: finalize for %s failed, trying to continue\n",
-					patch_fun->name);
+		if (ret < 0) {
+			pr_err("kgr: finalization for %s failed (%d). System in inconsistent state with no way out.\n",
+				patch_fun->name, ret);
+			BUG();
+		}
 
 		/*
 		 * When applying the replace_all patch all older patches are
@@ -247,6 +259,8 @@ static void kgr_finalize(void)
 
 	kgr_patch = NULL;
 	kgr_in_progress = false;
+
+	pr_info("kgr succeeded\n");
 
 	mutex_unlock(&kgr_in_progress_lock);
 }
