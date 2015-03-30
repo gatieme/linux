@@ -1337,13 +1337,18 @@ static int __init kgr_init(void)
 	}
 
 	ret = register_module_notifier(&kgr_module_exit_nb);
-	if (ret)
-		pr_warn("Failed to register kGraft module exit notifier\n");
+	if (ret) {
+		pr_err("kgr: failed to register kGraft module exit notifier (%d)\n",
+			ret);
+		goto err_destroy_wq;
+	}
 
 	kgr_initialized = true;
 	pr_info("kgr: successfully initialized\n");
 
 	return 0;
+err_destroy_wq:
+	destroy_workqueue(kgr_wq);
 err_remove_files:
 	kgr_remove_files();
 
