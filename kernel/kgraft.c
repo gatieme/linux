@@ -837,8 +837,8 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 
 				ret = kgr_patch_code(pf, false, true, true);
 				if (ret < 0) {
-					pr_err("kgr: cannot revert function %s in patch %s\n",
-					      pf->name, p->name);
+					pr_err("kgr: cannot revert function %s in patch %s (%d)\n",
+					      pf->name, p->name, ret);
 					pf->loc_old = loc_old_temp;
 					kgr_patching_failed(p, pf, true);
 					return ret;
