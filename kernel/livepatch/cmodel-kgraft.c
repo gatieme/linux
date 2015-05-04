@@ -107,6 +107,27 @@ static bool klp_kgraft_still_patching(void)
 	return failed;
 }
 
+static void klp_kgraft_send_fake_signal(void)
+{
+	struct task_struct *p;
+	unsigned long flags;
+
+	read_lock(&tasklist_lock);
+	for_each_process(p) {
+		/*
+		 * send fake signal to all non-kthread processes which are still
+		 * not migrated
+		 */
+		if (!(p->flags & PF_KTHREAD) &&
+		    klp_kgraft_task_in_progress(p) &&
+		    lock_task_sighand(p, &flags)) {
+			signal_wake_up(p, 0);
+			unlock_task_sighand(p, &flags);
+		}
+	}
+	read_unlock(&tasklist_lock);
+}
+
 static void klp_kgraft_work_fn(struct work_struct *work)
 {
 	static bool printed = false;
@@ -117,6 +138,8 @@ static void klp_kgraft_work_fn(struct work_struct *work)
 				KGRAFT_TIMEOUT);
 			printed = true;
 		}
+		/* send fake signal */
+		klp_kgraft_send_fake_signal();
 		/* recheck again later */
 		queue_delayed_work(klp_kgraft_wq, &klp_kgraft_work,
 				KGRAFT_TIMEOUT * HZ);
