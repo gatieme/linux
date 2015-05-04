@@ -3077,6 +3077,29 @@ static inline void mm_update_next_owner(struct mm_struct *mm)
 }
 #endif /* CONFIG_MEMCG */
 
+#if IS_ENABLED(CONFIG_LIVEPATCH)
+static inline void klp_kgraft_mark_task_safe(struct task_struct *p)
+{
+	clear_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);
+}
+static inline void klp_kgraft_mark_task_in_progress(struct task_struct *p)
+{
+	set_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);
+}
+
+static inline bool klp_kgraft_task_in_progress(struct task_struct *p)
+{
+	return test_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);
+}
+#else
+static inline void klp_kgraft_mark_task_safe(struct task_struct *p) { }
+static inline void klp_kgraft_mark_task_in_progress(struct task_struct *p) { }
+static inline bool klp_kgraft_task_in_progress(struct task_struct *p)
+{
+	return false;
+}
+#endif /* IS_ENABLED(CONFIG_LIVEPATCH) */
+
 static inline unsigned long task_rlimit(const struct task_struct *tsk,
 		unsigned int limit)
 {

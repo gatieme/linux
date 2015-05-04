@@ -73,6 +73,15 @@ _PIF_WORK	= (_PIF_PER_TRAP)
 #endif
 	.endm
 
+	.macro	HANDLE_KGRAFT TI_reg
+#if IS_ENABLED(CONFIG_LIVEPATCH)
+	tm	__TI_flags+5(\TI_reg),(_TIF_KGR_IN_PROGRESS >> 16)
+	jz	0f
+	brasl	%r14,s390_handle_kgraft
+0:
+#endif
+	.endm
+
 	.macro LPP newpp
 #if IS_ENABLED(CONFIG_KVM)
 	tm	__LC_MACHINE_FLAGS+6,0x20	# MACHINE_FLAG_LPP
@@ -217,6 +226,7 @@ ENTRY(system_call)
 	mvc	__PT_INT_CODE(4,%r11),__LC_SVC_ILC
 	stg	%r14,__PT_FLAGS(%r11)
 .Lsysc_do_svc:
+	HANDLE_KGRAFT %r12
 	lg	%r10,__TI_sysc_table(%r12)	# address of system call table
 	llgh	%r8,__PT_INT_CODE+2(%r11)
 	slag	%r8,%r8,2			# shift and test for svc 0
@@ -248,6 +258,7 @@ ENTRY(system_call)
 	jnz	.Lsysc_work			# check for work
 	tm	__LC_CPU_FLAGS+7,_CIF_WORK
 	jnz	.Lsysc_work
+	HANDLE_KGRAFT %r12
 .Lsysc_restore:
 	lg	%r14,__LC_VDSO_PER_CPU
 	lmg	%r0,%r10,__PT_R0(%r11)

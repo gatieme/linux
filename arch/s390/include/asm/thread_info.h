@@ -82,6 +82,7 @@ void arch_release_task_struct(struct task_struct *tsk);
 #define TIF_SINGLE_STEP		19	/* This task is single stepped */
 #define TIF_BLOCK_STEP		20	/* This task is block stepped */
 #define TIF_UPROBE_SINGLESTEP	21	/* This task is uprobe single stepped */
+#define TIF_KGR_IN_PROGRESS	22	/* This task has not finished patching */
 
 #define _TIF_NOTIFY_RESUME	(1<<TIF_NOTIFY_RESUME)
 #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
@@ -93,6 +94,7 @@ void arch_release_task_struct(struct task_struct *tsk);
 #define _TIF_UPROBE		(1<<TIF_UPROBE)
 #define _TIF_31BIT		(1<<TIF_31BIT)
 #define _TIF_SINGLE_STEP	(1<<TIF_SINGLE_STEP)
+#define _TIF_KGR_IN_PROGRESS	(1<<TIF_KGR_IN_PROGRESS)
 
 #define is_32bit_task()		(test_thread_flag(TIF_31BIT))
 

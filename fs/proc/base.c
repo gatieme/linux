@@ -2052,6 +2052,17 @@ static const struct file_operations proc_timers_operations = {
 };
 #endif /* CONFIG_CHECKPOINT_RESTORE */
 
+#if IS_ENABLED(CONFIG_LIVEPATCH)
+static int proc_pid_kgr_in_progress(struct seq_file *m,
+		struct pid_namespace *ns, struct pid *pid,
+		struct task_struct *task)
+{
+	seq_printf(m, "%d\n", klp_kgraft_task_in_progress(task));
+
+	return 0;
+}
+#endif /* IS_ENABLED(CONFIG_LIVEPATCH) */
+
 static int proc_pident_instantiate(struct inode *dir,
 	struct dentry *dentry, struct task_struct *task, const void *ptr)
 {
@@ -2639,6 +2650,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	REG("timers",	  S_IRUGO, proc_timers_operations),
+#endif
+#if IS_ENABLED(CONFIG_LIVEPATCH)
+	ONE("kgr_in_progress",	S_IRUSR, proc_pid_kgr_in_progress),
 #endif
 };
 

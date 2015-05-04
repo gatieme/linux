@@ -730,6 +730,11 @@ do_notify_resume(struct pt_regs *regs, void *unused, __u32 thread_info_flags)
 	if (thread_info_flags & _TIF_UPROBE)
 		uprobe_notify_resume(regs);
 
+#if IS_ENABLED(CONFIG_LIVEPATCH)
+	if (thread_info_flags & _TIF_KGR_IN_PROGRESS)
+		klp_kgraft_mark_task_safe(current);
+#endif
+
 	/* deal with pending signal delivery */
 	if (thread_info_flags & _TIF_SIGPENDING)
 		do_signal(regs);
