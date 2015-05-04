@@ -53,9 +53,18 @@ struct klp_cmodel {
 			struct pt_regs *regs);
 };
 
+/**
+ * enum klp_state -- state of patches, objects, functions
+ * @KLP_DISABLED: completely disabled
+ * @KLP_ENABLED: completely enabled (applied)
+ * @KLP_PREPARED: being applied
+ *
+ * @KLP_DISABLED & @KLP_ENABLED are part of the /sys ABI
+ */
 enum klp_state {
 	KLP_DISABLED,
-	KLP_ENABLED
+	KLP_ENABLED,
+	KLP_PREPARED,
 };
 
 /**

@@ -3078,6 +3078,11 @@ static inline void mm_update_next_owner(struct mm_struct *mm)
 #endif /* CONFIG_MEMCG */
 
 #if IS_ENABLED(CONFIG_LIVEPATCH)
+/*
+ * This function is called only when the given thread is not running
+ * any patched function. Therefore the flag might be cleared without
+ * klp_kgr_state_lock.
+ */
 static inline void klp_kgraft_mark_task_safe(struct task_struct *p)
 {
 	clear_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);

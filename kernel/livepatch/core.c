@@ -41,11 +41,13 @@
  * @node:	node for the global klp_ops list
  * @func_stack:	list head for the stack of klp_func's (active func is on top)
  * @fops:	registered ftrace ops struct
+ * @old_addr:   the address of the function which is beine patched
  */
 struct klp_ops {
 	struct list_head node;
 	struct list_head func_stack;
 	struct ftrace_ops fops;
+	unsigned long old_addr;
 };
 
 /*
@@ -65,12 +67,9 @@ static struct kobject *klp_root_kobj;
 static struct klp_ops *klp_find_ops(unsigned long old_addr)
 {
 	struct klp_ops *ops;
-	struct klp_func *func;
 
 	list_for_each_entry(ops, &klp_ops, node) {
-		func = list_first_entry(&ops->func_stack, struct klp_func,
-					stack_node);
-		if (func->old_addr == old_addr)
+		if (ops->old_addr == old_addr)
 			return ops;
 	}
 
@@ -326,11 +325,8 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	rcu_read_lock();
 	func = list_first_or_null_rcu(&ops->func_stack, struct klp_func,
 				      stack_node);
-	if (WARN_ON_ONCE(!func))
-		goto unlock;
-
-	func->stub(&ops->func_stack, func, regs);
-unlock:
+	if (func)
+		func->stub(&ops->func_stack, func, regs);
 	rcu_read_unlock();
 }
 
@@ -338,18 +334,20 @@ static void klp_disable_func(struct klp_func *func)
 {
 	struct klp_ops *ops;
 
-	WARN_ON(func->state != KLP_ENABLED);
+	WARN_ON(func->state == KLP_DISABLED);
 	WARN_ON(!func->old_addr);
 
 	ops = klp_find_ops(func->old_addr);
 	if (WARN_ON(!ops))
 		return;
 
-	if (list_is_singular(&ops->func_stack)) {
+	if (list_empty(&ops->func_stack) ||
+			list_is_singular(&ops->func_stack)) {
 		WARN_ON(unregister_ftrace_function(&ops->fops));
 		WARN_ON(ftrace_set_filter_ip(&ops->fops, func->old_addr, 1, 0));
 
-		list_del_rcu(&func->stack_node);
+		if (!list_empty(&ops->func_stack))
+			list_del_rcu(&func->stack_node);
 		list_del(&ops->node);
 		kfree(ops);
 	} else {
@@ -359,7 +357,7 @@ static void klp_disable_func(struct klp_func *func)
 	func->state = KLP_DISABLED;
 }
 
-static int klp_enable_func(struct klp_func *func)
+static int klp_prepare_enable_func(struct klp_func *func)
 {
 	struct klp_ops *ops;
 	int ret;
@@ -376,6 +374,7 @@ static int klp_enable_func(struct klp_func *func)
 		if (!ops)
 			return -ENOMEM;
 
+		ops->old_addr = func->old_addr;
 		ops->fops.func = klp_ftrace_handler;
 		ops->fops.flags = FTRACE_OPS_FL_SAVE_REGS |
 				  FTRACE_OPS_FL_DYNAMIC |
@@ -384,7 +383,6 @@ static int klp_enable_func(struct klp_func *func)
 		list_add(&ops->node, &klp_ops);
 
 		INIT_LIST_HEAD(&ops->func_stack);
-		list_add_rcu(&func->stack_node, &ops->func_stack);
 
 		ret = ftrace_set_filter_ip(&ops->fops, func->old_addr, 0, 0);
 		if (ret) {
@@ -400,21 +398,29 @@ static int klp_enable_func(struct klp_func *func)
 			ftrace_set_filter_ip(&ops->fops, func->old_addr, 1, 0);
 			goto err;
 		}
-
-
-	} else {
-		list_add_rcu(&func->stack_node, &ops->func_stack);
 	}
 
-	func->state = KLP_ENABLED;
+	func->state = KLP_PREPARED;
 
 	return 0;
 
 err:
-	list_del_rcu(&func->stack_node);
 	list_del(&ops->node);
 	kfree(ops);
 	return ret;
+}
+
+static void klp_enable_func(struct klp_func *func)
+{
+	struct klp_ops *ops;
+
+	ops = klp_find_ops(func->old_addr);
+	if (WARN_ON(!ops)) /* we have just added that, so? */
+		return;
+
+	list_add_rcu(&func->stack_node, &ops->func_stack);
+
+	func->state = KLP_ENABLED;
 }
 
 static void klp_disable_object(struct klp_object *obj)
@@ -422,13 +428,13 @@ static void klp_disable_object(struct klp_object *obj)
 	struct klp_func *func;
 
 	klp_for_each_func(obj, func)
-		if (func->state == KLP_ENABLED)
+		if (func->state != KLP_DISABLED)
 			klp_disable_func(func);
 
 	obj->state = KLP_DISABLED;
 }
 
-static int klp_enable_object(struct klp_object *obj)
+static int klp_prepare_enable_object(struct klp_object *obj)
 {
 	struct klp_func *func;
 	int ret;
@@ -440,15 +446,25 @@ static int klp_enable_object(struct klp_object *obj)
 		return -EINVAL;
 
 	klp_for_each_func(obj, func) {
-		ret = klp_enable_func(func);
+		ret = klp_prepare_enable_func(func);
 		if (ret) {
 			klp_disable_object(obj);
 			return ret;
 		}
 	}
-	obj->state = KLP_ENABLED;
+	obj->state = KLP_PREPARED;
 
 	return 0;
+}
+
+static void klp_enable_object(struct klp_object *obj)
+{
+	struct klp_func *func;
+
+	klp_for_each_func(obj, func)
+		klp_enable_func(func);
+
+	obj->state = KLP_ENABLED;
 }
 
 static int __klp_disable_patch(struct klp_patch *patch)
@@ -463,7 +479,7 @@ static int __klp_disable_patch(struct klp_patch *patch)
 	pr_notice("disabling patch '%s'\n", patch->mod->name);
 
 	klp_for_each_object(patch, obj) {
-		if (obj->state == KLP_ENABLED)
+		if (obj->state == KLP_PREPARED || obj->state == KLP_ENABLED)
 			klp_disable_object(obj);
 	}
 
@@ -526,9 +542,16 @@ static int __klp_enable_patch(struct klp_patch *patch)
 		if (!klp_is_object_loaded(obj))
 			continue;
 
-		ret = klp_enable_object(obj);
+		ret = klp_prepare_enable_object(obj);
 		if (ret)
 			goto unregister;
+	}
+
+	klp_for_each_object(patch, obj) {
+		if (!klp_is_object_loaded(obj))
+			continue;
+
+		klp_enable_object(obj);
 	}
 
 	patch->state = KLP_ENABLED;
@@ -937,10 +960,13 @@ static void klp_module_notify_coming(struct klp_patch *patch,
 	pr_notice("applying patch '%s' to loading module '%s'\n",
 		  pmod->name, mod->name);
 
-	ret = klp_enable_object(obj);
-	if (!ret)
-		return;
+	ret = klp_prepare_enable_object(obj);
+	if (ret)
+		goto err;
 
+	klp_enable_object(obj);
+
+	return;
 err:
 	pr_warn("failed to apply patch '%s' to module '%s' (%d)\n",
 		pmod->name, mod->name, ret);
