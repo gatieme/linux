@@ -129,6 +129,16 @@ struct klp_patch {
 #define klp_for_each_func(obj, func) \
 	for (func = obj->funcs; func->old_name; func++)
 
+static inline struct klp_patch *klp_func_to_patch(struct klp_func *func)
+{
+	return container_of(func->kobj.parent->parent, struct klp_patch, kobj);
+}
+
+static inline struct klp_patch *klp_object_to_patch(struct klp_object *obj)
+{
+	return container_of(obj->kobj.parent, struct klp_patch, kobj);
+}
+
 int klp_register_patch(struct klp_patch *);
 int klp_unregister_patch(struct klp_patch *);
 int klp_enable_patch(struct klp_patch *);
