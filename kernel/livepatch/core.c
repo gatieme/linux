@@ -330,7 +330,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	rcu_read_unlock();
 }
 
-static void klp_disable_func(struct klp_func *func)
+static void klp_disable_func(struct klp_func *func, enum klp_state dstate)
 {
 	struct klp_ops *ops;
 
@@ -354,7 +354,7 @@ static void klp_disable_func(struct klp_func *func)
 		list_del_rcu(&func->stack_node);
 	}
 
-	func->state = KLP_DISABLED;
+	func->state = dstate;
 }
 
 static int klp_prepare_enable_func(struct klp_func *func)
@@ -410,7 +410,7 @@ err:
 	return ret;
 }
 
-static void klp_enable_func(struct klp_func *func)
+static void klp_enable_func(struct klp_func *func, enum klp_state dstate)
 {
 	struct klp_ops *ops;
 
@@ -420,18 +420,18 @@ static void klp_enable_func(struct klp_func *func)
 
 	list_add_rcu(&func->stack_node, &ops->func_stack);
 
-	func->state = KLP_ENABLED;
+	func->state = dstate;
 }
 
-static void klp_disable_object(struct klp_object *obj)
+static void klp_disable_object(struct klp_object *obj, enum klp_state dstate)
 {
 	struct klp_func *func;
 
 	klp_for_each_func(obj, func)
 		if (func->state != KLP_DISABLED)
-			klp_disable_func(func);
+			klp_disable_func(func, dstate);
 
-	obj->state = KLP_DISABLED;
+	obj->state = dstate;
 }
 
 static int klp_prepare_enable_object(struct klp_object *obj)
@@ -448,7 +448,7 @@ static int klp_prepare_enable_object(struct klp_object *obj)
 	klp_for_each_func(obj, func) {
 		ret = klp_prepare_enable_func(func);
 		if (ret) {
-			klp_disable_object(obj);
+			klp_disable_object(obj, KLP_DISABLED);
 			return ret;
 		}
 	}
@@ -457,14 +457,14 @@ static int klp_prepare_enable_object(struct klp_object *obj)
 	return 0;
 }
 
-static void klp_enable_object(struct klp_object *obj)
+static void klp_enable_object(struct klp_object *obj, enum klp_state dstate)
 {
 	struct klp_func *func;
 
 	klp_for_each_func(obj, func)
-		klp_enable_func(func);
+		klp_enable_func(func, dstate);
 
-	obj->state = KLP_ENABLED;
+	obj->state = dstate;
 }
 
 static int __klp_disable_patch(struct klp_patch *patch)
@@ -480,7 +480,7 @@ static int __klp_disable_patch(struct klp_patch *patch)
 
 	klp_for_each_object(patch, obj) {
 		if (obj->state == KLP_PREPARED || obj->state == KLP_ENABLED)
-			klp_disable_object(obj);
+			klp_disable_object(obj, KLP_DISABLED);
 	}
 
 	patch->state = KLP_DISABLED;
@@ -551,7 +551,7 @@ static int __klp_enable_patch(struct klp_patch *patch)
 		if (!klp_is_object_loaded(obj))
 			continue;
 
-		klp_enable_object(obj);
+		klp_enable_object(obj, KLP_ENABLED);
 	}
 
 	patch->state = KLP_ENABLED;
@@ -964,7 +964,7 @@ static void klp_module_notify_coming(struct klp_patch *patch,
 	if (ret)
 		goto err;
 
-	klp_enable_object(obj);
+	klp_enable_object(obj, KLP_ENABLED);
 
 	return;
 err:
@@ -984,7 +984,7 @@ static void klp_module_notify_going(struct klp_patch *patch,
 	pr_notice("reverting patch '%s' on unloading module '%s'\n",
 		  pmod->name, mod->name);
 
-	klp_disable_object(obj);
+	klp_disable_object(obj, KLP_DISABLED);
 
 disabled:
 	klp_free_object_loaded(obj);
