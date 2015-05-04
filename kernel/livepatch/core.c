@@ -58,6 +58,7 @@ static DEFINE_MUTEX(klp_mutex);
 
 static LIST_HEAD(klp_patches);
 static LIST_HEAD(klp_ops);
+static LIST_HEAD(klp_cmodel_list);
 
 static struct kobject *klp_root_kobj;
 
@@ -319,10 +320,8 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 				       struct ftrace_ops *fops,
 				       struct pt_regs *regs)
 {
-	struct klp_ops *ops;
+	struct klp_ops *ops = container_of(fops, struct klp_ops, fops);
 	struct klp_func *func;
-
-	ops = container_of(fops, struct klp_ops, fops);
 
 	rcu_read_lock();
 	func = list_first_or_null_rcu(&ops->func_stack, struct klp_func,
@@ -330,7 +329,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (WARN_ON_ONCE(!func))
 		goto unlock;
 
-	klp_arch_set_pc(regs, (unsigned long)func->new_func);
+	func->stub(&ops->func_stack, func, regs);
 unlock:
 	rcu_read_unlock();
 }
@@ -720,6 +719,7 @@ static int klp_init_func(struct klp_object *obj, struct klp_func *func)
 {
 	INIT_LIST_HEAD(&func->stack_node);
 	func->state = KLP_DISABLED;
+	func->stub = klp_object_to_patch(obj)->cmodel->stub;
 
 	return kobject_init_and_add(&func->kobj, &klp_ktype_func,
 				    &obj->kobj, "%s", func->old_name);
@@ -790,13 +790,28 @@ free:
 static int klp_init_patch(struct klp_patch *patch)
 {
 	struct klp_object *obj;
+	struct klp_cmodel *cm, *cmodel = NULL;
 	int ret;
 
 	if (!patch->objs)
 		return -EINVAL;
 
+	list_for_each_entry(cm, &klp_cmodel_list, list) {
+		if (patch->cmodel_id == cm->id) {
+			cmodel = cm;
+			break;
+		}
+	}
+
+	if (!cmodel) {
+		pr_err("%s: patch '%ps' requires unknown consistency model %d\n",
+				__func__, patch, patch->cmodel_id);
+		return -EINVAL;
+	}
+
 	mutex_lock(&klp_mutex);
 
+	patch->cmodel = cmodel;
 	patch->state = KLP_DISABLED;
 
 	ret = kobject_init_and_add(&patch->kobj, &klp_ktype_patch,
@@ -892,6 +907,18 @@ int klp_register_patch(struct klp_patch *patch)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(klp_register_patch);
+
+/**
+ * klp_register_cmodel - register a consistency model
+ * @model: model to register
+ *
+ * This functions has to be synchronously called before klp_root_kobj is
+ * created in klp_init since we use no locking.
+ */
+void klp_register_cmodel(struct klp_cmodel *model)
+{
+	list_add_tail(&model->list, &klp_cmodel_list);
+}
 
 static void klp_module_notify_coming(struct klp_patch *patch,
 				     struct klp_object *obj)
@@ -992,6 +1019,8 @@ static int klp_init(void)
 		pr_info("Your compiler is too old; turning off.\n");
 		return -EINVAL;
 	}
+
+	klp_init_cmodel_simple();
 
 	ret = register_module_notifier(&klp_module_nb);
 	if (ret)

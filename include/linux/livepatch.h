@@ -23,10 +23,35 @@
 
 #include <linux/module.h>
 #include <linux/ftrace.h>
+#include <linux/ptrace.h>
 
 #if IS_ENABLED(CONFIG_LIVEPATCH)
 
 #include <asm/livepatch.h>
+
+struct klp_func;
+
+/**
+ * enum klp_cmodel_id - possible consistency models
+ */
+enum klp_cmodel_id {
+	KLP_CM_INVALID = 0,
+	KLP_CM_SIMPLE, /* LEAVE_FUNCTION and SWITCH_FUNCTION */
+};
+
+/**
+ * struct klp_cmodel - implementation of a consistency model
+ * @id: id of this model (from enum klp_cmodel_id)
+ * @list: member of klp_cmodel_list
+ * @stub: what to use as an ftrace handler (annotate with notrace!)
+ */
+struct klp_cmodel {
+	const enum klp_cmodel_id id;
+	struct list_head list;
+
+	void (*stub)(struct list_head *func_stack, struct klp_func *func,
+			struct pt_regs *regs);
+};
 
 enum klp_state {
 	KLP_DISABLED,
@@ -42,6 +67,7 @@ enum klp_state {
  * @kobj:	kobject for sysfs resources
  * @state:	tracks function-level patch application state
  * @stack_node:	list node for klp_ops func_stack list
+ * @stub:	cache of klp_patch.cmodel.stub
  */
 struct klp_func {
 	/* external */
@@ -61,6 +87,8 @@ struct klp_func {
 	struct kobject kobj;
 	enum klp_state state;
 	struct list_head stack_node;
+	void (*stub)(struct list_head *func_stack, struct klp_func *func,
+			struct pt_regs *regs);
 };
 
 /**
@@ -108,19 +136,23 @@ struct klp_object {
  * struct klp_patch - patch structure for live patching
  * @mod:	reference to the live patch module
  * @objs:	object entries for kernel objects to be patched
+ * @cmodel_id:	consistency model used to apply this patch
  * @list:	list node for global list of registered patches
  * @kobj:	kobject for sysfs resources
  * @state:	tracks patch-level application state
+ * @cmodel:	cmodel_id's implementation
  */
 struct klp_patch {
 	/* external */
 	struct module *mod;
 	struct klp_object *objs;
+	const enum klp_cmodel_id cmodel_id;
 
 	/* internal */
 	struct list_head list;
 	struct kobject kobj;
 	enum klp_state state;
+	struct klp_cmodel *cmodel;
 };
 
 #define klp_for_each_object(patch, obj) \
@@ -143,6 +175,9 @@ int klp_register_patch(struct klp_patch *);
 int klp_unregister_patch(struct klp_patch *);
 int klp_enable_patch(struct klp_patch *);
 int klp_disable_patch(struct klp_patch *);
+
+void klp_init_cmodel_simple(void);
+void klp_register_cmodel(struct klp_cmodel *);
 
 #endif /* CONFIG_LIVEPATCH */
 

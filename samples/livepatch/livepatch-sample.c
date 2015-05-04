@@ -63,6 +63,7 @@ static struct klp_object objs[] = {
 static struct klp_patch patch = {
 	.mod = THIS_MODULE,
 	.objs = objs,
+	.cmodel_id = KLP_CM_SIMPLE,
 };
 
 static int livepatch_init(void)
