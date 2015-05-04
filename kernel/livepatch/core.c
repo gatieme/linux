@@ -58,6 +58,12 @@ struct klp_ops {
  */
 static DEFINE_MUTEX(klp_mutex);
 
+/*
+ * current patch in progress. Access only under klp_mutex.
+ * This is useful to know only for async cmodels.
+ */
+static struct klp_patch *klp_async_patch;
+
 static LIST_HEAD(klp_patches);
 static LIST_HEAD(klp_ops);
 static LIST_HEAD(klp_cmodel_list);
@@ -330,6 +336,27 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	rcu_read_unlock();
 }
 
+static void klp_patch_change_state(struct klp_patch *patch, enum klp_state from,
+		enum klp_state to)
+{
+	struct klp_object *obj;
+	struct klp_func *func;
+
+	if (patch->state != from)
+		return;
+
+	klp_for_each_object(patch, obj)
+		if (klp_is_object_loaded(obj) && obj->state == from) {
+			klp_for_each_func(obj, func)
+				if (func->state == from)
+					func->state = to;
+
+			obj->state = to;
+		}
+
+	patch->state = to;
+}
+
 static void klp_disable_func(struct klp_func *func, enum klp_state dstate)
 {
 	struct klp_ops *ops;
@@ -467,9 +494,23 @@ static void klp_enable_object(struct klp_object *obj, enum klp_state dstate)
 	obj->state = dstate;
 }
 
-static int __klp_disable_patch(struct klp_patch *patch)
+static void klp_disable_patch_real(struct klp_patch *patch)
 {
 	struct klp_object *obj;
+
+	klp_for_each_object(patch, obj) {
+		if (obj->state == KLP_PREPARED || obj->state == KLP_ENABLED ||
+				obj->state == KLP_ASYNC_DISABLED)
+			klp_disable_object(obj, KLP_DISABLED);
+	}
+
+	patch->state = KLP_DISABLED;
+}
+
+static int __klp_disable_patch(struct klp_patch *patch)
+{
+	if (klp_async_patch)
+		return -EBUSY;
 
 	/* enforce stacking: only the last enabled patch can be disabled */
 	if (!list_is_last(&patch->list, &klp_patches) &&
@@ -478,12 +519,23 @@ static int __klp_disable_patch(struct klp_patch *patch)
 
 	pr_notice("disabling patch '%s'\n", patch->mod->name);
 
-	klp_for_each_object(patch, obj) {
-		if (obj->state == KLP_PREPARED || obj->state == KLP_ENABLED)
-			klp_disable_object(obj, KLP_DISABLED);
+	/*
+	 * Do only fast and non-blocking operations between pre_patch
+	 * and post_patch callbacks. They might take a lock and block
+	 * patched functions!
+	 */
+	if (patch->cmodel->pre_patch)
+		patch->cmodel->pre_patch(patch);
+
+	if (patch->cmodel->async_finish) {
+		klp_async_patch = patch;
+		klp_patch_change_state(patch, KLP_ENABLED, KLP_ASYNC_DISABLED);
+	} else {
+		klp_disable_patch_real(patch);
 	}
 
-	patch->state = KLP_DISABLED;
+	if (patch->cmodel->post_patch)
+		patch->cmodel->post_patch(patch);
 
 	return 0;
 }
@@ -520,13 +572,34 @@ err:
 }
 EXPORT_SYMBOL_GPL(klp_disable_patch);
 
+/**
+ * klp_async_patch_done - asynchronous patch should be finished
+ */
+void klp_async_patch_done(void)
+{
+	mutex_lock(&klp_mutex);
+	if (klp_async_patch->state == KLP_ASYNC_ENABLED) {
+		klp_patch_change_state(klp_async_patch, KLP_ASYNC_ENABLED,
+				KLP_ENABLED);
+	} else {
+		klp_disable_patch_real(klp_async_patch);
+	}
+
+	klp_async_patch = NULL;
+	mutex_unlock(&klp_mutex);
+}
+
 static int __klp_enable_patch(struct klp_patch *patch)
 {
 	struct klp_object *obj;
-	int ret;
+	enum klp_state dstate;
+	int ret = 0;
 
 	if (WARN_ON(patch->state != KLP_DISABLED))
 		return -EINVAL;
+
+	if (klp_async_patch)
+		return -EBUSY;
 
 	/* enforce stacking: only the first disabled patch can be enabled */
 	if (patch->list.prev != &klp_patches &&
@@ -547,19 +620,35 @@ static int __klp_enable_patch(struct klp_patch *patch)
 			goto unregister;
 	}
 
+	/*
+	 * Do only fast and non-blocking operations between pre_patch
+	 * and post_patch callbacks. They might take a lock and block
+	 * patched functions!
+	 */
+	if (patch->cmodel->pre_patch)
+		patch->cmodel->pre_patch(patch);
+
+	dstate = patch->cmodel->async_finish ? KLP_ASYNC_ENABLED : KLP_ENABLED;
+
 	klp_for_each_object(patch, obj) {
 		if (!klp_is_object_loaded(obj))
 			continue;
 
-		klp_enable_object(obj, KLP_ENABLED);
+		klp_enable_object(obj, dstate);
 	}
 
-	patch->state = KLP_ENABLED;
+	if (patch->cmodel->async_finish)
+		klp_async_patch = patch;
 
-	return 0;
+	patch->state = dstate;
+
+	if (patch->cmodel->post_patch)
+		patch->cmodel->post_patch(patch);
 
 unregister:
-	WARN_ON(__klp_disable_patch(patch));
+	if (ret)
+		klp_disable_patch_real(patch);
+
 	return ret;
 }
 
@@ -948,6 +1037,7 @@ static void klp_module_notify_coming(struct klp_patch *patch,
 {
 	struct module *pmod = patch->mod;
 	struct module *mod = obj->mod;
+	enum klp_state dstate;
 	int ret;
 
 	ret = klp_init_object_loaded(patch, obj);
@@ -964,7 +1054,13 @@ static void klp_module_notify_coming(struct klp_patch *patch,
 	if (ret)
 		goto err;
 
-	klp_enable_object(obj, KLP_ENABLED);
+	/*
+	 * Put the module to the ASYNC state in case we are in the transition.
+	 * The module still can affect behaviour of running processes.
+	 */
+	dstate = klp_async_patch ? klp_async_patch->state : KLP_ENABLED;
+
+	klp_enable_object(obj, dstate);
 
 	return;
 err:
@@ -1047,6 +1143,7 @@ static int klp_init(void)
 	}
 
 	klp_init_cmodel_simple();
+	klp_init_cmodel_kgraft();
 
 	ret = register_module_notifier(&klp_module_nb);
 	if (ret)

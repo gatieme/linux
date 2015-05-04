@@ -29,6 +29,7 @@
 
 #include <asm/livepatch.h>
 
+struct klp_patch;
 struct klp_func;
 
 /**
@@ -37,20 +38,28 @@ struct klp_func;
 enum klp_cmodel_id {
 	KLP_CM_INVALID = 0,
 	KLP_CM_SIMPLE, /* LEAVE_FUNCTION and SWITCH_FUNCTION */
+	KLP_CM_KGRAFT, /* LEAVE_KERNEL and SWITCH_THREAD */
 };
 
 /**
  * struct klp_cmodel - implementation of a consistency model
  * @id: id of this model (from enum klp_cmodel_id)
+ * @async_finish: cmodel finishes asynchronously
  * @list: member of klp_cmodel_list
  * @stub: what to use as an ftrace handler (annotate with notrace!)
+ * @pre_patch: hook to run before patching starts (optional)
+ * @post_patch: hook to run after patching finishes (optional)
  */
 struct klp_cmodel {
 	const enum klp_cmodel_id id;
+	bool async_finish;
 	struct list_head list;
 
 	void (*stub)(struct list_head *func_stack, struct klp_func *func,
 			struct pt_regs *regs);
+
+	void (*pre_patch)(struct klp_patch *);
+	void (*post_patch)(struct klp_patch *);
 };
 
 /**
@@ -58,6 +67,8 @@ struct klp_cmodel {
  * @KLP_DISABLED: completely disabled
  * @KLP_ENABLED: completely enabled (applied)
  * @KLP_PREPARED: being applied
+ * @KLP_ASYNC_DISABLED: in the process of disabling (will become @KLP_DISABLED)
+ * @KLP_ASYNC_ENABLED: in the process of enabling (will become @KLP_ENABLED)
  *
  * @KLP_DISABLED & @KLP_ENABLED are part of the /sys ABI
  */
@@ -65,6 +76,10 @@ enum klp_state {
 	KLP_DISABLED,
 	KLP_ENABLED,
 	KLP_PREPARED,
+
+	KLP_ASYNC = 0x100,
+	KLP_ASYNC_DISABLED = KLP_DISABLED | KLP_ASYNC,
+	KLP_ASYNC_ENABLED = KLP_ENABLED | KLP_ASYNC,
 };
 
 /**
@@ -184,8 +199,10 @@ int klp_register_patch(struct klp_patch *);
 int klp_unregister_patch(struct klp_patch *);
 int klp_enable_patch(struct klp_patch *);
 int klp_disable_patch(struct klp_patch *);
+void klp_async_patch_done(void);
 
 void klp_init_cmodel_simple(void);
+void klp_init_cmodel_kgraft(void);
 void klp_register_cmodel(struct klp_cmodel *);
 
 #endif /* CONFIG_LIVEPATCH */
