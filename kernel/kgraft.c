@@ -143,16 +143,17 @@ static int kgr_ftrace_disable(struct kgr_patch_fun *pf, struct ftrace_ops *fops)
 
 static bool kgr_still_patching(void)
 {
-	struct task_struct *p;
+	struct task_struct *p, *t;
 	bool failed = false;
 
 	read_lock(&tasklist_lock);
-	for_each_process(p) {
-		if (kgr_task_in_progress(p)) {
+	for_each_process_thread(p, t) {
+		if (kgr_task_in_progress(t)) {
 			failed = true;
-			break;
+			goto unlock;
 		}
 	}
+unlock:
 	read_unlock(&tasklist_lock);
 	return failed;
 }
@@ -293,28 +294,28 @@ static void kgr_work_fn(struct work_struct *work)
 
 void kgr_unmark_processes(void)
 {
-	struct task_struct *p;
+	struct task_struct *p, *t;
 
 	read_lock(&tasklist_lock);
-	for_each_process(p)
-		kgr_task_safe(p);
+	for_each_process_thread(p, t)
+		kgr_task_safe(t);
 	read_unlock(&tasklist_lock);
 }
 
 static void kgr_handle_processes(void)
 {
-	struct task_struct *p;
+	struct task_struct *p, *t;
 
 	read_lock(&tasklist_lock);
-	for_each_process(p) {
-		kgr_mark_task_in_progress(p);
+	for_each_process_thread(p, t) {
+		kgr_mark_task_in_progress(t);
 		/* wake up kthreads, they will clean the progress flag */
-		if (p->flags & PF_KTHREAD) {
+		if (t->flags & PF_KTHREAD) {
 			/*
 			 * this is incorrect for kthreads waiting still for
 			 * their first wake_up.
 			 */
-			wake_up_process(p);
+			wake_up_process(t);
 		}
 	}
 	read_unlock(&tasklist_lock);
