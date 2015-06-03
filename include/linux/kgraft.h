@@ -126,11 +126,6 @@ static inline void kgr_mark_task_in_progress(struct task_struct *p)
 	set_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);
 }
 
-static inline bool kgr_task_in_progress(struct task_struct *p)
-{
-	return test_tsk_thread_flag(p, TIF_KGR_IN_PROGRESS);
-}
-
 #endif /* IS_ENABLED(CONFIG_KGRAFT) */
 
 #endif /* LINUX_KGR_H */
