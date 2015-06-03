@@ -268,6 +268,26 @@ static void kgr_finalize(void)
 	mutex_unlock(&kgr_in_progress_lock);
 }
 
+static void kgr_send_fake_signal(void)
+{
+	struct task_struct *p, *t;
+
+	read_lock(&tasklist_lock);
+	for_each_process_thread(p, t) {
+		/*
+		 * send fake signal to all non-kthread tasks which are still
+		 * not migrated. kthreads should be migrated now.
+		 */
+		if ((t->flags & PF_KTHREAD) || !kgr_task_in_progress(t))
+			continue;
+
+		spin_lock_irq(&t->sighand->siglock);
+		signal_wake_up(t, 0);
+		spin_unlock_irq(&t->sighand->siglock);
+	}
+	read_unlock(&tasklist_lock);
+}
+
 static void kgr_work_fn(struct work_struct *work)
 {
 	static bool printed = false;
@@ -279,6 +299,8 @@ static void kgr_work_fn(struct work_struct *work)
 				KGR_TIMEOUT);
 			printed = true;
 		}
+		/* send fake signal */
+		kgr_send_fake_signal();
 		/* recheck again later */
 		queue_delayed_work(kgr_wq, &kgr_work, KGR_TIMEOUT * HZ);
 		return;
