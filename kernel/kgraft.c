@@ -912,14 +912,8 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		goto err_unlock;
 	}
 
-	/*
-	 * If the patch has immediate flag set, avoid the lazy-switching
-	 * between universes completely.
-	 */
-	if (!patch->immediate) {
-		set_bit(0, kgr_immutable);
-		wmb(); /* set_bit before kgr_handle_processes */
-	}
+	set_bit(0, kgr_immutable);
+	wmb(); /* set_bit before kgr_handle_processes */
 
 	/*
 	 * Set kgr_patch before it can be used in kgr_patching_failed if
@@ -957,18 +951,13 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	mutex_unlock(&kgr_in_progress_lock);
 
 	kgr_handle_irqs();
-
-	if (patch->immediate) {
-		kgr_finalize();
-	} else {
-		kgr_handle_processes();
-		wmb(); /* clear_bit after kgr_handle_processes */
-		clear_bit(0, kgr_immutable);
-		/*
-		 * give everyone time to exit kernel, and check after a while
-		 */
-		queue_delayed_work(kgr_wq, &kgr_work, KGR_TIMEOUT * HZ);
-	}
+	kgr_handle_processes();
+	wmb(); /* clear_bit after kgr_handle_processes */
+	clear_bit(0, kgr_immutable);
+	/*
+	 * give everyone time to exit kernel, and check after a while
+	 */
+	queue_delayed_work(kgr_wq, &kgr_work, KGR_TIMEOUT * HZ);
 
 	return 0;
 err_free:

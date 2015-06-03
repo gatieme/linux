@@ -79,7 +79,6 @@ struct kgr_patch_fun {
  * @name: name of the patch (to appear in sysfs)
  * @owner: module to refcount on patching
  * @replace_all: revert everything applied before and apply this one instead
- * @immediate: avoid the lazy-switching mechanism and flip the switch ASAP
  * @patches: array of @kgr_patch_fun structures
  */
 struct kgr_patch {
@@ -93,7 +92,6 @@ struct kgr_patch {
 	const char *name;
 	struct module *owner;
 	bool replace_all;
-	bool immediate;
 	struct kgr_patch_fun patches[];
 };
 
