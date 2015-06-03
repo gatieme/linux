@@ -133,7 +133,8 @@ struct thread_info {
 #define _TIF_WORK_MASK							\
 	(0x0000FFFF &							\
 	 ~(_TIF_SYSCALL_TRACE|_TIF_SYSCALL_AUDIT|			\
-	   _TIF_SINGLESTEP|_TIF_SECCOMP|_TIF_SYSCALL_EMU))
+	   _TIF_SINGLESTEP|_TIF_SECCOMP|_TIF_SYSCALL_EMU) |		\
+	   _TIF_KGR_IN_PROGRESS)
 
 /* work to do on any return to user space */
 #define _TIF_ALLWORK_MASK						\
@@ -143,7 +144,7 @@ struct thread_info {
 /* Only used for 64 bit */
 #define _TIF_DO_NOTIFY_MASK						\
 	(_TIF_SIGPENDING | _TIF_MCE_NOTIFY | _TIF_NOTIFY_RESUME |	\
-	 _TIF_USER_RETURN_NOTIFY)
+	 _TIF_USER_RETURN_NOTIFY | _TIF_KGR_IN_PROGRESS)
 
 /* flags to check in __switch_to() */
 #define _TIF_WORK_CTXSW							\
