@@ -74,25 +74,26 @@ static notrace void kgr_stub_slow(unsigned long ip, unsigned long parent_ip,
 		struct ftrace_ops *ops, struct pt_regs *regs)
 {
 	struct kgr_patch_fun *p = ops->private;
-	bool go_old;
+	bool go_new;
 
 	if (in_interrupt())
-		go_old = !*this_cpu_ptr(kgr_irq_use_new);
+		go_new = *this_cpu_ptr(kgr_irq_use_new);
 	else if (test_bit(0, kgr_immutable)) {
 		kgr_mark_task_in_progress(current);
-		go_old = true;
+		go_new = false;
 	} else {
 		rmb(); /* test_bit before kgr_mark_task_in_progress */
-		go_old = kgr_task_in_progress(current);
+		go_new = !kgr_task_in_progress(current);
 	}
 
 	if (p->state == KGR_PATCH_REVERT_SLOW)
-		go_old = !go_old;
+		go_new = !go_new;
 
-	if (go_old)
-		kgr_set_regs_ip(regs, p->loc_old + MCOUNT_INSN_SIZE);
-	else
+	/* Redirect the function unless we continue with the original one. */
+	if (go_new)
 		kgr_set_regs_ip(regs, (unsigned long)p->new_fun);
+	else if (p->loc_old != p->loc_name)
+		kgr_set_regs_ip(regs, p->loc_old);
 }
 
 static void kgr_refs_inc(void)
