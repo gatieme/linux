@@ -67,7 +67,7 @@ static notrace void kgr_stub_fast(unsigned long ip, unsigned long parent_ip,
 {
 	struct kgr_patch_fun *p = ops->private;
 
-	kgr_set_regs_ip(regs, p->loc_new);
+	kgr_set_regs_ip(regs, (unsigned long)p->new_fun);
 }
 
 static notrace void kgr_stub_slow(unsigned long ip, unsigned long parent_ip,
@@ -92,7 +92,7 @@ static notrace void kgr_stub_slow(unsigned long ip, unsigned long parent_ip,
 	if (go_old)
 		kgr_set_regs_ip(regs, p->loc_old + MCOUNT_INSN_SIZE);
 	else
-		kgr_set_regs_ip(regs, p->loc_new);
+		kgr_set_regs_ip(regs, (unsigned long)p->new_fun);
 }
 
 static void kgr_refs_inc(void)
@@ -373,9 +373,9 @@ static void kgr_wakeup_kthreads(void)
 	read_unlock(&tasklist_lock);
 }
 
-static unsigned long kgr_get_fentry_loc(const char *f_name)
+static unsigned long kgr_get_function_address(const char *f_name)
 {
-	unsigned long orig_addr, fentry_loc;
+	unsigned long orig_addr;
 	const char *check_name;
 	char check_buf[KSYM_SYMBOL_LEN];
 
@@ -385,20 +385,14 @@ static unsigned long kgr_get_fentry_loc(const char *f_name)
 		return -ENOENT;
 	}
 
-	fentry_loc = ftrace_function_to_fentry(orig_addr);
-	if (!fentry_loc) {
-		pr_err("kgr: fentry_loc not properly resolved\n");
-		return -ENXIO;
-	}
-
-	check_name = kallsyms_lookup(fentry_loc, NULL, NULL, NULL, check_buf);
+	check_name = kallsyms_lookup(orig_addr, NULL, NULL, NULL, check_buf);
 	if (strcmp(check_name, f_name)) {
 		pr_err("kgr: we got out of bounds the intended function (%s -> %s)\n",
 				f_name, check_name);
 		return -EINVAL;
 	}
 
-	return fentry_loc;
+	return orig_addr;
 }
 
 static void kgr_handle_irq_cpu(struct work_struct *work)
@@ -524,7 +518,7 @@ static unsigned long kgr_get_old_fun(const struct kgr_patch_fun *patch_fun)
 	struct kgr_patch_fun *pf = kgr_get_patch_fun(patch_fun, KGR_PREVIOUS);
 
 	if (pf)
-		return ftrace_function_to_fentry((unsigned long)pf->new_fun);
+		return (unsigned long)pf->new_fun;
 
 	return patch_fun->loc_name;
 }
@@ -581,41 +575,26 @@ static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
 static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 {
 	struct ftrace_ops *fops;
-	unsigned long fentry_loc;
+	unsigned long addr;
 
-	/*
-	 * Initialize the ftrace_ops->private with pointers to the fentry
-	 * sites of both old and new functions. This is used as a
-	 * redirection target in the stubs.
-	 */
-
-	fentry_loc = ftrace_function_to_fentry(
-			((unsigned long)patch_fun->new_fun));
-	if (!fentry_loc) {
-		pr_err("kgr: fentry_loc not properly resolved\n");
-		return -ENXIO;
-	}
-
-	pr_debug("kgr: storing %lx to loc_new for %pf\n",
-			fentry_loc, patch_fun->new_fun);
-	patch_fun->loc_new = fentry_loc;
-
-	fentry_loc = kgr_get_fentry_loc(patch_fun->name);
-	if (IS_ERR_VALUE(fentry_loc))
-		return fentry_loc;
+	/* Cache missing addresses. */
+	addr = kgr_get_function_address(patch_fun->name);
+	if (IS_ERR_VALUE(addr))
+		return addr;
 
 	pr_debug("kgr: storing %lx to loc_name for %s\n",
-			fentry_loc, patch_fun->name);
-	patch_fun->loc_name = fentry_loc;
+			addr, patch_fun->name);
+	patch_fun->loc_name = addr;
 
-	fentry_loc = kgr_get_old_fun(patch_fun);
-	if (IS_ERR_VALUE(fentry_loc))
-		return fentry_loc;
+	addr = kgr_get_old_fun(patch_fun);
+	if (IS_ERR_VALUE(addr))
+		return addr;
 
 	pr_debug("kgr: storing %lx to loc_old for %s\n",
-			fentry_loc, patch_fun->name);
-	patch_fun->loc_old = fentry_loc;
+			addr, patch_fun->name);
+	patch_fun->loc_old = addr;
 
+	/* Initialize ftrace_ops structures for fast and slow stubs. */
 	fops = &patch_fun->ftrace_ops_fast;
 	fops->private = patch_fun;
 	fops->func = kgr_stub_fast;
@@ -1369,7 +1348,7 @@ static int __init kgr_init(void)
 	int ret;
 
 	if (ftrace_is_dead()) {
-		pr_warn("kgr: enabled, but no fentry locations found ... aborting\n");
+		pr_warn("kgr: enabled, but ftrace is disabled ... aborting\n");
 		return -ENODEV;
 	}
 

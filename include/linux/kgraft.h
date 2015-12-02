@@ -37,9 +37,8 @@ struct kgr_patch;
  *
  * @name: function to patch
  * @new_fun: function with the new body
- * @loc_name: cache of @name's fentry
- * @loc_old: cache of the last entry for @name in the patches list
- * @loc_new: cache of @new_name's fentry
+ * @loc_name: cache of @name's function address
+ * @loc_old: cache of the last function address  for @name in the patches list
  * @ftrace_ops_slow: ftrace ops for slow (temporary) stub
  * @ftrace_ops_fast: ftrace ops for fast () stub
  */
@@ -63,7 +62,6 @@ struct kgr_patch_fun {
 
 	unsigned long loc_name;
 	unsigned long loc_old;
-	unsigned long loc_new;
 
 	struct ftrace_ops ftrace_ops_slow;
 	struct ftrace_ops ftrace_ops_fast;
