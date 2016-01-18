@@ -314,12 +314,12 @@ static int usb_stor_control_thread(void * __us)
 		if (to < 0)
 			break;
 
-		usb_stor_dbg(us, "*** thread awakened\n");
-
 		if (!to) {
 			kgr_task_safe(current);
 			continue;
 		}
+
+		usb_stor_dbg(us, "*** thread awakened\n");
 
 		/* lock the device pointers */
 		mutex_lock(&(us->dev_mutex));
