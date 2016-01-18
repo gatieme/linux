@@ -54,6 +54,7 @@ static int caching_kthread(void *data)
 	key.offset = 0;
 	key.type = BTRFS_INODE_ITEM_KEY;
 again:
+	kgr_task_safe(current);
 	/* need to make sure the commit_root doesn't disappear */
 	down_read(&fs_info->commit_root_sem);
 

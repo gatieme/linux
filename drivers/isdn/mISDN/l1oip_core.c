@@ -736,6 +736,7 @@ l1oip_socket_thread(void *data)
 				printk(KERN_WARNING
 				       "%s: broken pipe on socket\n", __func__);
 		}
+		kgr_task_safe(current); /* insufficient */
 	}
 
 	/* get socket back, check first if in use, maybe by send function */

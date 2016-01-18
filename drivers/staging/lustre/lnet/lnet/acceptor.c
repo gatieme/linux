@@ -366,6 +366,7 @@ lnet_acceptor(void *arg)
 		return rc;
 
 	while (!lnet_acceptor_state.pta_shutdown) {
+		kgr_task_safe(current); /* insufficient */
 
 		rc = libcfs_sock_accept(&newsock, lnet_acceptor_state.pta_sock);
 		if (rc != 0) {
