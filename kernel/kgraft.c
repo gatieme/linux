@@ -923,6 +923,9 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 		goto err_unlock;
 	}
 
+	pr_info("kgr: %sing patch '%s'\n", revert ? "revert" : "apply",
+			patch->name);
+
 	set_bit(0, kgr_immutable);
 	wmb(); /* set_bit before kgr_handle_processes */
 
