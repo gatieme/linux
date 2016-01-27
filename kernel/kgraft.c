@@ -1361,7 +1361,15 @@ static int __init kgr_init(void)
 	if (ret)
 		return ret;
 
-	kgr_wq = create_singlethread_workqueue("kgraft");
+	/*
+	 * This callchain:
+	 * kgr_work_fn->kgr_finalize->kgr_patch_code->kgr_switch_fops->
+	 *   kgr_ftrace_disable->unregister_ftrace_function->ftrace_shutdown->
+	 *   schedule_on_each_cpu->flush_work
+	 * triggers a warning that WQ_MEM_RECLAIM is flushing !WQ_MEM_RECLAIM
+	 * workqueue. So we have to allocate a !WQ_MEM_RECLAIM workqueue.
+	 */
+	kgr_wq = alloc_ordered_workqueue("kgraft", 0);
 	if (!kgr_wq) {
 		pr_err("kgr: cannot allocate a work queue, aborting!\n");
 		ret = -ENOMEM;
