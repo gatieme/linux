@@ -1448,15 +1448,15 @@ static int kmemleak_scan_thread(void *arg)
 	while (!kthread_should_stop()) {
 		signed long timeout = jiffies_scan_wait;
 
-		kgr_task_safe(current);
-
 		mutex_lock(&scan_mutex);
 		kmemleak_scan();
 		mutex_unlock(&scan_mutex);
 
 		/* wait before the next scan */
-		while (timeout && !kthread_should_stop())
+		while (timeout && !kthread_should_stop()) {
 			timeout = schedule_timeout_interruptible(timeout);
+			kgr_task_safe(current);
+		}
 	}
 
 	pr_info("Automatic memory scanning thread ended\n");
