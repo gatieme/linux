@@ -46,14 +46,16 @@ static ssize_t state_show(struct kobject *kobj, struct kobj_attribute *attr,
 	const struct kgr_patch_fun *pf;
 	ssize_t size;
 
-	size = snprintf(buf, PAGE_SIZE, "%-20s   Weak  State\n", "Function");
-
+	size = snprintf(buf, PAGE_SIZE, "%-20s  %-20s  State\n", "Function",
+		"Object");
 
 	kgr_for_each_patch_fun(p, pf) {
 		size += snprintf(buf + size, PAGE_SIZE - size,
-				"%-20s  %5d  %5d\n", pf->name,
-				 !(pf->abort_if_missing), pf->state);
+				"%-20s  %-20s  %5d\n", pf->name,
+				pf->objname ? pf->objname : "vmlinux",
+				pf->state);
 	}
+
 	return size;
 }
 

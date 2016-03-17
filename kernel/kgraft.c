@@ -382,7 +382,7 @@ static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 
 	orig_addr = kallsyms_lookup_name(pf->name);
 	if (!orig_addr) {
-		if (pf->abort_if_missing)
+		if (!pf->objname)
 			pr_err("kgr: function %s not resolved\n", pf->name);
 		return -ENOENT;
 	}
@@ -623,7 +623,7 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 			return -EINVAL;
 		err = kgr_init_ftrace_ops(patch_fun);
 		if (err) {
-			if (err == -ENOENT && !patch_fun->abort_if_missing) {
+			if (err == -ENOENT && patch_fun->objname) {
 				patch_fun->state = KGR_PATCH_SKIPPED;
 				return 0;
 			}
@@ -1274,14 +1274,6 @@ static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 		addr = kallsyms_lookup_name(patch_fun->name);
 		if (!within_module(addr, mod))
 			continue;
-		/*
-		 * FIXME: It should schedule the patch removal or block
-		 *	  the module removal or taint kernel or so.
-		 */
-		if (patch_fun->abort_if_missing) {
-			pr_err("kgr: removing function %s that is required for the patch %s\n",
-			       patch_fun->name, patch->name);
-		}
 
 		kgr_forced_code_patch_removal(patch_fun);
 	}

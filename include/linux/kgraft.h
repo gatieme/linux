@@ -51,7 +51,6 @@ struct kgr_patch_fun {
 	void *new_fun;
 	const char *objname;
 
-	bool abort_if_missing;
 	enum kgr_patch_state {
 		KGR_PATCH_INIT,
 		KGR_PATCH_SLOW,
@@ -99,17 +98,15 @@ struct kgr_patch {
 #define kgr_for_each_patch_fun(p, pf)	\
 	for (pf = p->patches; pf->name; pf++)
 
-#define KGR_PATCH(_name, _new_function, abort)	{			\
+#define KGR_PATCH(_name, _new_function)	{				\
 		.name = #_name,						\
 		.new_fun = _new_function,				\
 		.objname = NULL,					\
-		.abort_if_missing = abort,				\
 	}
-#define KGR_PATCH_OBJ(_name, _new_function, _objname, abort)	{	\
+#define KGR_PATCH_OBJ(_name, _new_function, _objname) {			\
 		.name = #_name,						\
 		.new_fun = _new_function,				\
 		.objname = _objname,					\
-		.abort_if_missing = abort,				\
 	}
 #define KGR_PATCH_END				{ }
 
