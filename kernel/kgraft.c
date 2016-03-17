@@ -391,13 +391,44 @@ static bool kgr_is_object_loaded(const char *objname)
 	return (mod && mod->kgr_alive);
 }
 
+struct kgr_find_args {
+	const char *name;
+	unsigned long addr;
+};
+
+static int kgr_find_callback(void *data, const char *name, struct module *mod,
+	unsigned long addr)
+{
+	struct kgr_find_args *args = data;
+
+	if (strcmp(args->name, name))
+		return 0;
+
+	args->addr = addr;
+	return 1;
+}
+
+static unsigned long kgr_kallsyms_lookup(const struct kgr_patch_fun *pf)
+{
+	struct kgr_find_args args = {
+		.name = pf->name,
+		.addr = 0,
+	};
+
+	mutex_lock(&module_mutex);
+	kallsyms_on_each_symbol(kgr_find_callback, &args);
+	mutex_unlock(&module_mutex);
+
+	return args.addr;
+}
+
 static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 {
 	unsigned long orig_addr;
 	const char *check_name;
 	char check_buf[KSYM_SYMBOL_LEN];
 
-	orig_addr = kallsyms_lookup_name(pf->name);
+	orig_addr = kgr_kallsyms_lookup(pf);
 	if (!orig_addr) {
 		pr_err("kgr: function %s not resolved\n", pf->name);
 		return -ENOENT;
