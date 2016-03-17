@@ -33,7 +33,7 @@
 static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 		bool revert, bool replace_revert);
 static void kgr_work_fn(struct work_struct *work);
-static void __kgr_handle_going_module(const struct module *mod);
+static void __kgr_handle_going_module(struct module *mod);
 
 static struct workqueue_struct *kgr_wq;
 static DECLARE_DELAYED_WORK(kgr_work, kgr_work_fn);
@@ -385,7 +385,10 @@ static bool kgr_is_object_loaded(const char *objname)
 	mod = find_module(objname);
 	mutex_unlock(&module_mutex);
 
-	return !!mod;
+	/*
+	 * Do not mess with a work of kgr_module_init() and a going notifier.
+	 */
+	return (mod && mod->kgr_alive);
 }
 
 static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
@@ -1185,7 +1188,7 @@ static int kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
  * It must be called when symbols are visible to kallsyms but before the module
  * init is called. Otherwise, it would not be able to use the fast stub.
  */
-int kgr_module_init(const struct module *mod)
+int kgr_module_init(struct module *mod)
 {
 	struct kgr_patch *p;
 	int ret;
@@ -1195,6 +1198,12 @@ int kgr_module_init(const struct module *mod)
 		return 0;
 
 	mutex_lock(&kgr_in_progress_lock);
+
+	/*
+	 * Each module has to know that kgr_module_init() has been called.
+	 * We never know which module will get patched by a new patch.
+	 */
+	mod->kgr_alive = true;
 
 	/*
 	 * Check already applied patches for skipped functions. If there are
@@ -1306,9 +1315,15 @@ static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
  *
  * In case of any error we BUG in the process.
  */
-static void __kgr_handle_going_module(const struct module *mod)
+static void __kgr_handle_going_module(struct module *mod)
 {
 	struct kgr_patch *p;
+
+	/*
+	 * Each module has to know that a going notifier has been called.
+	 * We never know which module will get patched by a new patch.
+	 */
+	mod->kgr_alive = false;
 
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_handle_patch_for_going_module(p, mod);
@@ -1318,7 +1333,7 @@ static void __kgr_handle_going_module(const struct module *mod)
 		kgr_handle_patch_for_going_module(kgr_patch, mod);
 }
 
-static void kgr_handle_going_module(const struct module *mod)
+static void kgr_handle_going_module(struct module *mod)
 {
 	/* Nope when kGraft has not been initialized yet */
 	if (!kgr_initialized)
@@ -1332,7 +1347,7 @@ static void kgr_handle_going_module(const struct module *mod)
 static int kgr_module_notify_exit(struct notifier_block *self,
 				  unsigned long val, void *data)
 {
-	const struct module *mod = data;
+	struct module *mod = data;
 
 	if (val == MODULE_STATE_GOING)
 		kgr_handle_going_module(mod);

@@ -358,6 +358,10 @@ struct module {
 	unsigned long *ftrace_callsites;
 #endif
 
+#ifdef CONFIG_KGRAFT
+	bool kgr_alive;
+#endif
+
 #ifdef CONFIG_MODULE_UNLOAD
 	/* What modules depend on me? */
 	struct list_head source_list;
