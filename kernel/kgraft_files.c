@@ -46,14 +46,14 @@ static ssize_t state_show(struct kobject *kobj, struct kobj_attribute *attr,
 	const struct kgr_patch_fun *pf;
 	ssize_t size;
 
-	size = snprintf(buf, PAGE_SIZE, "%-20s  %-20s  State\n", "Function",
-		"Object");
+	size = snprintf(buf, PAGE_SIZE, "%-20s  %-20s  Sympos  State\n",
+		"Function", "Object");
 
 	kgr_for_each_patch_fun(p, pf) {
 		size += snprintf(buf + size, PAGE_SIZE - size,
-				"%-20s  %-20s  %5d\n", pf->name,
+				"%-20s  %-20s  %6lu  %5d\n", pf->name,
 				pf->objname ? pf->objname : "vmlinux",
-				pf->state);
+				pf->sympos, pf->state);
 	}
 
 	return size;
