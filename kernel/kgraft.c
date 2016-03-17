@@ -399,8 +399,7 @@ static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 
 	orig_addr = kallsyms_lookup_name(pf->name);
 	if (!orig_addr) {
-		if (kgr_is_object_loaded(pf->objname))
-			pr_err("kgr: function %s not resolved\n", pf->name);
+		pr_err("kgr: function %s not resolved\n", pf->name);
 		return -ENOENT;
 	}
 
@@ -638,15 +637,15 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 	case KGR_PATCH_INIT:
 		if (revert || final || replace_revert)
 			return -EINVAL;
-		err = kgr_init_ftrace_ops(patch_fun);
-		if (err) {
-			if (err == -ENOENT &&
-			    !kgr_is_object_loaded(patch_fun->objname)) {
-				patch_fun->state = KGR_PATCH_SKIPPED;
-				return 0;
-			}
-			return err;
+
+		if (!kgr_is_object_loaded(patch_fun->objname)) {
+			patch_fun->state = KGR_PATCH_SKIPPED;
+			return 0;
 		}
+
+		err = kgr_init_ftrace_ops(patch_fun);
+		if (err)
+			return err;
 
 		next_state = KGR_PATCH_SLOW;
 		new_ops = &patch_fun->ftrace_ops_slow;
