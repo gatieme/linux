@@ -393,7 +393,10 @@ static bool kgr_is_object_loaded(const char *objname)
 
 struct kgr_find_args {
 	const char *name;
+	const char *objname;
 	unsigned long addr;
+	unsigned long count;
+	unsigned long sympos;
 };
 
 static int kgr_find_callback(void *data, const char *name, struct module *mod,
@@ -401,25 +404,60 @@ static int kgr_find_callback(void *data, const char *name, struct module *mod,
 {
 	struct kgr_find_args *args = data;
 
+	if ((mod && !args->objname) || (!mod && args->objname))
+		return 0;
+
 	if (strcmp(args->name, name))
 		return 0;
 
+	if (args->objname && strcmp(args->objname, mod->name))
+		return 0;
+
 	args->addr = addr;
-	return 1;
+	args->count++;
+
+	/*
+	 * Finish the search when the symbol is found for the desired position
+	 * or the position is not defined for a non-unique symbol.
+	 */
+	if ((args->sympos && (args->count == args->sympos)) ||
+	    (!args->sympos && (args->count > 1)))
+		return 1;
+
+	return 0;
 }
 
 static unsigned long kgr_kallsyms_lookup(const struct kgr_patch_fun *pf)
 {
 	struct kgr_find_args args = {
 		.name = pf->name,
+		.objname = pf->objname,
 		.addr = 0,
+		.count = 0,
+		.sympos = pf->sympos,
 	};
 
 	mutex_lock(&module_mutex);
 	kallsyms_on_each_symbol(kgr_find_callback, &args);
 	mutex_unlock(&module_mutex);
 
-	return args.addr;
+	/*
+	 * Ensure an address was found. If sympos is 0, ensure symbol is unique;
+	 * otherwise ensure the symbol position count matches sympos.
+	 */
+	if (args.addr == 0)
+		pr_err("kgr: function %s not resolved\n", pf->name);
+	else if (pf->sympos == 0 && args.count > 1)
+		pr_err("kgr: unresolvable ambiguity for function %s in object %s\n",
+			pf->name, pf->objname ? pf->objname : "vmlinux");
+	else if (pf->sympos > 0 && pf->sympos != args.count)
+		pr_err("kgr: position %lu for function %s in object %s not found\n",
+			pf->sympos, pf->name,
+			pf->objname ? pf->objname : "vmlinux");
+	else
+		return args.addr;
+
+	return 0;
 }
 
 static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
@@ -429,10 +467,8 @@ static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 	char check_buf[KSYM_SYMBOL_LEN];
 
 	orig_addr = kgr_kallsyms_lookup(pf);
-	if (!orig_addr) {
-		pr_err("kgr: function %s not resolved\n", pf->name);
+	if (!orig_addr)
 		return -ENOENT;
-	}
 
 	check_name = kallsyms_lookup(orig_addr, NULL, NULL, NULL, check_buf);
 	if (strcmp(check_name, pf->name)) {
@@ -507,6 +543,17 @@ enum kgr_find_type {
 	KGR_LAST_TYPE
 };
 
+static bool kgr_are_objnames_equal(const char *objname1, const char *objname2)
+{
+	if (!objname1 && !objname2)
+		return true;
+
+	if (!objname1 || !objname2)
+		return false;
+
+	return !strcmp(objname1, objname2);
+}
+
 /*
  * This function takes information about the patched function from the given
  * struct kgr_patch_fun and tries to find the requested variant of the
@@ -517,6 +564,8 @@ kgr_get_patch_fun(const struct kgr_patch_fun *patch_fun,
 		  enum kgr_find_type type)
 {
 	const char *name = patch_fun->name;
+	const char *objname = patch_fun->objname;
+	unsigned long sympos = patch_fun->sympos;
 	struct kgr_patch_fun *pf, *found_pf = NULL;
 	struct kgr_patch *p;
 
@@ -527,7 +576,9 @@ kgr_get_patch_fun(const struct kgr_patch_fun *patch_fun,
 
 	if (kgr_patch && (type == KGR_IN_PROGRESS || type == KGR_LAST_EXISTING))
 		kgr_for_each_patch_fun(kgr_patch, pf)
-			if (!strcmp(pf->name, name))
+			if (!strcmp(pf->name, name) &&
+			    kgr_are_objnames_equal(pf->objname, objname) &&
+			    pf->sympos == sympos)
 				return pf;
 
 	if (type == KGR_IN_PROGRESS)
@@ -538,7 +589,9 @@ kgr_get_patch_fun(const struct kgr_patch_fun *patch_fun,
 			if (type == KGR_PREVIOUS && pf == patch_fun)
 				goto out;
 
-			if (!strcmp(pf->name, name))
+			if (!strcmp(pf->name, name) &&
+			    kgr_are_objnames_equal(pf->objname, objname) &&
+			    pf->sympos == sympos)
 				found_pf = pf;
 		}
 	}
@@ -879,12 +932,15 @@ static void kgr_patching_failed(struct kgr_patch *patch,
 	WARN(1, "kgr: patching failed. Previous state was recovered.\n");
 }
 
-static bool kgr_patch_contains(const struct kgr_patch *p, const char *name)
+static bool kgr_patch_contains(const struct kgr_patch *p,
+	const struct kgr_patch_fun *patch_fun)
 {
 	const struct kgr_patch_fun *pf;
 
 	kgr_for_each_patch_fun(p, pf)
-		if (!strcmp(pf->name, name))
+		if (!strcmp(pf->name, patch_fun->name) &&
+		    kgr_are_objnames_equal(pf->objname, patch_fun->objname) &&
+		    pf->sympos == patch_fun->sympos)
 			return true;
 
 	return false;
@@ -904,7 +960,7 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 
 	list_for_each_entry(p, &kgr_patches, list)
 		kgr_for_each_patch_fun(p, pf)
-			if (!kgr_patch_contains(patch, pf->name)) {
+			if (!kgr_patch_contains(patch, pf)) {
 				/*
 				 * Calls from new universe to all functions
 				 * being reverted are redirected to loc_old in
@@ -1126,7 +1182,7 @@ static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
 		new_ops = &patch_fun->ftrace_ops_slow;
 	} else {
 		if (kgr_patch && kgr_patch->replace_all && !kgr_revert &&
-		    !kgr_patch_contains(kgr_patch, patch_fun->name)) {
+		    !kgr_patch_contains(kgr_patch, patch_fun)) {
 			next_state = KGR_PATCH_REVERT_SLOW;
 			patch_fun->loc_old = patch_fun->loc_name;
 			/*

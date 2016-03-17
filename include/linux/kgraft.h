@@ -41,6 +41,7 @@ struct kgr_patch;
  *	     vmlinux)
  * @loc_name: cache of @name's function address
  * @loc_old: cache of the last function address  for @name in the patches list
+ * @sympos: symbol position in an object (module or vmlinux) (optional)
  * @ftrace_ops_slow: ftrace ops for slow (temporary) stub
  * @ftrace_ops_fast: ftrace ops for fast () stub
  */
@@ -64,6 +65,14 @@ struct kgr_patch_fun {
 
 	unsigned long loc_name;
 	unsigned long loc_old;
+	/*
+	 * The sympos field is optional and can be used to resolve duplicate
+	 * symbol names in objects (a module or vmlinux). If this field is zero,
+	 * it is expected the symbol is unique, otherwise patching fails. If
+	 * this value is greater than zero then that occurrence of the symbol in
+	 * kallsyms for the given object is used.
+	 */
+	unsigned long sympos;
 
 	struct ftrace_ops ftrace_ops_slow;
 	struct ftrace_ops ftrace_ops_fast;
@@ -102,11 +111,19 @@ struct kgr_patch {
 		.name = #_name,						\
 		.new_fun = _new_function,				\
 		.objname = NULL,					\
+		.sympos = 0,						\
 	}
 #define KGR_PATCH_OBJ(_name, _new_function, _objname) {			\
 		.name = #_name,						\
 		.new_fun = _new_function,				\
 		.objname = _objname,					\
+		.sympos = 0,						\
+	}
+#define KGR_PATCH_OBJPOS(_name, _new_function, _objname, _sympos) {	\
+		.name = #_name,						\
+		.new_fun = _new_function,				\
+		.objname = _objname,					\
+		.sympos = _sympos,					\
 	}
 #define KGR_PATCH_END				{ }
 
