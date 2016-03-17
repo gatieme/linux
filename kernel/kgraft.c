@@ -170,7 +170,7 @@ static void kgr_remove_patches_fast(void)
 	struct kgr_patch *p, *tmp;
 
 	list_for_each_entry_safe(p, tmp, &kgr_patches, list) {
-		list_del(&p->list);
+		list_del_init(&p->list);
 		module_put(p->owner);
 	}
 }
