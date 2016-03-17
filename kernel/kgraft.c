@@ -1147,15 +1147,11 @@ static int kgr_handle_patch_for_loaded_module(struct kgr_patch *patch,
 					       const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
-	unsigned long addr;
 	int err;
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
-		if (patch_fun->state != KGR_PATCH_SKIPPED)
-			continue;
-
-		addr =  kallsyms_lookup_name(patch_fun->name);
-		if (!within_module(addr, mod))
+		if (!patch_fun->objname ||
+		    strcmp(patch_fun->objname, mod->name))
 			continue;
 
 		err = kgr_init_ftrace_ops(patch_fun);
@@ -1292,11 +1288,10 @@ static void kgr_handle_patch_for_going_module(struct kgr_patch *patch,
 					     const struct module *mod)
 {
 	struct kgr_patch_fun *patch_fun;
-	unsigned long addr;
 
 	kgr_for_each_patch_fun(patch, patch_fun) {
-		addr = kallsyms_lookup_name(patch_fun->name);
-		if (!within_module(addr, mod))
+		if (!patch_fun->objname ||
+		    strcmp(patch_fun->objname, mod->name))
 			continue;
 
 		kgr_forced_code_patch_removal(patch_fun);
