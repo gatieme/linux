@@ -374,6 +374,20 @@ static void kgr_wakeup_kthreads(void)
 	read_unlock(&tasklist_lock);
 }
 
+static bool kgr_is_object_loaded(const char *objname)
+{
+	struct module *mod;
+
+	if (!objname)
+		return true;
+
+	mutex_lock(&module_mutex);
+	mod = find_module(objname);
+	mutex_unlock(&module_mutex);
+
+	return !!mod;
+}
+
 static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 {
 	unsigned long orig_addr;
@@ -382,7 +396,7 @@ static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 
 	orig_addr = kallsyms_lookup_name(pf->name);
 	if (!orig_addr) {
-		if (!pf->objname)
+		if (kgr_is_object_loaded(pf->objname))
 			pr_err("kgr: function %s not resolved\n", pf->name);
 		return -ENOENT;
 	}
@@ -623,7 +637,8 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 			return -EINVAL;
 		err = kgr_init_ftrace_ops(patch_fun);
 		if (err) {
-			if (err == -ENOENT && patch_fun->objname) {
+			if (err == -ENOENT &&
+			    !kgr_is_object_loaded(patch_fun->objname)) {
 				patch_fun->state = KGR_PATCH_SKIPPED;
 				return 0;
 			}
