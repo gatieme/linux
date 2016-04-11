@@ -225,6 +225,7 @@ static const struct tnt tnts[] = {
 	{ TAINT_OOT_MODULE,		'O', ' ' },
 	{ TAINT_UNSIGNED_MODULE,	'E', ' ' },
 	{ TAINT_SOFTLOCKUP,		'L', ' ' },
+	{ TAINT_KGRAFT,			'K', ' ' },
 };
 
 /**
@@ -244,6 +245,7 @@ static const struct tnt tnts[] = {
  *  'I' - Working around severe firmware bug.
  *  'O' - Out-of-tree module has been loaded.
  *  'E' - Unsigned module has been loaded.
+ *  'K' - Kernel has been live patched with kGraft.
  *
  *	The string is overwritten by the next call to print_tainted().
  */
