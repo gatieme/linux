@@ -14,6 +14,8 @@
  * any later version.
  */
 
+#define pr_fmt(fmt) "kgr: " fmt
+
 #include <linux/kernel.h>
 #include <linux/kgraft.h>
 #include <linux/kobject.h>
@@ -211,13 +213,13 @@ int kgr_add_files(void)
 
 	kgr_sysfs_dir = kobject_create_and_add("kgraft", kernel_kobj);
 	if (!kgr_sysfs_dir) {
-		pr_err("kgr: cannot create kgraft directory in sysfs!\n");
+		pr_err("cannot create kgraft directory in sysfs!\n");
 		return -EIO;
 	}
 
 	ret = sysfs_create_group(kgr_sysfs_dir, &kgr_sysfs_group);
 	if (ret) {
-		pr_err("kgr: cannot create attributes in sysfs\n");
+		pr_err("cannot create attributes in sysfs\n");
 		goto err_put_sysfs;
 	}
 

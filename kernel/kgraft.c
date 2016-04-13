@@ -14,6 +14,8 @@
  * any later version.
  */
 
+#define pr_fmt(fmt) "kgr: " fmt
+
 #include <linux/bitmap.h>
 #include <linux/ftrace.h>
 #include <linux/hardirq.h> /* for in_interrupt() */
@@ -217,7 +219,7 @@ static void kgr_finalize_replaced_funs(void)
 				 * kgr_switch_fops called by kgr_patch_code. But
 				 * leave it here to be sure.
 				 */
-				pr_err("kgr: finalization for %s:%s,%lu failed (%d). System in inconsistent state with no way out.\n",
+				pr_err("finalization for %s:%s,%lu failed (%d). System in inconsistent state with no way out.\n",
 					kgr_get_objname(pf), pf->name,
 					pf->sympos, ret);
 				BUG();
@@ -236,7 +238,7 @@ static void kgr_finalize(void)
 		ret = kgr_patch_code(patch_fun, true, kgr_revert, false);
 
 		if (ret < 0) {
-			pr_err("kgr: finalization for %s:%s,%lu failed (%d). System in inconsistent state with no way out.\n",
+			pr_err("finalization for %s:%s,%lu failed (%d). System in inconsistent state with no way out.\n",
 				kgr_get_objname(patch_fun), patch_fun->name,
 				patch_fun->sympos, ret);
 			BUG();
@@ -271,7 +273,7 @@ static void kgr_finalize(void)
 	kgr_patch = NULL;
 	kgr_in_progress = false;
 
-	pr_info("kgr succeeded\n");
+	pr_info("patching succeeded\n");
 
 	mutex_unlock(&kgr_in_progress_lock);
 }
@@ -315,7 +317,7 @@ static void kgr_work_fn(struct work_struct *work)
 
 	if (kgr_still_patching()) {
 		if (!printed) {
-			pr_info("kgr still in progress after timeout, will keep"
+			pr_info("still in progress after timeout, will keep"
 					" trying every %d seconds\n",
 				KGR_TIMEOUT);
 			printed = true;
@@ -453,13 +455,13 @@ static unsigned long kgr_kallsyms_lookup(const struct kgr_patch_fun *pf)
 	 * otherwise ensure the symbol position count matches sympos.
 	 */
 	if (args.addr == 0)
-		pr_err("kgr: function %s:%s,%lu not resolved\n",
+		pr_err("function %s:%s,%lu not resolved\n",
 			kgr_get_objname(pf), pf->name, pf->sympos);
 	else if (pf->sympos == 0 && args.count > 1)
-		pr_err("kgr: unresolvable ambiguity for function %s in object %s\n",
+		pr_err("unresolvable ambiguity for function %s in object %s\n",
 			pf->name, kgr_get_objname(pf));
 	else if (pf->sympos > 0 && pf->sympos != args.count)
-		pr_err("kgr: position %lu for function %s in object %s not found\n",
+		pr_err("position %lu for function %s in object %s not found\n",
 			pf->sympos, pf->name, kgr_get_objname(pf));
 	else
 		return args.addr;
@@ -479,7 +481,7 @@ static unsigned long kgr_get_function_address(const struct kgr_patch_fun *pf)
 
 	check_name = kallsyms_lookup(orig_addr, NULL, NULL, NULL, check_buf);
 	if (strcmp(check_name, pf->name)) {
-		pr_err("kgr: we got out of bounds of the intended function (%s:%s,%lu -> %s)\n",
+		pr_err("we got out of bounds of the intended function (%s:%s,%lu -> %s)\n",
 			kgr_get_objname(pf), pf->name, pf->sympos, check_name);
 		return -EINVAL;
 	}
@@ -652,7 +654,7 @@ static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
 	if (new_fops) {
 		err = kgr_ftrace_enable(patch_fun, new_fops);
 		if (err) {
-			pr_err("kgr: cannot enable ftrace function for %s:%s,%lu (%lx, %d)\n",
+			pr_err("cannot enable ftrace function for %s:%s,%lu (%lx, %d)\n",
 				kgr_get_objname(patch_fun), patch_fun->name,
 				patch_fun->sympos, patch_fun->loc_old, err);
 			return err;
@@ -668,7 +670,7 @@ static int kgr_switch_fops(struct kgr_patch_fun *patch_fun,
 	if (unreg_fops) {
 		err = kgr_ftrace_disable(patch_fun, unreg_fops);
 		if (err) {
-			pr_err("kgr: disabling ftrace function for %s:%s,%lu failed (%d)\n",
+			pr_err("disabling ftrace function for %s:%s,%lu failed (%d)\n",
 				kgr_get_objname(patch_fun), patch_fun->name,
 				patch_fun->sympos, err);
 			/*
@@ -693,7 +695,7 @@ static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 	if (IS_ERR_VALUE(addr))
 		return addr;
 
-	pr_debug("kgr: storing %lx to loc_name for %s:%s,%lu\n",
+	pr_debug("storing %lx to loc_name for %s:%s,%lu\n",
 		addr, kgr_get_objname(patch_fun), patch_fun->name,
 		patch_fun->sympos);
 	patch_fun->loc_name = addr;
@@ -702,7 +704,7 @@ static int kgr_init_ftrace_ops(struct kgr_patch_fun *patch_fun)
 	if (IS_ERR_VALUE(addr))
 		return addr;
 
-	pr_debug("kgr: storing %lx to loc_old for %s:%s,%lu\n",
+	pr_debug("storing %lx to loc_old for %s:%s,%lu\n",
 		addr, kgr_get_objname(patch_fun), patch_fun->name,
 		patch_fun->sympos);
 	patch_fun->loc_old = addr;
@@ -811,7 +813,7 @@ static int kgr_patch_code(struct kgr_patch_fun *patch_fun, bool final,
 
 	patch_fun->state = next_state;
 
-	pr_debug("kgr: redirection for %s:%s,%lu done\n",
+	pr_debug("redirection for %s:%s,%lu done\n",
 		kgr_get_objname(patch_fun), patch_fun->name, patch_fun->sympos);
 
 	return 0;
@@ -886,7 +888,7 @@ static void kgr_patch_code_failed(struct kgr_patch_fun *patch_fun)
 		 * patch_fun cannot be in any other state given the
 		 * circumstances (all is (being) applied/reverted)
 		 */
-		pr_warn("kgr: kgr_patch_code_failed: unexpected patch function state (%d)\n",
+		pr_warn("kgr_patch_code_failed: unexpected patch function state (%d)\n",
 			patch_fun->state);
 		return;
 	}
@@ -988,7 +990,7 @@ static int kgr_revert_replaced_funs(struct kgr_patch *patch)
 
 				ret = kgr_patch_code(pf, false, true, true);
 				if (ret < 0) {
-					pr_err("kgr: cannot revert function %s:%s,%lu in patch %s (%d)\n",
+					pr_err("cannot revert function %s:%s,%lu in patch %s (%d)\n",
 						kgr_get_objname(pf), pf->name,
 						pf->sympos, p->name, ret);
 					pf->loc_old = loc_old_temp;
@@ -1011,37 +1013,37 @@ int kgr_modify_kernel(struct kgr_patch *patch, bool revert)
 	int ret;
 
 	if (!kgr_initialized) {
-		pr_err("kgr: can't patch, not initialized\n");
+		pr_err("can't patch, not initialized\n");
 		return -EINVAL;
 	}
 
 	mutex_lock(&kgr_in_progress_lock);
 	if (patch->refs) {
-		pr_err("kgr: can't patch, this patch is still referenced\n");
+		pr_err("can't patch, this patch is still referenced\n");
 		ret = -EBUSY;
 		goto err_unlock;
 	}
 
 	if (kgr_in_progress) {
-		pr_err("kgr: can't patch, another patching not yet finalized\n");
+		pr_err("can't patch, another patching not yet finalized\n");
 		ret = -EAGAIN;
 		goto err_unlock;
 	}
 
 	if (revert && list_empty(&patch->list)) {
-		pr_err("kgr: can't patch, this one was already reverted\n");
+		pr_err("can't patch, this one was already reverted\n");
 		ret = -EINVAL;
 		goto err_unlock;
 	}
 
 	kgr_irq_use_new = alloc_percpu(bool);
 	if (!kgr_irq_use_new) {
-		pr_err("kgr: can't patch, cannot allocate percpu data\n");
+		pr_err("can't patch, cannot allocate percpu data\n");
 		ret = -ENOMEM;
 		goto err_unlock;
 	}
 
-	pr_info("kgr: %sing patch '%s'\n", revert ? "revert" : "apply",
+	pr_info("%sing patch '%s'\n", revert ? "revert" : "apply",
 			patch->name);
 
 	set_bit(0, kgr_immutable);
@@ -1120,7 +1122,7 @@ int kgr_patch_kernel(struct kgr_patch *patch)
 	int ret;
 
 	if (!try_module_get(patch->owner)) {
-		pr_err("kgr: can't increase patch module refcount\n");
+		pr_err("can't increase patch module refcount\n");
 		return -EBUSY;
 	}
 
@@ -1226,7 +1228,7 @@ static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
 	if (new_ops) {
 		err = kgr_ftrace_enable(patch_fun, new_ops);
 		if (err) {
-			pr_err("kgr: enabling of ftrace function for the originally skipped %lx (%s:%s,%lu) failed with %d\n",
+			pr_err("enabling of ftrace function for the originally skipped %lx (%s:%s,%lu) failed with %d\n",
 				patch_fun->loc_old, kgr_get_objname(patch_fun),
 				patch_fun->name, patch_fun->sympos, err);
 			return err;
@@ -1234,7 +1236,7 @@ static int kgr_patch_code_delayed(struct kgr_patch_fun *patch_fun)
 	}
 
 	patch_fun->state = next_state;
-	pr_debug("kgr: delayed redirection for %s:%s,%lu done\n",
+	pr_debug("delayed redirection for %s:%s,%lu done\n",
 		kgr_get_objname(patch_fun), patch_fun->name, patch_fun->sympos);
 	return 0;
 }
@@ -1316,8 +1318,8 @@ int kgr_module_init(struct module *mod)
 	list_for_each_entry(p, &kgr_patches, list) {
 		ret = kgr_handle_patch_for_loaded_module(p, mod);
 		if (ret) {
-			pr_err("kgr: delayed patching of the module (%s) failed (%d). Module was not inserted.\n",
-				mod->name, ret);
+			pr_err("delayed patching of the module (%s) failed (%d). Module was not inserted.\n",
+					mod->name, ret);
 			__kgr_handle_going_module(mod);
 			goto out;
 		}
@@ -1327,8 +1329,8 @@ int kgr_module_init(struct module *mod)
 	if (kgr_patch) {
 		ret = kgr_handle_patch_for_loaded_module(kgr_patch, mod);
 		if (ret) {
-			pr_err("kgr: delayed patching of the module (%s) failed (%d). Module was not inserted.\n",
-				mod->name, ret);
+			pr_err("delayed patching of the module (%s) failed (%d). Module was not inserted.\n",
+					mod->name, ret);
 			__kgr_handle_going_module(mod);
 			goto out;
 		}
@@ -1370,7 +1372,7 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 	if (ops) {
 		err = kgr_ftrace_disable(patch_fun, ops);
 		if (err) {
-			pr_err("kgr: forced disabling of ftrace function for %s:%s,%lu failed (%d)\n",
+			pr_err("forced disabling of ftrace function for %s:%s,%lu failed (%d)\n",
 				kgr_get_objname(patch_fun), patch_fun->name,
 				patch_fun->sympos, err);
 			/*
@@ -1382,7 +1384,7 @@ static int kgr_forced_code_patch_removal(struct kgr_patch_fun *patch_fun)
 	}
 
 	patch_fun->state = KGR_PATCH_SKIPPED;
-	pr_debug("kgr: forced disabling for %s:%s,%lu done\n",
+	pr_debug("forced disabling for %s:%s,%lu done\n",
 		kgr_get_objname(patch_fun), patch_fun->name, patch_fun->sympos);
 	return 0;
 }
@@ -1477,7 +1479,7 @@ static int __init kgr_init(void)
 	int ret;
 
 	if (ftrace_is_dead()) {
-		pr_warn("kgr: enabled, but ftrace is disabled ... aborting\n");
+		pr_warn("enabled, but ftrace is disabled ... aborting\n");
 		return -ENODEV;
 	}
 
@@ -1495,20 +1497,20 @@ static int __init kgr_init(void)
 	 */
 	kgr_wq = alloc_ordered_workqueue("kgraft", 0);
 	if (!kgr_wq) {
-		pr_err("kgr: cannot allocate a work queue, aborting!\n");
+		pr_err("cannot allocate a work queue, aborting!\n");
 		ret = -ENOMEM;
 		goto err_remove_files;
 	}
 
 	ret = register_module_notifier(&kgr_module_exit_nb);
 	if (ret) {
-		pr_err("kgr: failed to register kGraft module exit notifier (%d)\n",
+		pr_err("failed to register kGraft module exit notifier (%d)\n",
 			ret);
 		goto err_destroy_wq;
 	}
 
 	kgr_initialized = true;
-	pr_info("kgr: successfully initialized\n");
+	pr_info("successfully initialized\n");
 
 	return 0;
 err_destroy_wq:
