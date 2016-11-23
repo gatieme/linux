@@ -151,7 +151,13 @@ static bool kgr_still_patching(void)
 
 	read_lock(&tasklist_lock);
 	for_each_process_thread(p, t) {
-		if (kgr_task_in_progress(t)) {
+		/*
+		 * Ignore zombie tasks, that is task with ->state == TASK_DEAD.
+		 * We also need to check their ->on_cpu to be sure that they are
+		 * not running any code and they are really almost dead.
+		 */
+		if (kgr_task_in_progress(t) && (t->state != TASK_DEAD ||
+		    t->on_cpu != 0)) {
 			failed = true;
 			goto unlock;
 		}
