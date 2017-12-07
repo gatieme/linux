@@ -54,6 +54,52 @@
 #define read_barrier_depends()		do { } while (0)
 #endif
 
+/*
+ * Inhibit subsequent speculative memory accesses.
+ *
+ * Architectures with a suitable memory barrier should provide an
+ * implementation. This is non-portable, and generic code should use
+ * nospec_array_ptr().
+ */
+#ifndef __nospec_barrier
+#define __nospec_barrier()		do { } while (0)
+#endif
+
+/**
+ * nospec_array_ptr - Generate a pointer to an array element, ensuring the
+ * pointer is bounded under speculation.
+ *
+ * @arr: the base of the array
+ * @idx: the index of the element
+ * @sz: the number of elements in the array
+ *
+ * If @idx falls in the interval [0, @sz), returns the pointer to @arr[@idx],
+ * otherwise returns NULL.
+ *
+ * Architectures without a __nospec_barrier() should override this to ensure
+ * that the returned pointer falls within the array bounds both under
+ * architectural execution and under speculation, preventing propagation of an
+ * out-of-bounds pointer to code which is speculatively executed.
+ */
+#ifndef nospec_array_ptr
+#define nospec_array_ptr(arr, idx, sz)					\
+({									\
+	typeof(&(arr)[0]) __nap_arr = (arr);				\
+	typeof(&(arr)[0]) __nap_elem = NULL;				\
+	typeof(idx) __nap_idx = (idx);					\
+	typeof(sz) __nap_sz = (sz);					\
+									\
+	if (__nap_idx < __nap_sz)					\
+		__nap_elem = &__nap_arr[__nap_idx];			\
+									\
+	__nospec_barrier();						\
+									\
+	__nap_elem;							\
+})
+#endif
+
+#undef __nospec_barrier
+
 #ifndef __smp_mb
 #define __smp_mb()	mb()
 #endif
