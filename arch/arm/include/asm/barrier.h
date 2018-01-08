@@ -59,6 +59,30 @@ extern void arm_heavy_mb(void);
 #define dma_wmb()	barrier()
 #endif
 
+#define nospec_array_ptr(arr, idx, sz)					\
+({									\
+	typeof(&(arr)[0]) __nap_arr = (arr);				\
+	typeof(idx) __nap_idx = (idx);					\
+	typeof(sz) __nap_sz = (sz);					\
+									\
+	unsigned long __nap_ptr = (unsigned long)__nap_arr +		\
+				  sizeof(__nap_arr[0]) * idx;		\
+									\
+	asm volatile(							\
+	"	cmp	%[i], %[s]\n"					\
+	"	bcs	1f\n"						\
+	"	ldr	%[p], %[pp]\n"					\
+	"1:	movcs	%[p], #0\n"					\
+	"	.inst	0xe320f018 @ CSDB\n"				\
+	: [p] "=&r" (__nap_ptr)						\
+	: [pp] "m" (__nap_ptr),						\
+	  [i] "r" ((unsigned long)__nap_idx),				\
+	  [s] "r" ((unsigned long)__nap_sz)				\
+	: "cc");							\
+									\
+	(typeof(&(__nap_arr)[0]))__nap_ptr;				\
+})
+
 #define __smp_mb()	dmb(ish)
 #define __smp_rmb()	__smp_mb()
 #define __smp_wmb()	dmb(ishst)
