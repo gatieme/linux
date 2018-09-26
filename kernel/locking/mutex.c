@@ -36,6 +36,10 @@
 # include "mutex.h"
 #endif
 
+#if defined(CONFIG_PROXY_EXEC) && defined(CONFIG_MUTEX_SPIN_ON_OWNER)
+#error BOOM
+#endif
+
 void
 __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 {
@@ -488,7 +492,7 @@ ww_mutex_set_context_fastpath(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 
 	/*
 	 * [W] ww->ctx = ctx	    [W] MUTEX_FLAG_WAITERS
-	 *     MB		        MB
+	 *     MB			MB
 	 * [R] MUTEX_FLAG_WAITERS   [R] ww->ctx
 	 *
 	 * The memory barrier above pairs with the memory barrier in
@@ -982,6 +986,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	}
 
 	raw_spin_lock_irqsave(&lock->wait_lock, flags);
+	raw_spin_lock(&current->blocked_lock);
 	/*
 	 * After waiting to acquire the wait_lock, try again.
 	 */
@@ -1046,6 +1051,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 				goto err;
 		}
 
+		raw_spin_unlock(&current->blocked_lock);
 		raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
 		schedule_preempt_disabled();
 
@@ -1059,6 +1065,12 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 				__mutex_set_flag(lock, MUTEX_FLAG_HANDOFF);
 		}
 
+		raw_spin_lock_irqsave(&lock->wait_lock, flags);
+		raw_spin_lock(&current->blocked_lock);
+		/*
+		 * Gets reset by ttwu_remote().
+		 */
+		current->blocked_on = lock;
 		set_current_state(state);
 		/*
 		 * Here we order against unlock; we must either see it change
@@ -1068,10 +1080,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 		if (__mutex_trylock(lock) ||
 		    (first && mutex_optimistic_spin(lock, ww_ctx, use_ww_ctx, &waiter)))
 			break;
-
-		raw_spin_lock_irqsave(&lock->wait_lock, flags);
 	}
-	raw_spin_lock_irqsave(&lock->wait_lock, flags);
 acquired:
 	__set_current_state(TASK_RUNNING);
 
@@ -1100,6 +1109,7 @@ skip_wait:
 	if (use_ww_ctx && ww_ctx)
 		ww_mutex_lock_acquired(ww, ww_ctx);
 
+	raw_spin_unlock(&current->blocked_lock);
 	raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
 	wake_up_q(&wake_q);
 	preempt_enable();
@@ -1109,6 +1119,7 @@ err:
 	__set_current_state(TASK_RUNNING);
 	mutex_remove_waiter(lock, &waiter, current);
 err_early_kill:
+	raw_spin_unlock(&current->blocked_lock);
 	raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
 	debug_mutex_free_waiter(&waiter);
 	mutex_release(&lock->dep_map, ip);
@@ -1244,11 +1255,22 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 {
 	struct task_struct *next = NULL;
 	DEFINE_WAKE_Q(wake_q);
-	unsigned long owner;
+	/*
+	 * XXX [juril] Proxy Exec forces always an HANDOFF (so that owner is
+	 * never empty when there are waiters wating?). Should we make this
+	 * conditional on having proxy exec configured in?
+	 */
+	unsigned long owner = MUTEX_FLAG_HANDOFF;
 	unsigned long flags;
 
 	mutex_release(&lock->dep_map, ip);
 
+	/*
+	 * XXX must always handoff the mutex to avoid !owner in proxy().
+	 * scheduler delay is minimal since we hand off to the task that
+	 * is to be scheduled next.
+	 */
+#ifndef CONFIG_PROXY_EXEC
 	/*
 	 * Release the lock before (potentially) taking the spinlock such that
 	 * other contenders can get on with things ASAP.
@@ -1279,10 +1301,41 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 
 		owner = old;
 	}
+#endif
 
 	raw_spin_lock_irqsave(&lock->wait_lock, flags);
 	debug_mutex_unlock(lock);
-	if (!list_empty(&lock->wait_list)) {
+
+#ifdef CONFIG_PROXY_EXEC
+	raw_spin_lock(&current->blocked_lock);
+	/*
+	 * If we have a task boosting us, and that task was boosting us through
+	 * this lock, hand the lock to that task, as that is the highest
+	 * waiter, as selected by the scheduling function.
+	 *
+	 * XXX existance guarantee on ->blocked_task ?
+	 */
+	next = current->proxied_by;
+	if (next) {
+		if (next->blocked_on != lock) {
+			next = NULL;
+		} else {
+			wake_q_add(&wake_q, next);
+			current->proxied_by = NULL;
+		}
+	}
+
+	/*
+	 * XXX if there was no higher prio proxy, ->blocked_task will not have
+	 * been set.  Therefore lower prio contending tasks are serviced in
+	 * FIFO order.
+	 */
+#endif
+
+	/*
+	 * Failing that, pick any on the wait list.
+	 */
+	if (!next && !list_empty(&lock->wait_list)) {
 		/* get the first entry from the wait-list: */
 		struct mutex_waiter *waiter =
 			list_first_entry(&lock->wait_list,
@@ -1298,6 +1351,9 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 		__mutex_handoff(lock, next);
 
 	preempt_disable(); // XXX unlock->wakeup inversion like
+#ifdef CONFIG_PROXY_EXEC
+	raw_spin_unlock(&current->blocked_lock);
+#endif
 	raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
 
 	wake_up_q(&wake_q); // XXX must force resched on proxy

@@ -1905,13 +1905,17 @@ struct sched_class {
 
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
 {
-	WARN_ON_ONCE(rq->curr != prev);
+	WARN_ON_ONCE(rq->curr != prev && prev != rq->proxy);
+
+	if (prev == rq->proxy && task_cpu(prev) != cpu_of(rq))
+		return;
+
 	prev->sched_class->put_prev_task(rq, prev);
 }
 
 static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
-	WARN_ON_ONCE(rq->curr != next);
+	WARN_ON_ONCE(!task_current_proxy(rq, next));
 	next->sched_class->set_next_task(rq, next, false);
 }
 

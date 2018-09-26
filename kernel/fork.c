@@ -1954,6 +1954,7 @@ static __latent_entropy struct task_struct *copy_process(
 	ftrace_graph_init_task(p);
 
 	rt_mutex_init_task(p);
+	raw_spin_lock_init(&p->blocked_lock);
 
 	lockdep_assert_irqs_enabled();
 #ifdef CONFIG_PROVE_LOCKING
@@ -2053,8 +2054,9 @@ static __latent_entropy struct task_struct *copy_process(
 	lockdep_init_task(p);
 #endif
 
-	p->blocked_task = NULL; /* nobody is boosting us yet*/
+	p->proxied_by = NULL; /* nobody is boosting us yet*/
 	p->blocked_on = NULL;  /* not blocked yet */
+	INIT_LIST_HEAD(&p->blocked_entry);
 
 #ifdef CONFIG_BCACHE
 	p->sequential_io	= 0;

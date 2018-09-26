@@ -874,6 +874,10 @@ config NUMA_BALANCING_DEFAULT_ENABLED
 	  If set, automatic NUMA balancing will be enabled if running on a NUMA
 	  machine.
 
+config PROXY_EXEC
+	bool "Proxy Execution"
+	default n
+
 menuconfig CGROUPS
 	bool "Control Group support"
 	select KERNFS

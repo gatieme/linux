@@ -7034,7 +7034,9 @@ again:
 		goto idle;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
-	if (!prev || prev->sched_class != &fair_sched_class)
+	if (!prev ||
+	    prev->sched_class != &fair_sched_class ||
+	    rq->curr !=	rq->proxy)
 		goto simple;
 
 	/*
@@ -7544,6 +7546,9 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	int tsk_cache_hot;
 
 	lockdep_assert_held(&env->src_rq->lock);
+
+	if (task_is_blocked(p))
+		return 0;
 
 	/*
 	 * We do not migrate tasks that are:
