@@ -8,6 +8,7 @@
  *
  * Copyright (C) 2006 Qumranet, Inc.
  * Copyright 2010 Red Hat, Inc. and/or its affiliates.
+ * Copyright (C) 2019-2020 VMware, Inc. 
  *
  * Authors:
  *   Yaniv Kamay  <yaniv@qumranet.com>
@@ -16,6 +17,7 @@
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
  *
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include "irq.h"
@@ -49,6 +51,10 @@
 #include <asm/kvm_page_track.h>
 #include "trace.h"
 
+/*
+ * flag to control ept placement to a specific NUMA node
+ */
+static int __read_mostly ept_alloc_nodemask = -1;
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging
  * where the hardware walks 2 page tables:
@@ -886,15 +892,24 @@ static void mmu_free_memory_cache(struct kvm_mmu_memory_cache *mc,
 static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
 				       int min)
 {
-	void *page;
+	void *addr;
 
 	if (cache->nobjs >= min)
 		return 0;
 	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
-		page = (void *)__get_free_page(GFP_KERNEL);
-		if (!page)
-			return -ENOMEM;
-		cache->objects[cache->nobjs++] = page;
+                if (ept_alloc_nodemask == -1) {
+                    addr = (void *)__get_free_page(GFP_KERNEL);
+                    if (!addr)
+                        return -ENOMEM;
+                } else {
+                    struct page *page;
+                    nodemask_t nm = NODE_MASK_NONE;
+                    node_set(ept_alloc_nodemask, nm);
+                    page = __alloc_pages_nodemask(GFP_KERNEL, 0, ept_alloc_nodemask, &nm);
+                    if (!page)
+                        return -ENOMEM;
+                    cache->objects[cache->nobjs++] = (void *)page_address(page);
+                }
 	}
 	return 0;
 }
@@ -5470,6 +5485,65 @@ unlock:
 	return freed;
 }
 
+#ifdef CONFIG_SYSFS
+static ssize_t mitosis_ept_nodemask_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", ept_alloc_nodemask);
+}
+
+static ssize_t mitosis_ept_nodemask_store(struct kobject *kobj,
+            struct kobj_attribute *attr, const char *buf, size_t count)
+{
+    int err;
+    unsigned long alloc_nodemask;
+
+    err = kstrtoul(buf, 10, &alloc_nodemask);
+    if (err || alloc_nodemask > 4)
+        return -EINVAL;
+
+    ept_alloc_nodemask = alloc_nodemask;
+
+    return count;
+}
+
+static struct kobj_attribute mitosis_ept_nodemask_attr =
+        __ATTR(ept_nodemask, 0644, mitosis_ept_nodemask_show,
+                mitosis_ept_nodemask_store);
+
+static struct attribute *mitosis_attr[] = {
+    &mitosis_ept_nodemask_attr.attr,
+    NULL,
+};
+
+struct attribute_group mitosis_attr_group = {
+    .attrs = mitosis_attr,
+    .name = "mitosis",
+};
+
+static int mitosis_init_sysfs(struct kobject **kobj)
+{
+    int err;
+
+    *kobj = kobject_get(mm_kobj);
+    err = sysfs_create_group(*kobj, &mitosis_attr_group);
+    if (err) {
+        pr_err("failed to register mitosis sysfs group\n");
+        goto remove_mitosis_kobj;
+    }
+    return 0;
+
+remove_mitosis_kobj:
+    kobject_put(*kobj);
+    return err;
+}
+#else
+static int mitosis_init_sysfs(struct kobject **kobj)
+{
+    return 0;
+}
+#endif
+
 static unsigned long
 mmu_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 {
@@ -5491,6 +5565,7 @@ static void mmu_destroy_caches(void)
 int kvm_mmu_module_init(void)
 {
 	int ret = -ENOMEM;
+        struct  kobject *mitosis_kobj;
 
 	kvm_mmu_clear_all_pte_masks();
 
@@ -5512,6 +5587,10 @@ int kvm_mmu_module_init(void)
 	ret = register_shrinker(&mmu_shrinker);
 	if (ret)
 		goto out;
+
+        ret = mitosis_init_sysfs(&mitosis_kobj);
+        if (ret)
+            goto out;
 
 	return 0;
 
