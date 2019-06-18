@@ -901,6 +901,7 @@ static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
                     addr = (void *)__get_free_page(GFP_KERNEL);
                     if (!addr)
                         return -ENOMEM;
+                    cache->objects[cache->nobjs++] = addr;
                 } else {
                     struct page *page;
                     nodemask_t nm = NODE_MASK_NONE;
