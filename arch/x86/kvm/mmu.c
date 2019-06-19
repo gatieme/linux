@@ -5497,10 +5497,10 @@ static ssize_t mitosis_ept_nodemask_store(struct kobject *kobj,
             struct kobj_attribute *attr, const char *buf, size_t count)
 {
     int err;
-    unsigned long alloc_nodemask;
+    long alloc_nodemask;
 
-    err = kstrtoul(buf, 10, &alloc_nodemask);
-    if (err || alloc_nodemask > 4)
+    err = kstrtol(buf, 10, &alloc_nodemask);
+    if (err || alloc_nodemask > MAX_NUMNODES)
         return -EINVAL;
 
     ept_alloc_nodemask = alloc_nodemask;
