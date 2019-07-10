@@ -1522,6 +1522,29 @@ static void drop_large_spte(struct kvm_vcpu *vcpu, u64 *sptep)
 		kvm_flush_remote_tlbs(vcpu->kvm);
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect)
+{
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+	if (!is_writable_pte(value) &&
+	      !(pt_protect && spte_can_locklessly_be_made_writable(value)))
+		return false;
+
+	if (pt_protect)
+		value &= ~SPTE_MMU_WRITEABLE;
+
+	value = value & ~PT_WRITABLE_MASK;
+
+	return mmu_spte_update((u64 *)addr, value);
+}
+#endif
+
 /*
  * Write-protect on the specified @sptep, @pt_protect indicates whether
  * spte write-protection is caused by protecting shadow page table.
@@ -1560,8 +1583,12 @@ static bool __rmap_write_protect(struct kvm *kvm,
 	struct rmap_iterator iter;
 	bool flush = false;
 
-	for_each_rmap_spte(rmap_head, &iter, sptep)
+	for_each_rmap_spte(rmap_head, &iter, sptep) {
 		flush |= spte_write_protect(sptep, pt_protect);
+#ifdef CONFIG_PGTABLE_REPLICATION
+                flush |= mitosis_write_protect_replicas(sptep, pt_protect);
+#endif
+        }
 
 	return flush;
 }
