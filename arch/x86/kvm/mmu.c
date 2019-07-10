@@ -746,6 +746,22 @@ static bool mmu_spte_update(u64 *sptep, u64 new_spte)
 	return flush;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void mitosis_drop_replica_entries(u64 *sptep)
+{
+        struct page *replica;
+        u64 entry, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        entry = *((u64 *)addr);
+        if (!spte_has_volatile_bits(entry))
+                __update_clear_spte_fast((u64 *)addr, 0ull);
+        else
+                __update_clear_spte_slow((u64 *)addr, 0ull);
+}
+#endif
+
 /*
  * Rules for using mmu_spte_clear_track_bits:
  * It sets the sptep from present to nonpresent, and track the
@@ -757,6 +773,9 @@ static int mmu_spte_clear_track_bits(u64 *sptep)
 	kvm_pfn_t pfn;
 	u64 old_spte = *sptep;
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+        mitosis_drop_replica_entries(sptep);
+#endif
 	if (!spte_has_volatile_bits(old_spte))
 		__update_clear_spte_fast(sptep, 0ull);
 	else
@@ -790,6 +809,9 @@ static int mmu_spte_clear_track_bits(u64 *sptep)
  */
 static void mmu_spte_clear_no_track(u64 *sptep)
 {
+#ifdef CONFIG_PGTABLE_REPLICATION
+        mitosis_drop_replica_entries(sptep);
+#endif
 	__update_clear_spte_fast(sptep, 0ull);
 }
 
