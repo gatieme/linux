@@ -2457,7 +2457,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
 
-        for (i = 0; i < 2; i ++)
+        for (i = 0; i < 2; i++)
                 clear_page(sp->spt[i]);
 
 	trace_kvm_mmu_get_page(sp, true);
@@ -2805,6 +2805,46 @@ static bool kvm_is_mmio_pfn(kvm_pfn_t pfn)
 	return true;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
+{
+        bool flush = false;
+        u64 addr, old_spte;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        old_spte = mmu_spte_update_no_track((u64 *)addr, new_spte);
+
+        if (!is_shadow_present_pte(old_spte))
+               return false;
+        /*
+        * For the spte updated out of mmu-lock is safe, since
+        * we always atomically update it, see the comments in
+        * spte_has_volatile_bits().
+        */
+        if (spte_can_locklessly_be_made_writable(old_spte))
+               flush = true;
+
+        /*
+        * Flush TLB when accessed/dirty states are changed in the page tables,
+        * to guarantee consistency between TLB and page tables.
+        */
+
+        if (is_accessed_spte(old_spte)) {
+                flush = true;
+                kvm_set_pfn_accessed(spte_to_pfn(old_spte));
+        }
+
+        if (is_dirty_spte(old_spte)) {
+                flush = true;
+                kvm_set_pfn_dirty(spte_to_pfn(old_spte));
+        }
+
+       return flush;
+}
+#endif
+
 static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		    unsigned pte_access, int level,
 		    gfn_t gfn, kvm_pfn_t pfn, bool speculative,
@@ -2812,6 +2852,7 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 {
 	u64 spte = 0;
 	int ret = 0;
+        bool flush = false;
 	struct kvm_mmu_page *sp;
 
 	if (set_mmio_spte(vcpu, sptep, gfn, pfn, pte_access))
@@ -2896,8 +2937,11 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		spte = mark_spte_for_access_track(spte);
 
 set_pte:
-	if (mmu_spte_update(sptep, spte))
-		kvm_flush_remote_tlbs(vcpu->kvm);
+	flush = mmu_spte_update(sptep, spte);
+#ifdef CONFIG_PGTABLE_REPLICATION
+        flush |= mitosis_mmu_spte_update_replicas(sptep, spte);
+#endif
+	kvm_flush_remote_tlbs(vcpu->kvm);
 done:
 	return ret;
 }
