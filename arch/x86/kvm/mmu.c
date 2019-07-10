@@ -1284,7 +1284,7 @@ static int rmap_add(struct kvm_vcpu *vcpu, u64 *spte, gfn_t gfn)
 	struct kvm_rmap_head *rmap_head;
 
 	sp = page_header(__pa(spte));
-	kvm_mmu_page_set_gfn(sp, spte - sp->spt, gfn);
+	kvm_mmu_page_set_gfn(sp, spte - kvm_get_spt(sp), gfn);
 	rmap_head = gfn_to_rmap(vcpu->kvm, gfn, sp);
 	return pte_list_add(vcpu, spte, rmap_head);
 }
@@ -1296,7 +1296,7 @@ static void rmap_remove(struct kvm *kvm, u64 *spte)
 	struct kvm_rmap_head *rmap_head;
 
 	sp = page_header(__pa(spte));
-	gfn = kvm_mmu_page_get_gfn(sp, spte - sp->spt);
+	gfn = kvm_mmu_page_get_gfn(sp, spte - kvm_get_spt(sp));
 	rmap_head = gfn_to_rmap(kvm, gfn, sp);
 	pte_list_remove(spte, rmap_head);
 }
@@ -1916,10 +1916,10 @@ static inline void kvm_mod_used_mmu_pages(struct kvm *kvm, int nr)
 
 static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 {
-	MMU_WARN_ON(!is_empty_shadow_page(sp->spt));
+	MMU_WARN_ON(!is_empty_shadow_page(kvm_get_spt(sp)));
 	hlist_del(&sp->hash_link);
 	list_del(&sp->link);
-	free_page((unsigned long)sp->spt);
+	free_page((unsigned long)kvm_get_spt(sp));
 	if (!sp->role.direct)
 		free_page((unsigned long)sp->gfns);
 	kmem_cache_free(mmu_page_header_cache, sp);
@@ -1957,10 +1957,10 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	struct kvm_mmu_page *sp;
 
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
-	sp->spt = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+	kvm_get_spt(sp) = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
 	if (!direct)
 		sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
-	set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
+	set_page_private(virt_to_page(kvm_get_spt(sp)), (unsigned long)sp);
 
 	/*
 	 * The active_mmu_pages list is the FIFO list, do not move the
@@ -1989,7 +1989,7 @@ static void mark_unsync(u64 *spte)
 	unsigned int index;
 
 	sp = page_header(__pa(spte));
-	index = spte - sp->spt;
+	index = spte - kvm_get_spt(sp);
 	if (__test_and_set_bit(index, sp->unsync_child_bitmap))
 		return;
 	if (sp->unsync_children++)
@@ -2054,7 +2054,7 @@ static int __mmu_unsync_walk(struct kvm_mmu_page *sp,
 
 	for_each_set_bit(i, sp->unsync_child_bitmap, 512) {
 		struct kvm_mmu_page *child;
-		u64 ent = sp->spt[i];
+		u64 ent = kvm_get_spt(sp)[i];
 
 		if (!is_shadow_present_pte(ent) || is_large_pte(ent)) {
 			clear_unsync_child_bit(sp, i);
@@ -2399,7 +2399,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
-	clear_page(sp->spt);
+	clear_page(kvm_get_spt(sp));
 	trace_kvm_mmu_get_page(sp, true);
 
 	kvm_mmu_flush_or_zap(vcpu, &invalid_list, false, flush);
@@ -2465,7 +2465,7 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 
 	BUILD_BUG_ON(VMX_EPT_WRITABLE_MASK != PT_WRITABLE_MASK);
 
-	spte = __pa(sp->spt) | shadow_present_mask | PT_WRITABLE_MASK |
+	spte = __pa(kvm_get_spt(sp)) | shadow_present_mask | PT_WRITABLE_MASK |
 	       shadow_user_mask | shadow_x_mask | shadow_me_mask;
 
 	if (sp_ad_disabled(sp))
@@ -2534,7 +2534,7 @@ static void kvm_mmu_page_unlink_children(struct kvm *kvm,
 	unsigned i;
 
 	for (i = 0; i < PT64_ENT_PER_PAGE; ++i)
-		mmu_page_zap_pte(kvm, sp, sp->spt + i);
+		mmu_page_zap_pte(kvm, sp, kvm_get_spt(sp) + i);
 }
 
 static void kvm_mmu_unlink_parents(struct kvm *kvm, struct kvm_mmu_page *sp)
@@ -2924,7 +2924,7 @@ static int direct_pte_prefetch_many(struct kvm_vcpu *vcpu,
 	int i, ret;
 	gfn_t gfn;
 
-	gfn = kvm_mmu_page_get_gfn(sp, start - sp->spt);
+	gfn = kvm_mmu_page_get_gfn(sp, start - kvm_get_spt(sp));
 	slot = gfn_to_memslot_dirty_bitmap(vcpu, gfn, access & ACC_WRITE_MASK);
 	if (!slot)
 		return -1;
@@ -2948,8 +2948,8 @@ static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
 
 	WARN_ON(!sp->role.direct);
 
-	i = (sptep - sp->spt) & ~(PTE_PREFETCH_NUM - 1);
-	spte = sp->spt + i;
+	i = (sptep - kvm_get_spt(sp)) & ~(PTE_PREFETCH_NUM - 1);
+	spte = kvm_get_spt(sp) + i;
 
 	for (i = 0; i < PTE_PREFETCH_NUM; i++, spte++) {
 		if (is_shadow_present_pte(*spte) || spte == sptep) {
@@ -3172,7 +3172,7 @@ fast_pf_fix_direct_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 		 * The gfn of direct spte is stable since it is
 		 * calculated by sp->gfn.
 		 */
-		gfn = kvm_mmu_page_get_gfn(sp, sptep - sp->spt);
+		gfn = kvm_mmu_page_get_gfn(sp, sptep - kvm_get_spt(sp));
 		kvm_vcpu_mark_page_dirty(vcpu, gfn);
 	}
 
@@ -3431,7 +3431,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-		vcpu->arch.mmu.root_hpa = __pa(sp->spt);
+		vcpu->arch.mmu.root_hpa = __pa(kvm_get_spt(sp));
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
@@ -3444,7 +3444,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 			}
 			sp = kvm_mmu_get_page(vcpu, i << (30 - PAGE_SHIFT),
 					i << 30, PT32_ROOT_LEVEL, 1, ACC_ALL);
-			root = __pa(sp->spt);
+			root = __pa(kvm_get_spt(sp));
 			++sp->root_count;
 			spin_unlock(&vcpu->kvm->mmu_lock);
 			vcpu->arch.mmu.pae_root[i] = root | PT_PRESENT_MASK;
@@ -3484,7 +3484,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		}
 		sp = kvm_mmu_get_page(vcpu, root_gfn, 0,
 				vcpu->arch.mmu.shadow_root_level, 0, ACC_ALL);
-		root = __pa(sp->spt);
+		root = __pa(kvm_get_spt(sp));
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		vcpu->arch.mmu.root_hpa = root;
@@ -3521,7 +3521,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		}
 		sp = kvm_mmu_get_page(vcpu, root_gfn, i << 30, PT32_ROOT_LEVEL,
 				      0, ACC_ALL);
-		root = __pa(sp->spt);
+		root = __pa(kvm_get_spt(sp));
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
 
@@ -4818,7 +4818,7 @@ static u64 *get_written_sptes(struct kvm_mmu_page *sp, gpa_t gpa, int *nspte)
 			return NULL;
 	}
 
-	spte = &sp->spt[page_offset / sizeof(*spte)];
+	spte = &kvm_get_spt(sp)[page_offset / sizeof(*spte)];
 	return spte;
 }
 

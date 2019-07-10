@@ -5,6 +5,7 @@
  *
  * Copyright (C) 2006 Qumranet, Inc.
  * Copyright 2010 Red Hat, Inc. and/or its affiliates.
+ * Copyright (C) 2019-2020 VMware, Inc.
  *
  * Authors:
  *   Yaniv Kamay  <yaniv@qumranet.com>
@@ -15,6 +16,7 @@
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
  *
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/ratelimit.h>
@@ -40,7 +42,7 @@ static void __mmu_spte_walk(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	int i;
 
 	for (i = 0; i < PT64_ENT_PER_PAGE; ++i) {
-		u64 *ent = sp->spt;
+		u64 *ent = kvm_get_spt(sp);
 
 		fn(vcpu, ent + i, level);
 
@@ -113,7 +115,7 @@ static void audit_mappings(struct kvm_vcpu *vcpu, u64 *sptep, int level)
 	if (!is_shadow_present_pte(*sptep) || !is_last_spte(*sptep, level))
 		return;
 
-	gfn = kvm_mmu_page_get_gfn(sp, sptep - sp->spt);
+	gfn = kvm_mmu_page_get_gfn(sp, sptep - kvm_get_spt(sp));
 	pfn = kvm_vcpu_gfn_to_pfn_atomic(vcpu, gfn);
 
 	if (is_error_pfn(pfn))
@@ -136,7 +138,7 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 	gfn_t gfn;
 
 	rev_sp = page_header(__pa(sptep));
-	gfn = kvm_mmu_page_get_gfn(rev_sp, sptep - rev_sp->spt);
+	gfn = kvm_mmu_page_get_gfn(rev_sp, sptep - kvm_get_spt(rev_sp));
 
 	slots = kvm_memslots_for_spte_role(kvm, rev_sp->role);
 	slot = __gfn_to_memslot(slots, gfn);
@@ -145,7 +147,7 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 			return;
 		audit_printk(kvm, "no memslot for gfn %llx\n", gfn);
 		audit_printk(kvm, "index %ld of sp (gfn=%llx)\n",
-		       (long int)(sptep - rev_sp->spt), rev_sp->gfn);
+		       (long int)(sptep - kvm_get_spt(rev_sp)), rev_sp->gfn);
 		dump_stack();
 		return;
 	}
@@ -183,10 +185,10 @@ static void check_mappings_rmap(struct kvm *kvm, struct kvm_mmu_page *sp)
 		return;
 
 	for (i = 0; i < PT64_ENT_PER_PAGE; ++i) {
-		if (!is_shadow_present_pte(sp->spt[i]))
+		if (!is_shadow_present_pte(kvm_get_spt(sp)[i]))
 			continue;
 
-		inspect_spte_has_rmap(kvm, sp->spt + i);
+		inspect_spte_has_rmap(kvm, kvm_get_spt(sp) + i);
 	}
 }
 

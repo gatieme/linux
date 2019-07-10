@@ -6,6 +6,8 @@
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
  *
+ * Copyright (C) 2019-2020 VMware, Inc.
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #ifndef _ASM_X86_KVM_HOST_H
@@ -35,6 +37,14 @@
 #include <asm/asm.h>
 #include <asm/kvm_page_track.h>
 #include <asm/hyperv-tlfs.h>
+
+#define MASTER_EPT_ROOT 0
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+#define kvm_get_spt(sp)         (sp->spt[MASTER_EPT_ROOT])
+#else
+#define kvm_get_spt(sp)         (sp->spt)
+#endif
 
 #define KVM_MAX_VCPUS 288
 #define KVM_SOFT_MAX_VCPUS 240
@@ -284,8 +294,11 @@ struct kvm_mmu_page {
 	 */
 	gfn_t gfn;
 	union kvm_mmu_page_role role;
-
-	u64 *spt;
+#ifdef CONFIG_PGTABLE_REPLICATION
+	u64 *spt[2];
+#else
+        u64 *spt;
+#endif
 	/* hold the gfn of each spte inside spt */
 	gfn_t *gfns;
 	bool unsync;
