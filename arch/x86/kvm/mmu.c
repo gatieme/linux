@@ -310,6 +310,28 @@ static unsigned int kvm_current_mmio_generation(struct kvm_vcpu *vcpu)
 	return kvm_vcpu_memslots(vcpu)->generation & MMIO_GEN_MASK;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
+{
+        u64 spte, addr;
+        struct page *page;
+
+        /* calculate entry (a physical address and necessary flags) */
+        spte = __pa(page_to_virt(virt_to_page(sp->spt[MASTER_EPT_ROOT])->replica));
+        spte |= shadow_present_mask | PT_WRITABLE_MASK |
+                        shadow_user_mask | shadow_x_mask | shadow_me_mask;
+
+        if (sp_ad_disabled(sp))
+                spte |= shadow_acc_track_value;
+        else
+                spte |= shadow_accessed_mask;
+
+        page = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(page) + ((u64) sptep & ~PAGE_MASK);
+        mmu_spte_set((u64 *)addr, spte);
+}
+#endif
+
 static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 			   unsigned access)
 {
@@ -2512,6 +2534,10 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 		spte |= shadow_accessed_mask;
 
 	mmu_spte_set(sptep, spte);
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+        mitosis_link_replica_pages(sp, sptep);
+#endif
 
 	mmu_page_add_parent_pte(vcpu, sp, sptep);
 
