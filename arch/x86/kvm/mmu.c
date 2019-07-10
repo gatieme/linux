@@ -929,7 +929,7 @@ static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
 				   pte_list_desc_cache, 8 + PTE_PREFETCH_NUM);
 	if (r)
 		goto out;
-	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 8);
+	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 2 * 8);
 	if (r)
 		goto out;
 	r = mmu_topup_memory_cache(&vcpu->arch.mmu_page_header_cache,
@@ -1916,10 +1916,15 @@ static inline void kvm_mod_used_mmu_pages(struct kvm *kvm, int nr)
 
 static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 {
+        int i;
+
 	MMU_WARN_ON(!is_empty_shadow_page(kvm_get_spt(sp)));
 	hlist_del(&sp->hash_link);
 	list_del(&sp->link);
-	free_page((unsigned long)kvm_get_spt(sp));
+
+        for (i = 0; i < 2; i++)
+                free_page((unsigned long)sp->spt[i]);
+
 	if (!sp->role.direct)
 		free_page((unsigned long)sp->gfns);
 	kmem_cache_free(mmu_page_header_cache, sp);
@@ -1952,6 +1957,35 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 	mmu_spte_clear_no_track(parent_pte);
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
+{
+        int i;
+        struct kvm_mmu_page *sp;
+
+        sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
+        for (i = 0; i < 2; i++)
+            sp->spt[i]= mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+
+        if (!direct)
+            sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+
+        for (i = 0; i < 2; i++)
+            set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
+
+        virt_to_page(sp->spt[0])->replica = virt_to_page(sp->spt[1]);
+        virt_to_page(sp->spt[1])->replica = virt_to_page(sp->spt[0]);
+
+        /*
+         * The active_mmu_pages list is the FIFO list, do not move the
+         * page until it is zapped. kvm_zap_obsolete_pages depends on
+         * this feature. See the comments in kvm_zap_obsolete_pages().
+         */
+        list_add(&sp->link, &vcpu->kvm->arch.active_mmu_pages);
+        kvm_mod_used_mmu_pages(vcpu->kvm, +1);
+        return sp;
+}
+#else
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
 	struct kvm_mmu_page *sp;
@@ -1971,6 +2005,7 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
 	return sp;
 }
+#endif
 
 static void mark_unsync(u64 *spte);
 static void kvm_mmu_mark_parents_unsync(struct kvm_mmu_page *sp)
@@ -2330,7 +2365,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	struct kvm_mmu_page *sp;
 	bool need_sync = false;
 	bool flush = false;
-	int collisions = 0;
+	int i, collisions = 0;
 	LIST_HEAD(invalid_list);
 
 	role = vcpu->arch.mmu.base_role;
@@ -2399,7 +2434,10 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
-	clear_page(kvm_get_spt(sp));
+
+        for (i = 0; i < 2; i ++)
+                clear_page(sp->spt[i]);
+
 	trace_kvm_mmu_get_page(sp, true);
 
 	kvm_mmu_flush_or_zap(vcpu, &invalid_list, false, flush);
