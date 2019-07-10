@@ -2999,7 +2999,9 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 			emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
 					       write, level, gfn, pfn, prefault,
 					       map_writable);
+#if 0
 			direct_pte_prefetch(vcpu, iterator.sptep);
+#endif
 			++vcpu->stat.pf_fixed;
 			break;
 		}
@@ -3328,8 +3330,10 @@ static int nonpaging_map(struct kvm_vcpu *vcpu, gva_t v, u32 error_code,
 		gfn &= ~(KVM_PAGES_PER_HPAGE(level) - 1);
 	}
 
+#if 0
 	if (fast_page_fault(vcpu, v, level, error_code))
 		return RET_PF_RETRY;
+#endif
 
 	mmu_seq = vcpu->kvm->mmu_notifier_seq;
 	smp_rmb();
