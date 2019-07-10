@@ -1525,6 +1525,70 @@ static bool wrprot_ad_disabled_spte(u64 *sptep)
 	return was_writable;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static bool mitosis_clear_replicas_dirty(u64 *sptep)
+{
+        u64 value, addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+        value &= ~shadow_dirty_mask;
+        return mmu_spte_update((u64 *)addr, value);
+}
+
+static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep)
+{
+        bool was_writable;
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+        was_writable = test_and_clear_bit(PT_WRITABLE_SHIFT,
+                                               (unsigned long *)addr);
+        if (was_writable)
+                kvm_set_pfn_dirty(spte_to_pfn(value));
+
+        return was_writable;
+}
+
+static bool mitosis_set_replicas_dirty(u64 *sptep)
+{
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+
+        value = *((u64 *)addr);
+        value |= shadow_dirty_mask;
+        return mmu_spte_update((u64 *)addr, value);
+}
+
+static bool __rmap_clear_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
+{
+	u64 *sptep;
+	struct rmap_iterator iter;
+	bool flush = false;
+
+	for_each_rmap_spte(rmap_head, &iter, sptep)
+		if (spte_ad_enabled(*sptep)) {
+                        flush |= spte_clear_dirty(sptep);
+                        flush |= mitosis_clear_replicas_dirty(sptep);
+                }
+		else {
+                        flush |= wrprot_ad_disabled_spte(sptep);
+                        flush |= mitosis_wrprot_ad_disabled_replicas(sptep);
+                }
+
+	return flush;
+}
+#else
 /*
  * Gets the GFN ready for another round of dirty logging by clearing the
  *	- D bit on ad-enabled SPTEs, and
@@ -1545,16 +1609,22 @@ static bool __rmap_clear_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
 
 	return flush;
 }
+#endif
 
 static bool spte_set_dirty(u64 *sptep)
 {
-	u64 spte = *sptep;
+        bool flush = false;
+        u64 spte = *sptep;
 
-	rmap_printk("rmap_set_dirty: spte %p %llx\n", sptep, *sptep);
+        rmap_printk("rmap_set_dirty: spte %p %llx\n", sptep, *sptep);
 
-	spte |= shadow_dirty_mask;
+        spte |= shadow_dirty_mask;
 
-	return mmu_spte_update(sptep, spte);
+        flush = mmu_spte_update(sptep, spte);
+#ifdef CONFIG_PGTABLE_REPLICATION
+        flush |= mitosis_set_replicas_dirty(sptep);
+#endif
+        return flush;
 }
 
 static bool __rmap_set_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
