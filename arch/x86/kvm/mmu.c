@@ -330,6 +330,16 @@ static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
         addr = (u64) page_to_virt(page) + ((u64) sptep & ~PAGE_MASK);
         mmu_spte_set((u64 *)addr, spte);
 }
+
+static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask)
+{
+        u64 addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        mmu_spte_set((u64 *)addr, mask);
+}
 #endif
 
 static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
@@ -343,6 +353,9 @@ static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 
 	trace_mark_mmio_spte(sptep, gfn, access, gen);
 	mmu_spte_set(sptep, mask);
+#ifdef CONFIG_PGTABLE_REPLICATION
+        mitosis_mark_mmio_replicas(sptep, mask);
+#endif
 }
 
 static bool is_mmio_spte(u64 spte)
