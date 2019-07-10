@@ -876,6 +876,57 @@ static u64 restore_acc_track_spte(u64 spte)
 	return new_spte;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void mitosis_age_replicas(u64 *sptep)
+{
+        u64 addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        clear_bit((ffs(shadow_accessed_mask) - 1), (unsigned long *)addr);
+}
+
+static void mitosis_age_ad_replicas(u64 *sptep)
+{
+        u64 addr, value;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = mmu_spte_get_lockless((u64 *) addr);
+        value = mark_spte_for_access_track(value);
+        mmu_spte_update_no_track((u64 *)addr, value);
+}
+
+/* Returns the Accessed status of the PTE and resets it at the same time. */
+static bool mmu_spte_age(u64 *sptep)
+{
+	u64 spte = mmu_spte_get_lockless(sptep);
+
+	if (!is_accessed_spte(spte))
+		return false;
+
+	if (spte_ad_enabled(spte)) {
+                mitosis_age_replicas(sptep);
+		clear_bit((ffs(shadow_accessed_mask) - 1),
+			  (unsigned long *)sptep);
+	} else {
+		/*
+		 * Capture the dirty status of the page, so that it doesn't get
+		 * lost when the SPTE is marked for access tracking.
+		 */
+		if (is_writable_pte(spte))
+			kvm_set_pfn_dirty(spte_to_pfn(spte));
+
+                mitosis_age_ad_replicas(sptep);
+		spte = mark_spte_for_access_track(spte);
+		mmu_spte_update_no_track(sptep, spte);
+	}
+
+	return true;
+}
+#else
 /* Returns the Accessed status of the PTE and resets it at the same time. */
 static bool mmu_spte_age(u64 *sptep)
 {
@@ -901,6 +952,7 @@ static bool mmu_spte_age(u64 *sptep)
 
 	return true;
 }
+#endif
 
 static void walk_shadow_page_lockless_begin(struct kvm_vcpu *vcpu)
 {
