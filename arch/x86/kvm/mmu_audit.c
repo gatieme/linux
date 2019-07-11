@@ -42,7 +42,7 @@ static void __mmu_spte_walk(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	int i;
 
 	for (i = 0; i < PT64_ENT_PER_PAGE; ++i) {
-		u64 *ent = kvm_get_spt(sp);
+		u64 *ent = KVM_SPT(sp);
 
 		fn(vcpu, ent + i, level);
 
@@ -61,11 +61,11 @@ static void mmu_spte_walk(struct kvm_vcpu *vcpu, inspect_spte_fn fn)
 	int i;
 	struct kvm_mmu_page *sp;
 
-	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
+	if (!VALID_PAGE(KVM_VCPU_ROOT_HPA(vcpu)))
 		return;
 
 	if (vcpu->arch.mmu.root_level >= PT64_ROOT_4LEVEL) {
-		hpa_t root = vcpu->arch.mmu.root_hpa;
+		hpa_t root = KVM_VCPU_ROOT_HPA(vcpu);
 
 		sp = page_header(root);
 		__mmu_spte_walk(vcpu, sp, fn, vcpu->arch.mmu.root_level);
@@ -115,7 +115,7 @@ static void audit_mappings(struct kvm_vcpu *vcpu, u64 *sptep, int level)
 	if (!is_shadow_present_pte(*sptep) || !is_last_spte(*sptep, level))
 		return;
 
-	gfn = kvm_mmu_page_get_gfn(sp, sptep - kvm_get_spt(sp));
+	gfn = kvm_mmu_page_get_gfn(sp, sptep - KVM_SPT(sp));
 	pfn = kvm_vcpu_gfn_to_pfn_atomic(vcpu, gfn);
 
 	if (is_error_pfn(pfn))
@@ -138,7 +138,7 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 	gfn_t gfn;
 
 	rev_sp = page_header(__pa(sptep));
-	gfn = kvm_mmu_page_get_gfn(rev_sp, sptep - kvm_get_spt(rev_sp));
+	gfn = kvm_mmu_page_get_gfn(rev_sp, sptep - KVM_SPT(rev_sp));
 
 	slots = kvm_memslots_for_spte_role(kvm, rev_sp->role);
 	slot = __gfn_to_memslot(slots, gfn);
@@ -147,7 +147,7 @@ static void inspect_spte_has_rmap(struct kvm *kvm, u64 *sptep)
 			return;
 		audit_printk(kvm, "no memslot for gfn %llx\n", gfn);
 		audit_printk(kvm, "index %ld of sp (gfn=%llx)\n",
-		       (long int)(sptep - kvm_get_spt(rev_sp)), rev_sp->gfn);
+		       (long int)(sptep - KVM_SPT(rev_sp)), rev_sp->gfn);
 		dump_stack();
 		return;
 	}
@@ -185,10 +185,10 @@ static void check_mappings_rmap(struct kvm *kvm, struct kvm_mmu_page *sp)
 		return;
 
 	for (i = 0; i < PT64_ENT_PER_PAGE; ++i) {
-		if (!is_shadow_present_pte(kvm_get_spt(sp)[i]))
+		if (!is_shadow_present_pte(KVM_SPT(sp)[i]))
 			continue;
 
-		inspect_spte_has_rmap(kvm, kvm_get_spt(sp) + i);
+		inspect_spte_has_rmap(kvm, KVM_SPT(sp) + i);
 	}
 }
 

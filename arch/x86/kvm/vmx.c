@@ -6,7 +6,8 @@
  *
  * Copyright (C) 2006 Qumranet, Inc.
  * Copyright 2010 Red Hat, Inc. and/or its affiliates.
- *
+ * Copyright (C) 2019-2020 VMware, Inc.
+
  * Authors:
  *   Avi Kivity   <avi@qumranet.com>
  *   Yaniv Kamay  <yaniv@qumranet.com>
@@ -14,6 +15,7 @@
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
  *
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include "irq.h"
@@ -4536,7 +4538,7 @@ static inline void __vmx_flush_tlb(struct kvm_vcpu *vcpu, int vpid,
 	if (enable_ept && (invalidate_gpa || !enable_vpid)) {
 		if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 			return;
-		ept_sync_context(construct_eptp(vcpu, vcpu->arch.mmu.root_hpa));
+		ept_sync_context(construct_eptp(vcpu, KVM_VCPU_ROOT_HPA(vcpu)));
 	} else {
 		vpid_sync_context(vpid);
 	}

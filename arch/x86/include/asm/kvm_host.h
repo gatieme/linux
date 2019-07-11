@@ -40,10 +40,13 @@
 
 #define MASTER_EPT_ROOT 0
 
+/* select pointers based on whether page table replication is configured */
 #ifdef CONFIG_PGTABLE_REPLICATION
-#define kvm_get_spt(sp)         (sp->spt[MASTER_EPT_ROOT])
+#define KVM_SPT(sp)         (sp->spt[MASTER_EPT_ROOT])
+#define KVM_VCPU_ROOT_HPA(vcpu) (vcpu->arch.mmu.master_root_hpa)
 #else
-#define kvm_get_spt(sp)         (sp->spt)
+#define KVM_SPT(sp)         (sp->spt)
+#define KVM_VCPU_ROOT_HPA(vcpu) (vcpu->arch.mmu.root_hpa)
 #endif
 
 #define KVM_MAX_VCPUS 288
@@ -360,6 +363,7 @@ struct kvm_mmu {
 	void (*update_pte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 			   u64 *spte, const void *pte);
 	hpa_t root_hpa;
+        hpa_t master_root_hpa;
 	union kvm_mmu_page_role base_role;
 	u8 root_level;
 	u8 shadow_root_level;

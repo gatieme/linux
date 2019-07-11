@@ -574,8 +574,8 @@ static void FNAME(pte_prefetch)(struct kvm_vcpu *vcpu, struct guest_walker *gw,
 	if (sp->role.direct)
 		return __direct_pte_prefetch(vcpu, sp, sptep);
 
-	i = (sptep - kvm_get_spt(sp)) & ~(PTE_PREFETCH_NUM - 1);
-	spte = kvm_get_spt(sp) + i;
+	i = (sptep - KVM_SPT(sp)) & ~(PTE_PREFETCH_NUM - 1);
+	spte = KVM_SPT(sp) + i;
 
 	for (i = 0; i < PTE_PREFETCH_NUM; i++, spte++) {
 		if (spte == sptep)
@@ -892,7 +892,7 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva)
 				break;
 
 			pte_gpa = FNAME(get_level1_sp_gpa)(sp);
-			pte_gpa += (sptep - kvm_get_spt(sp)) * sizeof(pt_element_t);
+			pte_gpa += (sptep - KVM_SPT(sp)) * sizeof(pt_element_t);
 
 			if (mmu_page_zap_pte(vcpu->kvm, sp, sptep))
 				kvm_flush_remote_tlbs(vcpu->kvm);
@@ -982,7 +982,7 @@ static int FNAME(sync_page)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp)
 		gpa_t pte_gpa;
 		gfn_t gfn;
 
-		if (!kvm_get_spt(sp)[i])
+		if (!KVM_SPT(sp)[i])
 			continue;
 
 		pte_gpa = first_pte_gpa + i * sizeof(pt_element_t);
@@ -991,7 +991,7 @@ static int FNAME(sync_page)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp)
 					       sizeof(pt_element_t)))
 			return 0;
 
-		if (FNAME(prefetch_invalid_gpte)(vcpu, sp, &kvm_get_spt(sp)[i], gpte)) {
+		if (FNAME(prefetch_invalid_gpte)(vcpu, sp, &KVM_SPT(sp)[i], gpte)) {
 			/*
 			 * Update spte before increasing tlbs_dirty to make
 			 * sure no tlb flush is lost after spte is zapped; see
@@ -1007,12 +1007,12 @@ static int FNAME(sync_page)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp)
 		pte_access &= FNAME(gpte_access)(vcpu, gpte);
 		FNAME(protect_clean_gpte)(&vcpu->arch.mmu, &pte_access, gpte);
 
-		if (sync_mmio_spte(vcpu, &kvm_get_spt(sp)[i], gfn, pte_access,
+		if (sync_mmio_spte(vcpu, &KVM_SPT(sp)[i], gfn, pte_access,
 		      &nr_present))
 			continue;
 
 		if (gfn != sp->gfns[i]) {
-			drop_spte(vcpu->kvm, &kvm_get_spt(sp)[i]);
+			drop_spte(vcpu->kvm, &KVM_SPT(sp)[i]);
 			/*
 			 * The same as above where we are doing
 			 * prefetch_invalid_gpte().
@@ -1024,11 +1024,11 @@ static int FNAME(sync_page)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp)
 
 		nr_present++;
 
-		host_writable = kvm_get_spt(sp)[i] & SPTE_HOST_WRITEABLE;
+		host_writable = KVM_SPT(sp)[i] & SPTE_HOST_WRITEABLE;
 
-		set_spte(vcpu, &kvm_get_spt(sp)[i], pte_access,
+		set_spte(vcpu, &KVM_SPT(sp)[i], pte_access,
 			 PT_PAGE_TABLE_LEVEL, gfn,
-			 spte_to_pfn(kvm_get_spt(sp)[i]), true, false,
+			 spte_to_pfn(KVM_SPT(sp)[i]), true, false,
 			 host_writable);
 	}
 
