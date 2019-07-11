@@ -3728,6 +3728,11 @@ static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 	return ret;
 }
 
+/*
+ * Map all cpus from an even node id to index 0 and all cpus from
+ * odd node ids to index 1.
+ */
+#define VCPU_ROOT_IDX(vcpu)     (numa_cpu_node(vcpu->cpu) % 2)
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
@@ -3743,9 +3748,11 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-		vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp));
 #ifdef CONFIG_PGTABLE_REPLICATION
+		vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_ROOT_IDX(vcpu)]);
                 vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
+#else
+                vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp))
 #endif
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
