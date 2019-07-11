@@ -3088,8 +3088,15 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 		 */
 		if (!vcpu->kvm->arch.use_master_clock || vcpu->cpu == -1)
 			kvm_make_request(KVM_REQ_GLOBAL_CLOCK_UPDATE, vcpu);
-		if (vcpu->cpu != cpu)
+		if (vcpu->cpu != cpu) {
 			kvm_make_request(KVM_REQ_MIGRATE_TIMER, vcpu);
+                        if (numa_cpu_node(vcpu->cpu) != numa_cpu_node(cpu)) {
+                                vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+#ifdef CONFIG_PGTABLE_REPLICATON
+                                vcpu->arch.mmu.master_root_hpa = INVALID_PAGE;
+#endif
+                        }
+                }
 		vcpu->cpu = cpu;
 	}
 

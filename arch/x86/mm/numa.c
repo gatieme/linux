@@ -1,4 +1,8 @@
-/* Common code for 32 and 64-bit NUMA */
+/* Common code for 32 and 64-bit NUMA 
+ * 
+ * Copyright (C) 2019-2020 VMware, Inc.
+ * SPDX-License-Identifier: GPL-2.0
+ */
 #include <linux/acpi.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -67,6 +71,7 @@ int numa_cpu_node(int cpu)
 		return __apicid_to_node[apicid];
 	return NUMA_NO_NODE;
 }
+EXPORT_SYMBOL(numa_cpu_node);
 
 cpumask_var_t node_to_cpumask_map[MAX_NUMNODES];
 EXPORT_SYMBOL(node_to_cpumask_map);

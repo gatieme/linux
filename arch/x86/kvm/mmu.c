@@ -230,6 +230,21 @@ static const u64 shadow_acc_track_saved_bits_shift = PT64_SECOND_AVAIL_BITS_SHIF
 static void mmu_spte_set(u64 *sptep, u64 spte);
 static void mmu_free_roots(struct kvm_vcpu *vcpu);
 
+/*
+ * Core APIs for EPT replication.
+ */
+static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep);
+static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask);
+static void mitosis_set_replicas(u64 *sptep, u64 new_spte);
+static void mitosis_drop_replica_entries(u64 *sptep);
+static void mitosis_age_replicas(u64 *sptep);
+static void mitosis_age_ad_replicas(u64 *sptep);
+static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect);
+static bool mitosis_clear_replicas_dirty(u64 *sptep);
+static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep);
+static bool mitosis_set_replicas_dirty(u64 *sptep);
+static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte);
+
 void kvm_mmu_set_mmio_spte_mask(u64 mmio_mask, u64 mmio_value)
 {
 	BUG_ON((mmio_mask & mmio_value) != mmio_value);
@@ -310,48 +325,6 @@ static unsigned int kvm_current_mmio_generation(struct kvm_vcpu *vcpu)
 	return kvm_vcpu_memslots(vcpu)->generation & MMIO_GEN_MASK;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
-{
-        u64 spte, addr;
-        struct page *page;
-
-        /* calculate entry (a physical address and necessary flags) */
-        spte = __pa(page_to_virt(virt_to_page(sp->spt[MASTER_EPT_ROOT])->replica));
-        spte |= shadow_present_mask | PT_WRITABLE_MASK |
-                        shadow_user_mask | shadow_x_mask | shadow_me_mask;
-
-        if (sp_ad_disabled(sp))
-                spte |= shadow_acc_track_value;
-        else
-                spte |= shadow_accessed_mask;
-
-        page = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(page) + ((u64) sptep & ~PAGE_MASK);
-        mmu_spte_set((u64 *)addr, spte);
-}
-
-static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask)
-{
-        u64 addr;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        mmu_spte_set((u64 *)addr, mask);
-}
-
-static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
-{
-        u64 addr;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        mmu_spte_set((u64 *)addr, new_spte);
-}
-#endif
-
 static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 			   unsigned access)
 {
@@ -363,9 +336,8 @@ static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 
 	trace_mark_mmio_spte(sptep, gfn, access, gen);
 	mmu_spte_set(sptep, mask);
-#ifdef CONFIG_PGTABLE_REPLICATION
         mitosis_mark_mmio_replicas(sptep, mask);
-#endif
+        //trace_printk("check\n");
 }
 
 static bool is_mmio_spte(u64 spte)
@@ -756,22 +728,6 @@ static bool mmu_spte_update(u64 *sptep, u64 new_spte)
 	return flush;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static void mitosis_drop_replica_entries(u64 *sptep)
-{
-        struct page *replica;
-        u64 entry, addr;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        entry = *((u64 *)addr);
-        if (!spte_has_volatile_bits(entry))
-                __update_clear_spte_fast((u64 *)addr, 0ull);
-        else
-                __update_clear_spte_slow((u64 *)addr, 0ull);
-}
-#endif
-
 /*
  * Rules for using mmu_spte_clear_track_bits:
  * It sets the sptep from present to nonpresent, and track the
@@ -783,9 +739,7 @@ static int mmu_spte_clear_track_bits(u64 *sptep)
 	kvm_pfn_t pfn;
 	u64 old_spte = *sptep;
 
-#ifdef CONFIG_PGTABLE_REPLICATION
         mitosis_drop_replica_entries(sptep);
-#endif
 	if (!spte_has_volatile_bits(old_spte))
 		__update_clear_spte_fast(sptep, 0ull);
 	else
@@ -819,9 +773,7 @@ static int mmu_spte_clear_track_bits(u64 *sptep)
  */
 static void mmu_spte_clear_no_track(u64 *sptep)
 {
-#ifdef CONFIG_PGTABLE_REPLICATION
         mitosis_drop_replica_entries(sptep);
-#endif
 	__update_clear_spte_fast(sptep, 0ull);
 }
 
@@ -876,29 +828,6 @@ static u64 restore_acc_track_spte(u64 spte)
 	return new_spte;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static void mitosis_age_replicas(u64 *sptep)
-{
-        u64 addr;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        clear_bit((ffs(shadow_accessed_mask) - 1), (unsigned long *)addr);
-}
-
-static void mitosis_age_ad_replicas(u64 *sptep)
-{
-        u64 addr, value;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        value = mmu_spte_get_lockless((u64 *) addr);
-        value = mark_spte_for_access_track(value);
-        mmu_spte_update_no_track((u64 *)addr, value);
-}
-
 /* Returns the Accessed status of the PTE and resets it at the same time. */
 static bool mmu_spte_age(u64 *sptep)
 {
@@ -926,33 +855,6 @@ static bool mmu_spte_age(u64 *sptep)
 
 	return true;
 }
-#else
-/* Returns the Accessed status of the PTE and resets it at the same time. */
-static bool mmu_spte_age(u64 *sptep)
-{
-	u64 spte = mmu_spte_get_lockless(sptep);
-
-	if (!is_accessed_spte(spte))
-		return false;
-
-	if (spte_ad_enabled(spte)) {
-		clear_bit((ffs(shadow_accessed_mask) - 1),
-			  (unsigned long *)sptep);
-	} else {
-		/*
-		 * Capture the dirty status of the page, so that it doesn't get
-		 * lost when the SPTE is marked for access tracking.
-		 */
-		if (is_writable_pte(spte))
-			kvm_set_pfn_dirty(spte_to_pfn(spte));
-
-		spte = mark_spte_for_access_track(spte);
-		mmu_spte_update_no_track(sptep, spte);
-	}
-
-	return true;
-}
-#endif
 
 static void walk_shadow_page_lockless_begin(struct kvm_vcpu *vcpu)
 {
@@ -1009,7 +911,7 @@ static void mmu_free_memory_cache(struct kvm_mmu_memory_cache *mc,
 }
 
 static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
-				       int min)
+				        int min)
 {
 	void *addr;
 
@@ -1028,6 +930,7 @@ static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
                     page = __alloc_pages_nodemask(GFP_KERNEL, 0, ept_alloc_nodemask, &nm);
                     if (!page)
                         return -ENOMEM;
+                    BUG_ON(page_to_nid(page) != ept_alloc_nodemask);
                     cache->objects[cache->nobjs++] = (void *)page_address(page);
                 }
 	}
@@ -1048,7 +951,7 @@ static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
 				   pte_list_desc_cache, 8 + PTE_PREFETCH_NUM);
 	if (r)
 		goto out;
-	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 2 * 8);
+	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 16);
 	if (r)
 		goto out;
 	r = mmu_topup_memory_cache(&vcpu->arch.mmu_page_header_cache,
@@ -1067,6 +970,15 @@ static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
 }
 
 static void *mmu_memory_cache_alloc(struct kvm_mmu_memory_cache *mc)
+{
+	void *p;
+
+	BUG_ON(!mc->nobjs);
+	p = mc->objects[--mc->nobjs];
+	return p;
+}
+
+static void *mmu_memory_page_cache_alloc(struct kvm_mmu_memory_cache *mc)
 {
 	void *p;
 
@@ -1097,8 +1009,10 @@ static void kvm_mmu_page_set_gfn(struct kvm_mmu_page *sp, int index, gfn_t gfn)
 {
 	if (sp->role.direct)
 		BUG_ON(gfn != kvm_mmu_page_get_gfn(sp, index));
-	else
+	else {
+                trace_printk("MITOSIS: index: %d gfn: %llu\n", index, gfn);
 		sp->gfns[index] = gfn;
+        }
 }
 
 /*
@@ -1522,29 +1436,6 @@ static void drop_large_spte(struct kvm_vcpu *vcpu, u64 *sptep)
 		kvm_flush_remote_tlbs(vcpu->kvm);
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect)
-{
-        struct page *replica;
-        u64 value, addr;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        value = *((u64 *)addr);
-
-	if (!is_writable_pte(value) &&
-	      !(pt_protect && spte_can_locklessly_be_made_writable(value)))
-		return false;
-
-	if (pt_protect)
-		value &= ~SPTE_MMU_WRITEABLE;
-
-	value = value & ~PT_WRITABLE_MASK;
-
-	return mmu_spte_update((u64 *)addr, value);
-}
-#endif
-
 /*
  * Write-protect on the specified @sptep, @pt_protect indicates whether
  * spte write-protection is caused by protecting shadow page table.
@@ -1585,9 +1476,7 @@ static bool __rmap_write_protect(struct kvm *kvm,
 
 	for_each_rmap_spte(rmap_head, &iter, sptep) {
 		flush |= spte_write_protect(sptep, pt_protect);
-#ifdef CONFIG_PGTABLE_REPLICATION
                 flush |= mitosis_write_protect_replicas(sptep, pt_protect);
-#endif
         }
 
 	return flush;
@@ -1600,7 +1489,6 @@ static bool spte_clear_dirty(u64 *sptep)
 	rmap_printk("rmap_clear_dirty: spte %p %llx\n", sptep, *sptep);
 
 	spte &= ~shadow_dirty_mask;
-
 	return mmu_spte_update(sptep, spte);
 }
 
@@ -1614,70 +1502,6 @@ static bool wrprot_ad_disabled_spte(u64 *sptep)
 	return was_writable;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static bool mitosis_clear_replicas_dirty(u64 *sptep)
-{
-        u64 value, addr;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        value = *((u64 *)addr);
-
-        value &= ~shadow_dirty_mask;
-        return mmu_spte_update((u64 *)addr, value);
-}
-
-static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep)
-{
-        bool was_writable;
-        struct page *replica;
-        u64 value, addr;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        value = *((u64 *)addr);
-
-        was_writable = test_and_clear_bit(PT_WRITABLE_SHIFT,
-                                               (unsigned long *)addr);
-        if (was_writable)
-                kvm_set_pfn_dirty(spte_to_pfn(value));
-
-        return was_writable;
-}
-
-static bool mitosis_set_replicas_dirty(u64 *sptep)
-{
-        struct page *replica;
-        u64 value, addr;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-
-        value = *((u64 *)addr);
-        value |= shadow_dirty_mask;
-        return mmu_spte_update((u64 *)addr, value);
-}
-
-static bool __rmap_clear_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
-{
-	u64 *sptep;
-	struct rmap_iterator iter;
-	bool flush = false;
-
-	for_each_rmap_spte(rmap_head, &iter, sptep)
-		if (spte_ad_enabled(*sptep)) {
-                        flush |= spte_clear_dirty(sptep);
-                        flush |= mitosis_clear_replicas_dirty(sptep);
-                }
-		else {
-                        flush |= wrprot_ad_disabled_spte(sptep);
-                        flush |= mitosis_wrprot_ad_disabled_replicas(sptep);
-                }
-
-	return flush;
-}
-#else
 /*
  * Gets the GFN ready for another round of dirty logging by clearing the
  *	- D bit on ad-enabled SPTEs, and
@@ -1691,29 +1515,25 @@ static bool __rmap_clear_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
 	bool flush = false;
 
 	for_each_rmap_spte(rmap_head, &iter, sptep)
-		if (spte_ad_enabled(*sptep))
+		if (spte_ad_enabled(*sptep)) {
+                        flush |= mitosis_clear_replicas_dirty(sptep);
 			flush |= spte_clear_dirty(sptep);
-		else
+                } else {
+                        flush |= mitosis_wrprot_ad_disabled_replicas(sptep);
 			flush |= wrprot_ad_disabled_spte(sptep);
-
+                }
 	return flush;
 }
-#endif
 
 static bool spte_set_dirty(u64 *sptep)
 {
-        bool flush = false;
-        u64 spte = *sptep;
+	u64 spte = *sptep;
 
-        rmap_printk("rmap_set_dirty: spte %p %llx\n", sptep, *sptep);
+	rmap_printk("rmap_set_dirty: spte %p %llx\n", sptep, *sptep);
 
-        spte |= shadow_dirty_mask;
+	spte |= shadow_dirty_mask;
 
-        flush = mmu_spte_update(sptep, spte);
-#ifdef CONFIG_PGTABLE_REPLICATION
-        flush |= mitosis_set_replicas_dirty(sptep);
-#endif
-        return flush;
+	return mmu_spte_update(sptep, spte);
 }
 
 static bool __rmap_set_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
@@ -1723,9 +1543,10 @@ static bool __rmap_set_dirty(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
 	bool flush = false;
 
 	for_each_rmap_spte(rmap_head, &iter, sptep)
-		if (spte_ad_enabled(*sptep))
+		if (spte_ad_enabled(*sptep)) {
 			flush |= spte_set_dirty(sptep);
-
+			flush |= mitosis_set_replicas_dirty(sptep);
+                }
 	return flush;
 }
 
@@ -1897,10 +1718,10 @@ restart:
 
 			new_spte = mark_spte_for_access_track(new_spte);
 
+                        /* TODO: Check behavior for replication */
+                        printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
 			mmu_spte_clear_track_bits(sptep);
-#ifdef CONFIG_PGTABLE_REPLICATION
                         mitosis_set_replicas(sptep, new_spte);
-#endif
 			mmu_spte_set(sptep, new_spte);
 		}
 	}
@@ -2136,14 +1957,11 @@ static inline void kvm_mod_used_mmu_pages(struct kvm *kvm, int nr)
 static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 {
         int i;
-
 	MMU_WARN_ON(!is_empty_shadow_page(KVM_SPT(sp)));
 	hlist_del(&sp->hash_link);
 	list_del(&sp->link);
-
         for (i = 0; i < 2; i++)
-                free_page((unsigned long)sp->spt[i]);
-
+            free_page((unsigned long)sp->spt[i]);
 	if (!sp->role.direct)
 		free_page((unsigned long)sp->gfns);
 	kmem_cache_free(mmu_page_header_cache, sp);
@@ -2176,44 +1994,24 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 	mmu_spte_clear_no_track(parent_pte);
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
         int i;
-        struct kvm_mmu_page *sp;
+	struct kvm_mmu_page *sp;
 
-        sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
+	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
         for (i = 0; i < 2; i++)
-            sp->spt[i]= mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
-
-        if (!direct)
-            sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
-
-        for (i = 0; i < 2; i++)
-            set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
+            sp->spt[i] = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
 
         virt_to_page(sp->spt[0])->replica = virt_to_page(sp->spt[1]);
         virt_to_page(sp->spt[1])->replica = virt_to_page(sp->spt[0]);
 
-        /*
-         * The active_mmu_pages list is the FIFO list, do not move the
-         * page until it is zapped. kvm_zap_obsolete_pages depends on
-         * this feature. See the comments in kvm_zap_obsolete_pages().
-         */
-        list_add(&sp->link, &vcpu->kvm->arch.active_mmu_pages);
-        kvm_mod_used_mmu_pages(vcpu->kvm, +1);
-        return sp;
-}
-#else
-static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
-{
-	struct kvm_mmu_page *sp;
-
-	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
-	KVM_SPT(sp) = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
-	if (!direct)
-		sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
-	set_page_private(virt_to_page(KVM_SPT(sp)), (unsigned long)sp);
+	if (!direct) {
+                trace_printk("MITOSIS: allocating page for gfn\n");
+		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
+        }
+        for (i = 0; i < 2; i++)
+            set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
 
 	/*
 	 * The active_mmu_pages list is the FIFO list, do not move the
@@ -2224,7 +2022,6 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
 	return sp;
 }
-#endif
 
 static void mark_unsync(u64 *spte);
 static void kvm_mmu_mark_parents_unsync(struct kvm_mmu_page *sp)
@@ -2631,7 +2428,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	}
 
 	++vcpu->kvm->stat.mmu_cache_miss;
-
+        //printk(KERN_INFO"MITOSIS: allocating sp through direct interface\n");
 	sp = kvm_mmu_alloc_page(vcpu, direct);
 
 	sp->gfn = gfn;
@@ -2653,10 +2450,8 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
-
         for (i = 0; i < 2; i++)
-                clear_page(sp->spt[i]);
-
+            clear_page(sp->spt[i]);
 	trace_kvm_mmu_get_page(sp, true);
 
 	kvm_mmu_flush_or_zap(vcpu, &invalid_list, false, flush);
@@ -2715,6 +2510,236 @@ static void shadow_walk_next(struct kvm_shadow_walk_iterator *iterator)
 	__shadow_walk_next(iterator, *iterator->sptep);
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
+{
+        u64 spte, addr;
+        struct page *page;
+
+        /* calculate entry (a physical address and necessary flags) */
+        spte = __pa(page_to_virt(virt_to_page(KVM_SPT(sp))->replica));
+        spte |= shadow_present_mask | PT_WRITABLE_MASK |
+                        shadow_user_mask | shadow_x_mask | shadow_me_mask;
+
+        if (sp_ad_disabled(sp))
+                spte |= shadow_acc_track_value;
+        else
+                spte |= shadow_accessed_mask;
+
+        page = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(page) + ((u64) sptep & ~PAGE_MASK);
+        mmu_spte_set((u64 *)addr, spte);
+}
+
+static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask)
+{
+        u64 addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        mmu_spte_set((u64 *)addr, mask);
+}
+
+static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
+{
+        u64 addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        mmu_spte_set((u64 *)addr, new_spte);
+}
+
+static void mitosis_drop_replica_entries(u64 *sptep)
+{
+        struct page *replica;
+        u64 entry, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        entry = *((u64 *)addr);
+        if (!spte_has_volatile_bits(entry))
+                __update_clear_spte_fast((u64 *)addr, 0ull);
+        else
+                __update_clear_spte_slow((u64 *)addr, 0ull);
+}
+
+static void mitosis_age_replicas(u64 *sptep)
+{
+        u64 addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        clear_bit((ffs(shadow_accessed_mask) - 1), (unsigned long *)addr);
+}
+
+static void mitosis_age_ad_replicas(u64 *sptep)
+{
+        u64 addr, value;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = mmu_spte_get_lockless((u64 *) addr);
+        value = mark_spte_for_access_track(value);
+        mmu_spte_update_no_track((u64 *)addr, value);
+}
+
+static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect)
+{
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+	if (!is_writable_pte(value) &&
+	      !(pt_protect && spte_can_locklessly_be_made_writable(value)))
+		return false;
+
+	if (pt_protect)
+		value &= ~SPTE_MMU_WRITEABLE;
+
+	value = value & ~PT_WRITABLE_MASK;
+
+	return mmu_spte_update((u64 *)addr, value);
+}
+
+static bool mitosis_clear_replicas_dirty(u64 *sptep)
+{
+        u64 value, addr;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+        value &= ~shadow_dirty_mask;
+        return mmu_spte_update((u64 *)addr, value);
+}
+
+static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep)
+{
+        bool was_writable;
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        value = *((u64 *)addr);
+
+        was_writable = test_and_clear_bit(PT_WRITABLE_SHIFT,
+                                               (unsigned long *)addr);
+        if (was_writable)
+                kvm_set_pfn_dirty(spte_to_pfn(value));
+
+        return was_writable;
+}
+
+static bool mitosis_set_replicas_dirty(u64 *sptep)
+{
+        struct page *replica;
+        u64 value, addr;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+
+        value = *((u64 *)addr);
+        value |= shadow_dirty_mask;
+        return mmu_spte_update((u64 *)addr, value);
+}
+
+static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
+{
+        bool flush = false;
+        u64 addr, old_spte;
+        struct page *replica;
+
+        replica = virt_to_page(sptep)->replica;
+        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
+        old_spte = mmu_spte_update_no_track((u64 *)addr, new_spte);
+
+        if (!is_shadow_present_pte(old_spte))
+               return false;
+        /*
+        * For the spte updated out of mmu-lock is safe, since
+        * we always atomically update it, see the comments in
+        * spte_has_volatile_bits().
+        */
+        if (spte_can_locklessly_be_made_writable(old_spte))
+               flush = true;
+
+        /*
+        * Flush TLB when accessed/dirty states are changed in the page tables,
+        * to guarantee consistency between TLB and page tables.
+        */
+
+        if (is_accessed_spte(old_spte)) {
+                flush = true;
+                kvm_set_pfn_accessed(spte_to_pfn(old_spte));
+        }
+
+        if (is_dirty_spte(old_spte)) {
+                flush = true;
+                kvm_set_pfn_dirty(spte_to_pfn(old_spte));
+        }
+
+       return flush;
+}
+#else
+static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
+{
+}
+
+static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask)
+{
+}
+
+static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
+{
+}
+
+static void mitosis_drop_replica_entries(u64 *sptep)
+{
+}
+
+static void mitosis_age_replicas(u64 *sptep)
+{
+}
+
+static void mitosis_age_ad_replicas(u64 *sptep)
+{
+}
+
+static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect)
+{
+        return false;
+}
+
+static bool mitosis_clear_replicas_dirty(u64 *sptep)
+{
+        return false;
+}
+
+static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep)
+{
+        return false
+}
+
+static bool mitosis_set_replicas_dirty(u64 *sptep)
+{
+        return false;
+}
+
+static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
+{
+        return false;
+}
+#endif
+
 static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 			     struct kvm_mmu_page *sp)
 {
@@ -2722,22 +2747,16 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 
 	BUILD_BUG_ON(VMX_EPT_WRITABLE_MASK != PT_WRITABLE_MASK);
 
-	spte = __pa(KVM_SPT(sp)) | shadow_present_mask | PT_WRITABLE_MASK |
-	       shadow_user_mask | shadow_x_mask | shadow_me_mask;
+        spte = __pa(KVM_SPT(sp)) | shadow_present_mask | PT_WRITABLE_MASK |
+               shadow_user_mask | shadow_x_mask | shadow_me_mask;
 
-	if (sp_ad_disabled(sp))
-		spte |= shadow_acc_track_value;
-	else
-		spte |= shadow_accessed_mask;
-
-	mmu_spte_set(sptep, spte);
-
-#ifdef CONFIG_PGTABLE_REPLICATION
+        if (sp_ad_disabled(sp))
+                spte |= shadow_acc_track_value;
+        else
+                spte |= shadow_accessed_mask;
+        mmu_spte_set(sptep, spte);
         mitosis_link_replica_pages(sp, sptep);
-#endif
-
 	mmu_page_add_parent_pte(vcpu, sp, sptep);
-
 	if (sp->unsync_children || sp->unsync)
 		mark_unsync(sptep);
 }
@@ -2841,7 +2860,6 @@ static int kvm_mmu_prepare_zap_page(struct kvm *kvm, struct kvm_mmu_page *sp,
 	ret = mmu_zap_unsync_children(kvm, sp, invalid_list);
 	kvm_mmu_page_unlink_children(kvm, sp);
 	kvm_mmu_unlink_parents(kvm, sp);
-
 	if (!sp->role.invalid && !sp->role.direct)
 		unaccount_shadowed(kvm, sp);
 
@@ -3002,46 +3020,6 @@ static bool kvm_is_mmio_pfn(kvm_pfn_t pfn)
 	return true;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
-{
-        bool flush = false;
-        u64 addr, old_spte;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        old_spte = mmu_spte_update_no_track((u64 *)addr, new_spte);
-
-        if (!is_shadow_present_pte(old_spte))
-               return false;
-        /*
-        * For the spte updated out of mmu-lock is safe, since
-        * we always atomically update it, see the comments in
-        * spte_has_volatile_bits().
-        */
-        if (spte_can_locklessly_be_made_writable(old_spte))
-               flush = true;
-
-        /*
-        * Flush TLB when accessed/dirty states are changed in the page tables,
-        * to guarantee consistency between TLB and page tables.
-        */
-
-        if (is_accessed_spte(old_spte)) {
-                flush = true;
-                kvm_set_pfn_accessed(spte_to_pfn(old_spte));
-        }
-
-        if (is_dirty_spte(old_spte)) {
-                flush = true;
-                kvm_set_pfn_dirty(spte_to_pfn(old_spte));
-        }
-
-       return flush;
-}
-#endif
-
 static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		    unsigned pte_access, int level,
 		    gfn_t gfn, kvm_pfn_t pfn, bool speculative,
@@ -3049,7 +3027,6 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 {
 	u64 spte = 0;
 	int ret = 0;
-        bool flush = false;
 	struct kvm_mmu_page *sp;
 
 	if (set_mmio_spte(vcpu, sptep, gfn, pfn, pte_access))
@@ -3058,7 +3035,6 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 	sp = page_header(__pa(sptep));
 	if (sp_ad_disabled(sp))
 		spte |= shadow_acc_track_value;
-
 	/*
 	 * For the EPT case, shadow_present_mask is 0 if hardware
 	 * supports exec-only page table entries.  In that case,
@@ -3134,11 +3110,10 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		spte = mark_spte_for_access_track(spte);
 
 set_pte:
-	flush = mmu_spte_update(sptep, spte);
-#ifdef CONFIG_PGTABLE_REPLICATION
-        flush |= mitosis_mmu_spte_update_replicas(sptep, spte);
-#endif
-	kvm_flush_remote_tlbs(vcpu->kvm);
+        if (mitosis_mmu_spte_update_replicas(sptep, spte))
+                kvm_flush_remote_tlbs(vcpu->kvm);
+	if (mmu_spte_update(sptep, spte))
+		kvm_flush_remote_tlbs(vcpu->kvm);
 done:
 	return ret;
 }
@@ -3153,7 +3128,6 @@ static int mmu_set_spte(struct kvm_vcpu *vcpu, u64 *sptep, unsigned pte_access,
 
 	pgprintk("%s: spte %llx write_fault %d gfn %llx\n", __func__,
 		 *sptep, write_fault, gfn);
-
 	if (is_shadow_present_pte(*sptep)) {
 		/*
 		 * If we overwrite a PTE page pointer with a 2MB PMD, unlink
@@ -3175,9 +3149,9 @@ static int mmu_set_spte(struct kvm_vcpu *vcpu, u64 *sptep, unsigned pte_access,
 		} else
 			was_rmapped = 1;
 	}
-
 	if (set_spte(vcpu, sptep, pte_access, level, gfn, pfn, speculative,
 	      true, host_writable)) {
+                //trace_printk(KERN_INFO"MITOSIS: unexpected: set_spte returned 1\n");
 		if (write_fault)
 			ret = RET_PF_EMULATE;
 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
@@ -3249,12 +3223,13 @@ static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
 				  struct kvm_mmu_page *sp, u64 *sptep)
 {
 	u64 *spte, *start = NULL;
-	int i;
+	int i, spt_index;
 
 	WARN_ON(!sp->role.direct);
 
-	i = (sptep - KVM_SPT(sp)) & ~(PTE_PREFETCH_NUM - 1);
-	spte = KVM_SPT(sp) + i;
+        spt_index = vcpu->cpu % 2;
+	i = (sptep - sp->spt[spt_index]) & ~(PTE_PREFETCH_NUM - 1);
+	spte = sp->spt[spt_index] + i;
 
 	for (i = 0; i < PTE_PREFETCH_NUM; i++, spte++) {
 		if (is_shadow_present_pte(*spte) || spte == sptep) {
@@ -3299,30 +3274,24 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return 0;
 
-	for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator) {
-		if (iterator.level == level) {
-			emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
-					       write, level, gfn, pfn, prefault,
-					       map_writable);
-#if 0
-			direct_pte_prefetch(vcpu, iterator.sptep);
-#endif
-			++vcpu->stat.pf_fixed;
-			break;
-		}
-
-		drop_large_spte(vcpu, iterator.sptep);
-		if (!is_shadow_present_pte(*iterator.sptep)) {
-			u64 base_addr = iterator.addr;
-
-			base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
-			pseudo_gfn = base_addr >> PAGE_SHIFT;
-			sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
-					      iterator.level - 1, 1, ACC_ALL);
-
-			link_shadow_page(vcpu, iterator.sptep, sp);
-		}
-	}
+            for_each_shadow_entry(vcpu, (u64)gfn << PAGE_SHIFT, iterator) {
+                    if (iterator.level == level) {
+                            emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
+                                    write, level, gfn, pfn, prefault, map_writable);
+                            //direct_pte_prefetch(vcpu, iterator.sptep);
+                            ++vcpu->stat.pf_fixed;
+                            break;
+                    }
+                    drop_large_spte(vcpu, iterator.sptep);
+                    if (!is_shadow_present_pte(*iterator.sptep)) {
+                            u64 base_addr = iterator.addr;
+                            base_addr &= PT64_LVL_ADDR_MASK(iterator.level);
+                            pseudo_gfn = base_addr >> PAGE_SHIFT;
+                            sp = kvm_mmu_get_page(vcpu, pseudo_gfn, iterator.addr,
+                                                  iterator.level - 1, 1, ACC_ALL);
+                            link_shadow_page(vcpu, iterator.sptep, sp);
+                    }
+            }
 	return emulate;
 }
 
@@ -3458,7 +3427,9 @@ fast_pf_fix_direct_spte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	gfn_t gfn;
 
 	WARN_ON(!sp->role.direct);
-
+        /* TODO: Implement and enable replication in the fast pf handler */
+        printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
+        return false;
 	/*
 	 * Theoretically we could also set dirty bit (and flush TLB) here in
 	 * order to eliminate unnecessary PML logging. See comments in
@@ -3690,10 +3661,7 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
 			kvm_mmu_commit_zap_page(vcpu->kvm, &invalid_list);
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
-		vcpu->arch.mmu.root_hpa = INVALID_PAGE;
-#ifdef CONFIG_PGTABLE_REPLICATION
-                vcpu->arch.mmu.master_root_hpa = INVALID_PAGE;
-#endif
+                vcpu->arch.mmu.root_hpa = INVALID_PAGE;
 		return;
 	}
 
@@ -3713,7 +3681,7 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
 	}
 	kvm_mmu_commit_zap_page(vcpu->kvm, &invalid_list);
 	spin_unlock(&vcpu->kvm->mmu_lock);
-	vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+        vcpu->arch.mmu.root_hpa = INVALID_PAGE;
 }
 
 static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
@@ -3728,15 +3696,10 @@ static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 	return ret;
 }
 
-/*
- * Map all cpus from an even node id to index 0 and all cpus from
- * odd node ids to index 1.
- */
-#define VCPU_ROOT_IDX(vcpu)     (numa_cpu_node(vcpu->cpu) % 2)
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
-	unsigned i;
+	unsigned i, idx;
 
 	if (vcpu->arch.mmu.shadow_root_level >= PT64_ROOT_4LEVEL) {
 		spin_lock(&vcpu->kvm->mmu_lock);
@@ -3748,12 +3711,10 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-#ifdef CONFIG_PGTABLE_REPLICATION
-		vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_ROOT_IDX(vcpu)]);
+                idx = vcpu->cpu % 2;
+                //idx = MASTER_EPT_ROOT;
+                vcpu->arch.mmu.root_hpa = __pa(sp->spt[idx]);
                 vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
-#else
-                vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp))
-#endif
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
@@ -3783,8 +3744,11 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 	struct kvm_mmu_page *sp;
 	u64 pdptr, pm_mask;
 	gfn_t root_gfn;
-	int i;
+	int i, idx;
 
+        printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
+        /* TODO: Implement Shadow Page Table Replication */
+        BUG();
 	root_gfn = vcpu->arch.mmu.get_cr3(vcpu) >> PAGE_SHIFT;
 
 	if (mmu_check_root(vcpu, root_gfn))
@@ -3806,13 +3770,17 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		}
 		sp = kvm_mmu_get_page(vcpu, root_gfn, 0,
 				vcpu->arch.mmu.shadow_root_level, 0, ACC_ALL);
-		root = __pa(KVM_SPT(sp));
+                idx = vcpu->cpu % 2;
+                //idx = MASTER_EPT_ROOT;
+		root = __pa(sp->spt[idx]);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-		vcpu->arch.mmu.root_hpa = root;
+                vcpu->arch.mmu.root_hpa = __pa(sp->spt[idx]);
+                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
 		return 0;
 	}
-
+        printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
+        BUG();
 	/*
 	 * We shadow a 32 bit page table. This may be a legacy 2-level
 	 * or a PAE 3-level page table. In either case we need to be aware that
@@ -3895,9 +3863,9 @@ static void mmu_sync_roots(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.mmu.direct_map)
 		return;
 
-	if (!VALID_PAGE(KVM_VCPU_ROOT_HPA(vcpu)))
+	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return;
-
+        //printk(KERN_INFO"MITOSIS: Function: %s\n", __FUNCTION__);
 	vcpu_clear_mmio_info(vcpu, MMIO_GVA_ANY);
 	kvm_mmu_audit(vcpu, AUDIT_PRE_SYNC);
 	if (vcpu->arch.mmu.root_level >= PT64_ROOT_4LEVEL) {
@@ -4240,10 +4208,10 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
 			level = PT_DIRECTORY_LEVEL;
 		gfn &= ~(KVM_PAGES_PER_HPAGE(level) - 1);
 	}
-
+#if 0
 	if (fast_page_fault(vcpu, gpa, level, error_code))
 		return RET_PF_RETRY;
-
+#endif
 	mmu_seq = vcpu->kvm->mmu_notifier_seq;
 	smp_rmb();
 
@@ -4281,7 +4249,7 @@ static void nonpaging_init_context(struct kvm_vcpu *vcpu,
 	context->update_pte = nonpaging_update_pte;
 	context->root_level = 0;
 	context->shadow_root_level = PT32E_ROOT_LEVEL;
-	context->root_hpa = INVALID_PAGE;
+        context->root_hpa = INVALID_PAGE;
 	context->direct_map = true;
 	context->nx = false;
 }
@@ -4765,7 +4733,7 @@ static void paging64_init_context_common(struct kvm_vcpu *vcpu,
 	context->invlpg = paging64_invlpg;
 	context->update_pte = paging64_update_pte;
 	context->shadow_root_level = level;
-	context->root_hpa = INVALID_PAGE;
+        context->root_hpa = INVALID_PAGE;
 	context->direct_map = false;
 }
 
@@ -4795,7 +4763,7 @@ static void paging32_init_context(struct kvm_vcpu *vcpu,
 	context->invlpg = paging32_invlpg;
 	context->update_pte = paging32_update_pte;
 	context->shadow_root_level = PT32E_ROOT_LEVEL;
-	context->root_hpa = INVALID_PAGE;
+        context->root_hpa = INVALID_PAGE;
 	context->direct_map = false;
 }
 
@@ -4817,7 +4785,7 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
 	context->invlpg = nonpaging_invlpg;
 	context->update_pte = nonpaging_update_pte;
 	context->shadow_root_level = kvm_x86_ops->get_tdp_level(vcpu);
-	context->root_hpa = INVALID_PAGE;
+        context->root_hpa = INVALID_PAGE;
 	context->direct_map = true;
 	context->set_cr3 = kvm_x86_ops->set_tdp_cr3;
 	context->get_cr3 = get_cr3;
@@ -4898,7 +4866,7 @@ void kvm_init_shadow_ept_mmu(struct kvm_vcpu *vcpu, bool execonly,
 	context->invlpg = ept_invlpg;
 	context->update_pte = ept_update_pte;
 	context->root_level = PT64_ROOT_4LEVEL;
-	context->root_hpa = INVALID_PAGE;
+        context->root_hpa = INVALID_PAGE;
 	context->direct_map = false;
 	context->base_role.ad_disabled = !accessed_dirty;
 
@@ -5379,7 +5347,7 @@ static int alloc_mmu_pages(struct kvm_vcpu *vcpu)
 int kvm_mmu_create(struct kvm_vcpu *vcpu)
 {
 	vcpu->arch.walk_mmu = &vcpu->arch.mmu;
-	vcpu->arch.mmu.root_hpa = INVALID_PAGE;
+        vcpu->arch.mmu.root_hpa = INVALID_PAGE;
 	vcpu->arch.mmu.translate_gpa = translate_gpa;
 	vcpu->arch.nested_mmu.translate_gpa = translate_nested_gpa;
 
