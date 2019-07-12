@@ -55,6 +55,7 @@
  * flag to control ept placement to a specific NUMA node
  */
 static int __read_mostly ept_alloc_nodemask = -1;
+static int __read_mostly ept_replication = 1;
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging
  * where the hardware walks 2 page tables:
@@ -910,8 +911,30 @@ static void mmu_free_memory_cache(struct kvm_mmu_memory_cache *mc,
 		kmem_cache_free(cache, mc->objects[--mc->nobjs]);
 }
 
-static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
-				        int min)
+#ifdef CONFIG_PGTABLE_REPLICATION
+static int
+mmu_topup_memory_cache_page_repl(struct kvm_mmu_memory_cache *cache,
+                                            int node, int min)
+{
+	if (cache->nobjs >= min)
+		return 0;
+
+	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
+                    struct page *page;
+                    nodemask_t nm = NODE_MASK_NONE;
+                    node_set(node, nm);
+                    page = __alloc_pages_nodemask(GFP_KERNEL, 0, node, &nm);
+                    if (!page)
+                        return -ENOMEM;
+                    BUG_ON(page_to_nid(page) != node);
+                    cache->objects[cache->nobjs++] = (void *)page_address(page);
+	}
+	return 0;
+
+}
+
+static int
+mmu_topup_memory_cache_page_norepl(struct kvm_mmu_memory_cache *cache, int min)
 {
 	void *addr;
 
@@ -937,10 +960,70 @@ static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
 	return 0;
 }
 
+static int mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache,
+                                        int node, int min)
+{
+        if (ept_replication == 1)
+            return mmu_topup_memory_cache_page_repl(cache, node, min);
+        else
+            return mmu_topup_memory_cache_page_norepl(cache, min);
+}
+
+static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
+{
+	int i, r;
+
+	r = mmu_topup_memory_cache(&vcpu->arch.mmu_pte_list_desc_cache,
+				   pte_list_desc_cache, 8 + PTE_PREFETCH_NUM);
+	if (r)
+		goto out;
+        for (i = 0; i < 2; i++) {
+            r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache[i], i, 8);
+            if (r)
+                    goto out;
+        }
+	r = mmu_topup_memory_cache(&vcpu->arch.mmu_page_header_cache,
+				   mmu_page_header_cache, 4);
+out:
+	return r;
+}
+
 static void mmu_free_memory_cache_page(struct kvm_mmu_memory_cache *mc)
 {
 	while (mc->nobjs)
 		free_page((unsigned long)mc->objects[--mc->nobjs]);
+}
+
+static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
+{
+        int i;
+
+	mmu_free_memory_cache(&vcpu->arch.mmu_pte_list_desc_cache,
+				pte_list_desc_cache);
+        for (i = 0; i < 2; i++)
+                mmu_free_memory_cache_page(&vcpu->arch.mmu_page_cache[i]);
+
+	mmu_free_memory_cache(&vcpu->arch.mmu_page_header_cache,
+				mmu_page_header_cache);
+}
+
+#else
+static int
+mmu_topup_memory_cache_page(struct kvm_mmu_memory_cache *cache, int min)
+{
+	void *addr;
+
+	if (cache->nobjs >= min)
+		return 0;
+
+	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
+                addr = (void *)__get_free_page(GFP_KERNEL);
+                if (!addr)
+                    return -ENOMEM;
+                cache->objects[cache->nobjs++] = addr;
+	}
+
+	return 0;
 }
 
 static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
@@ -951,13 +1034,19 @@ static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
 				   pte_list_desc_cache, 8 + PTE_PREFETCH_NUM);
 	if (r)
 		goto out;
-	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 16);
-	if (r)
-		goto out;
+        r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 8);
+        if (r)
+                goto out;
 	r = mmu_topup_memory_cache(&vcpu->arch.mmu_page_header_cache,
 				   mmu_page_header_cache, 4);
 out:
 	return r;
+}
+
+static void mmu_free_memory_cache_page(struct kvm_mmu_memory_cache *mc)
+{
+	while (mc->nobjs)
+		free_page((unsigned long)mc->objects[--mc->nobjs]);
 }
 
 static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
@@ -968,6 +1057,7 @@ static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
 	mmu_free_memory_cache(&vcpu->arch.mmu_page_header_cache,
 				mmu_page_header_cache);
 }
+#endif /* CONFIG_PGTABLE_REPLICATION */
 
 static void *mmu_memory_cache_alloc(struct kvm_mmu_memory_cache *mc)
 {
@@ -1994,6 +2084,7 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 	mmu_spte_clear_no_track(parent_pte);
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
         int i;
@@ -2001,14 +2092,14 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
         for (i = 0; i < 2; i++)
-            sp->spt[i] = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
+            sp->spt[i] = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[i]);
 
         virt_to_page(sp->spt[0])->replica = virt_to_page(sp->spt[1]);
         virt_to_page(sp->spt[1])->replica = virt_to_page(sp->spt[0]);
 
 	if (!direct) {
                 trace_printk("MITOSIS: allocating page for gfn\n");
-		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
+		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[0]);
         }
         for (i = 0; i < 2; i++)
             set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
@@ -2022,6 +2113,30 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
 	return sp;
 }
+#else
+static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
+{
+	struct kvm_mmu_page *sp;
+
+	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
+        sp->spt = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
+
+	if (!direct) {
+                trace_printk("MITOSIS: allocating page for gfn\n");
+		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
+        }
+        set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
+
+	/*
+	 * The active_mmu_pages list is the FIFO list, do not move the
+	 * page until it is zapped. kvm_zap_obsolete_pages depends on
+	 * this feature. See the comments in kvm_zap_obsolete_pages().
+	 */
+	list_add(&sp->link, &vcpu->kvm->arch.active_mmu_pages);
+	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
+	return sp;
+}
+#endif
 
 static void mark_unsync(u64 *spte);
 static void kvm_mmu_mark_parents_unsync(struct kvm_mmu_page *sp)
@@ -2450,8 +2565,12 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
+#ifdef CONFIG_PGTABLE_REPLICATION
         for (i = 0; i < 2; i++)
             clear_page(sp->spt[i]);
+#else
+        clear_page(sp->spt);
+#endif
 	trace_kvm_mmu_get_page(sp, true);
 
 	kvm_mmu_flush_or_zap(vcpu, &invalid_list, false, flush);
@@ -2726,7 +2845,7 @@ static bool mitosis_clear_replicas_dirty(u64 *sptep)
 
 static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep)
 {
-        return false
+        return false;
 }
 
 static bool mitosis_set_replicas_dirty(u64 *sptep)
@@ -2738,7 +2857,7 @@ static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
 {
         return false;
 }
-#endif
+#endif /* CONFIG_PGTABLE_REPLICATION */
 
 static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 			     struct kvm_mmu_page *sp)
@@ -3219,17 +3338,22 @@ static int direct_pte_prefetch_many(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
+				  struct kvm_mmu_page *sp, u64 *sptep)
+{
+}
+#else
 static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
 				  struct kvm_mmu_page *sp, u64 *sptep)
 {
 	u64 *spte, *start = NULL;
-	int i, spt_index;
+	int i;
 
 	WARN_ON(!sp->role.direct);
 
-        spt_index = vcpu->cpu % 2;
-	i = (sptep - sp->spt[spt_index]) & ~(PTE_PREFETCH_NUM - 1);
-	spte = sp->spt[spt_index] + i;
+	i = (sptep - sp->spt) & ~(PTE_PREFETCH_NUM - 1);
+	spte = sp->spt + i;
 
 	for (i = 0; i < PTE_PREFETCH_NUM; i++, spte++) {
 		if (is_shadow_present_pte(*spte) || spte == sptep) {
@@ -3242,6 +3366,7 @@ static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
 			start = spte;
 	}
 }
+#endif
 
 static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
 {
@@ -3278,7 +3403,9 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
                     if (iterator.level == level) {
                             emulate = mmu_set_spte(vcpu, iterator.sptep, ACC_ALL,
                                     write, level, gfn, pfn, prefault, map_writable);
-                            //direct_pte_prefetch(vcpu, iterator.sptep);
+#ifndef CONFIG_PGTABLE_REPLICATION
+                            direct_pte_prefetch(vcpu, iterator.sptep);
+#endif
                             ++vcpu->stat.pf_fixed;
                             break;
                     }
@@ -3606,7 +3733,7 @@ static int nonpaging_map(struct kvm_vcpu *vcpu, gva_t v, u32 error_code,
 		gfn &= ~(KVM_PAGES_PER_HPAGE(level) - 1);
 	}
 
-#if 0
+#ifndef CONFIG_PGTABLE_REPLICATION
 	if (fast_page_fault(vcpu, v, level, error_code))
 		return RET_PF_RETRY;
 #endif
@@ -3684,6 +3811,36 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
         vcpu->arch.mmu.root_hpa = INVALID_PAGE;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+#define VCPU_EPT_ROOT(vcpu)     (numa_cpu_node(vcpu->cpu) % 2)
+static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
+{
+	struct kvm_mmu_page *sp;
+
+	if (vcpu->arch.mmu.shadow_root_level >= PT64_ROOT_4LEVEL) {
+		spin_lock(&vcpu->kvm->mmu_lock);
+		if(make_mmu_pages_available(vcpu) < 0) {
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			return -ENOSPC;
+		}
+		sp = kvm_mmu_get_page(vcpu, 0, 0,
+				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
+		++sp->root_count;
+		spin_unlock(&vcpu->kvm->mmu_lock);
+                vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_EPT_ROOT(vcpu)]);
+                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
+	} else
+		BUG();
+
+	return 0;
+}
+
+static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
+{
+        BUG();
+}
+#else
 static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 {
 	int ret = 0;
@@ -3699,7 +3856,7 @@ static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
-	unsigned i, idx;
+	unsigned i;
 
 	if (vcpu->arch.mmu.shadow_root_level >= PT64_ROOT_4LEVEL) {
 		spin_lock(&vcpu->kvm->mmu_lock);
@@ -3711,10 +3868,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-                idx = vcpu->cpu % 2;
-                //idx = MASTER_EPT_ROOT;
-                vcpu->arch.mmu.root_hpa = __pa(sp->spt[idx]);
-                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
+                vcpu->arch.mmu.root_hpa = __pa(sp->spt);
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
@@ -3846,7 +4000,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 
 	return 0;
 }
-
+#endif
 static int mmu_alloc_roots(struct kvm_vcpu *vcpu)
 {
 	if (vcpu->arch.mmu.direct_map)
@@ -5798,12 +5952,38 @@ static ssize_t mitosis_ept_nodemask_store(struct kobject *kobj,
     return count;
 }
 
+static ssize_t mitosis_ept_replication_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", ept_replication);
+}
+
+static ssize_t mitosis_ept_replication_store(struct kobject *kobj,
+            struct kobj_attribute *attr, const char *buf, size_t count)
+{
+    int err;
+    long replication;
+
+    err = kstrtol(buf, 10, &replication);
+    if (err || replication < 0  || replication > 1)
+        return -EINVAL;
+
+    ept_replication = replication;
+
+    return count;
+}
+
 static struct kobj_attribute mitosis_ept_nodemask_attr =
         __ATTR(ept_nodemask, 0644, mitosis_ept_nodemask_show,
                 mitosis_ept_nodemask_store);
 
+static struct kobj_attribute mitosis_ept_replication_attr =
+        __ATTR(ept_replication, 0644, mitosis_ept_replication_show,
+                mitosis_ept_replication_store);
+
 static struct attribute *mitosis_attr[] = {
     &mitosis_ept_nodemask_attr.attr,
+    &mitosis_ept_replication_attr.attr,
     NULL,
 };
 

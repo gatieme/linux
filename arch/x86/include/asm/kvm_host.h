@@ -555,7 +555,11 @@ struct kvm_vcpu_arch {
 	struct kvm_mmu *walk_mmu;
 
 	struct kvm_mmu_memory_cache mmu_pte_list_desc_cache;
+#ifdef CONFIG_PGTABLE_REPLICATION
+	struct kvm_mmu_memory_cache mmu_page_cache[2];
+#else
 	struct kvm_mmu_memory_cache mmu_page_cache;
+#endif
 	struct kvm_mmu_memory_cache mmu_page_header_cache;
 
 	/*
