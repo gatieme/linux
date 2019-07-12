@@ -298,7 +298,7 @@ struct kvm_mmu_page {
 	gfn_t gfn;
 	union kvm_mmu_page_role role;
 #ifdef CONFIG_PGTABLE_REPLICATION
-	u64 *spt[2];
+	u64 *spt[8];
 #else
         u64 *spt;
 #endif
@@ -556,7 +556,7 @@ struct kvm_vcpu_arch {
 
 	struct kvm_mmu_memory_cache mmu_pte_list_desc_cache;
 #ifdef CONFIG_PGTABLE_REPLICATION
-	struct kvm_mmu_memory_cache mmu_page_cache[2];
+	struct kvm_mmu_memory_cache mmu_page_cache[8];
 #else
 	struct kvm_mmu_memory_cache mmu_page_cache;
 #endif
