@@ -2652,12 +2652,7 @@ static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep)
 
 static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask)
 {
-        u64 addr;
-        struct page *replica;
-
-        replica = virt_to_page(sptep)->replica;
-        addr = (u64) page_to_virt(replica) + ((u64)sptep & ~PAGE_MASK);
-        mmu_spte_set((u64 *)addr, mask);
+        mitosis_set_replicas(sptep, mask);
 }
 
 static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
