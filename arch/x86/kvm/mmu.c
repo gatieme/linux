@@ -51,11 +51,34 @@
 #include <asm/kvm_page_track.h>
 #include "trace.h"
 
+#ifdef CONFIG_PGTABLE_REPLICATION
 /*
  * flag to control ept placement to a specific NUMA node
  */
 static int __read_mostly current_ept_node = -1;
 static int __read_mostly ept_replication = 1;
+
+/*
+ * 75K is about enough for 150GB.
+ */
+static unsigned long ept_replication_cache = 75000;
+/*
+ * We need to reserve enough space on each NUMA Node
+ * to prevent allocation failure while replicating EPTs.
+ */
+struct ept_cache {
+        int nr_objects;
+        /*
+         * Protect against concurrent allocations.
+         */
+        spinlock_t lock;
+        void **pages;
+};
+#endif
+
+/* One per node */
+static struct ept_cache ept_reserve_cache[MAX_NUMNODES];
+
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging
  * where the hardware walks 2 page tables:
@@ -338,7 +361,6 @@ static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 	trace_mark_mmio_spte(sptep, gfn, access, gen);
 	mmu_spte_set(sptep, mask);
         mitosis_mark_mmio_replicas(sptep, mask);
-        //trace_printk("check\n");
 }
 
 static bool is_mmio_spte(u64 spte)
@@ -916,8 +938,27 @@ static int
 mmu_topup_memory_cache_page_repl(struct kvm_mmu_memory_cache *cache,
                                             int node, int min)
 {
+        struct ept_cache *ept_cache;
+
 	if (cache->nobjs >= min)
 		return 0;
+
+        /*
+         * Prioritize allocation from the reserved cache. This should
+         * succeed if enough space is reserved upfront. If not, we try
+         * again and fallback to the normal EPT page allocation path.
+         */
+        ept_cache = &ept_reserve_cache[node];
+        spin_lock(&ept_cache->lock);
+        while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
+                if (!ept_cache->nr_objects)
+                        break;
+
+                cache->objects[cache->nobjs++] =
+                        ept_cache->pages[--ept_cache->nr_objects];
+
+        }
+        spin_unlock(&ept_cache->lock);
 
 	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
                     struct page *page;
@@ -996,8 +1037,25 @@ out:
 
 static void mmu_free_memory_cache_page(struct kvm_mmu_memory_cache *mc)
 {
-	while (mc->nobjs)
-		free_page((unsigned long)mc->objects[--mc->nobjs]);
+        struct page *page;
+        struct ept_cache *cache;
+
+	while (mc->nobjs) {
+                page = virt_to_page(mc->objects[--mc->nobjs]);
+                cache = &ept_reserve_cache[page_to_nid(page)];
+                if (!cache)
+                        goto release;
+
+                spin_lock(&cache->lock);
+                if (cache->nr_objects < ept_replication_cache) {
+                        cache->pages[cache->nr_objects++] = (void *) page_address(page);
+                        spin_unlock(&cache->lock);
+                        continue;
+                }
+                spin_unlock(&cache->lock);
+release:
+		free_page((unsigned long)page_address(page));
+        }
 }
 
 static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
@@ -1106,7 +1164,8 @@ static void kvm_mmu_page_set_gfn(struct kvm_mmu_page *sp, int index, gfn_t gfn)
 	if (sp->role.direct)
 		BUG_ON(gfn != kvm_mmu_page_get_gfn(sp, index));
 	else {
-                trace_printk("MITOSIS: index: %d gfn: %llu\n", index, gfn);
+                printk(KERN_INFO"MITOSIS: index: %d gfn: %llu in shadow mode\n",
+                                index, gfn);
 		sp->gfns[index] = gfn;
         }
 }
@@ -2039,6 +2098,28 @@ static int is_empty_shadow_page(u64 *spt)
 #endif
 
 /*
+ * Free all pages form this (including master and all replicas)
+ * Populate cache first, if it has space
+ */
+static inline void kvm_free_spt_pages_repl(struct kvm_mmu_page *sp)
+{
+        int i;
+        struct ept_cache *cache;
+
+        for (i = 0; i < nr_node_ids; i++) {
+                cache = &ept_reserve_cache[i];
+                spin_lock(&cache->lock);
+                if (cache->nr_objects < ept_replication_cache) {
+                    cache->pages[cache->nr_objects++] = sp->spt[i];
+                    spin_unlock(&cache->lock);
+                    continue;
+                }
+                spin_unlock(&cache->lock);
+                free_page((unsigned long)sp->spt[i]);
+        }
+}
+
+/*
  * This value is the sum of all of the kvm instances's
  * kvm->arch.n_used_mmu_pages values.  We need a global,
  * aggregate version in order to make the slab shrinker
@@ -2052,15 +2133,13 @@ static inline void kvm_mod_used_mmu_pages(struct kvm *kvm, int nr)
 
 static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 {
-        int i;
 	MMU_WARN_ON(!is_empty_shadow_page(KVM_SPT(sp)));
 	hlist_del(&sp->hash_link);
 	list_del(&sp->link);
 
-        if (ept_replication) {
-                for (i = 0; i < nr_node_ids; i++)
-                    free_page((unsigned long)sp->spt[i]);
-        } else
+        if (ept_replication)
+                kvm_free_spt_pages_repl(sp);
+        else
                 free_page((unsigned long)sp->spt[MASTER_EPT_ROOT]);
 
 	if (!sp->role.direct)
@@ -2112,7 +2191,7 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         }
 
 	if (!direct) {
-                trace_printk("MITOSIS: allocating page for gfn\n");
+                printk("MITOSIS: allocating page for gfn in shadow mode\n");
 		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[0]);
         }
         if (ept_replication) {
@@ -2139,7 +2218,7 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         sp->spt = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
 
 	if (!direct) {
-                trace_printk("MITOSIS: allocating page for gfn\n");
+                printk("MITOSIS: allocating page for gfn in shadow mode\n");
 		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
         }
         set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
@@ -3427,7 +3506,6 @@ static int mmu_set_spte(struct kvm_vcpu *vcpu, u64 *sptep, unsigned pte_access,
 	}
 	if (set_spte(vcpu, sptep, pte_access, level, gfn, pfn, speculative,
 	      true, host_writable)) {
-                //trace_printk(KERN_INFO"MITOSIS: unexpected: set_spte returned 1\n");
 		if (write_fault)
 			ret = RET_PF_EMULATE;
 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
@@ -3970,7 +4048,7 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
 }
 
 #ifdef CONFIG_PGTABLE_REPLICATION
-#define VCPU_EPT_ROOT(vcpu)     (numa_cpu_node(vcpu->cpu) % nr_node_ids)
+#define VCPU_NID(vcpu)     (numa_cpu_node(vcpu->cpu))
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
@@ -3987,7 +4065,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 		spin_unlock(&vcpu->kvm->mmu_lock);
                 vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
                 if (ept_replication)
-                        vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_EPT_ROOT(vcpu)]);
+                        vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_NID(vcpu)]);
                 else
                         vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp));
 	} else
@@ -6091,6 +6169,143 @@ unlock:
 }
 
 #ifdef CONFIG_SYSFS
+static void mitosis_drain_cache(struct ept_cache *cache)
+{
+        spin_lock(&cache->lock);
+        while(cache->nr_objects)
+                free_page((unsigned long)cache->pages[--cache->nr_objects]);
+
+        if (cache->pages) {
+                kfree(cache->pages);
+                cache->pages = NULL;
+        }
+        spin_unlock(&cache->lock);
+}
+
+static void mitosis_drain_caches(void)
+{
+        int i;
+
+        for (i = 0; i < nr_node_ids; i++)
+                mitosis_drain_cache(&ept_reserve_cache[i]);
+
+        printk(KERN_INFO"[MITOSIS] drained all EPT caches\n");
+}
+
+static int
+mitosis_populate_node_cache(struct ept_cache *cache, int node,
+                                        unsigned long nr_pages)
+{
+        struct page *page;
+        nodemask_t nm = NODE_MASK_NONE;
+
+        node_set(node, nm);
+        spin_lock(&cache->lock);
+        while (cache->nr_objects < nr_pages) {
+                page = __alloc_pages_nodemask(GFP_KERNEL, 0, node, &nm);
+                if (!page)
+                        goto failure;
+                BUG_ON(page_to_nid(page) != node);
+                cache->pages[cache->nr_objects++] = (void *)page_address(page);
+        }
+        spin_unlock(&cache->lock);
+        goto success;
+failure:
+        spin_unlock(&cache->lock);
+        mitosis_drain_cache(cache);
+        return -ENOMEM;
+
+success:
+        return 0;
+}
+
+static int mitosis_reserve_ept_cache(unsigned long nr_reserve)
+{
+        int i;
+        struct ept_cache *ept_cache;
+
+        for (i = 0; i < nr_node_ids; i++) {
+                ept_cache = &ept_reserve_cache[i];
+
+                spin_lock_init(&ept_cache->lock);
+                /*
+                 * Release everything allocated previously as also need to
+                 * allocate space for the pointer appropriately.
+                 */
+                if (ept_cache->nr_objects)
+                        mitosis_drain_cache(ept_cache);
+
+                ept_cache->pages = (void **)kmalloc(sizeof(void *) * nr_reserve,
+                                                                GFP_KERNEL);
+                if (!ept_cache->pages)
+                        break;
+
+                if (mitosis_populate_node_cache(ept_cache, i, nr_reserve))
+                        break;
+
+                printk(KERN_INFO"[MITOSIS] node: %d reserved: %lu pages\n",
+                                i, nr_reserve);
+        }
+        if (i == nr_node_ids)
+                return 0;
+        /*
+         * We reach here only after cleaning up the most recent
+         * cache.
+         */
+        printk(KERN_INFO"[MITOSIS] EPT cache reservation failed on node: %d\n", i);
+        while (i >= 0) {
+                ept_cache = &ept_reserve_cache[--i];
+                mitosis_drain_cache(ept_cache);
+        }
+        return -ENOMEM;
+}
+
+static ssize_t mitosis_ept_reservation_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+        int i, count;
+        struct ept_cache *cache;
+
+        for (i = 0; i < nr_node_ids; i++) {
+                cache = &ept_reserve_cache[i];
+                if (!cache)
+                        continue;
+
+                spin_lock(&cache->lock);
+                count = cache->nr_objects;
+                spin_unlock(&cache->lock);
+                printk(KERN_INFO"Node: %d EPT cache: %d pages\n", i, count);
+        }
+
+        return sprintf(buf, "%lu\n", ept_replication_cache);
+}
+
+static ssize_t mitosis_ept_reservation_store(struct kobject *kobj,
+            struct kobj_attribute *attr, const char *buf, size_t count)
+{
+        int err;
+        long nr_pages;
+
+        err = kstrtol(buf, 10, &nr_pages);
+        if (err || nr_pages < 0 || nr_pages > 1000000)
+                return -EINVAL;
+
+        ept_replication_cache = nr_pages;
+        if (ept_replication_cache <= 0) {
+                ept_replication = 0;
+                mitosis_drain_caches();
+                printk(KERN_INFO"EPT replication disabled\n");
+                return count;
+        }
+
+        ept_replication = 1;
+        /* return with failure if unsuccessfull */
+        if(mitosis_reserve_ept_cache(ept_replication_cache))
+                return -ENOMEM;
+
+        return count;
+}
+
 static ssize_t mitosis_ept_nodemask_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
@@ -6121,45 +6336,17 @@ static ssize_t mitosis_ept_nodemask_store(struct kobject *kobj,
         return count;
 }
 
-static ssize_t mitosis_ept_replication_show(struct kobject *kobj,
-                struct kobj_attribute *attr, char *buf)
-{
-        return sprintf(buf, "%d\n", ept_replication);
-}
-
-static ssize_t mitosis_ept_replication_store(struct kobject *kobj,
-            struct kobj_attribute *attr, const char *buf, size_t count)
-{
-        int err;
-        long replication;
-
-        err = kstrtol(buf, 10, &replication);
-        if (err || replication < 0  || replication > 1)
-                return -EINVAL;
-
-        ept_replication = replication;
-        if (ept_replication)
-                printk(KERN_INFO"[MITOSIS] EPT Replication Enabled\n");
-        else {
-                printk(KERN_INFO"[MITOSIS] EPT Replication Disabled\n");
-                printk(KERN_INFO"[MITOSIS] Current EPT Node: %d\n",
-                                                        current_ept_node);
-        }
-
-        return count;
-}
-
 static struct kobj_attribute mitosis_ept_nodemask_attr =
         __ATTR(current_ept_node, 0644, mitosis_ept_nodemask_show,
                 mitosis_ept_nodemask_store);
 
-static struct kobj_attribute mitosis_ept_replication_attr =
-        __ATTR(ept_replication, 0644, mitosis_ept_replication_show,
-                mitosis_ept_replication_store);
+static struct kobj_attribute mitosis_ept_reservation_attr =
+        __ATTR(ept_replication_cache, 0644, mitosis_ept_reservation_show,
+                mitosis_ept_reservation_store);
 
 static struct attribute *mitosis_attr[] = {
         &mitosis_ept_nodemask_attr.attr,
-        &mitosis_ept_replication_attr.attr,
+        &mitosis_ept_reservation_attr.attr,
         NULL,
 };
 
@@ -6177,7 +6364,14 @@ static int mitosis_init_sysfs(struct kobject **kobj)
         if (err) {
                 pr_err("[MITOSIS] failed to register mitosis sysfs group\n");
                 goto remove_mitosis_kobj;
-            }
+        }
+
+        /* return with failure if unsuccessfull */
+        if(mitosis_reserve_ept_cache(ept_replication_cache))
+                return -ENOMEM;
+
+        printk(KERN_INFO"[MITOSIS] EPT Cache reserved successfully\n");
+
         return 0;
 
 remove_mitosis_kobj:
