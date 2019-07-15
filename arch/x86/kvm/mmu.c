@@ -54,7 +54,7 @@
 /*
  * flag to control ept placement to a specific NUMA node
  */
-static int __read_mostly ept_alloc_nodemask = -1;
+static int __read_mostly current_ept_node = -1;
 static int __read_mostly ept_replication = 1;
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging
@@ -941,7 +941,7 @@ mmu_topup_memory_cache_page_norepl(struct kvm_mmu_memory_cache *cache, int min)
 	if (cache->nobjs >= min)
 		return 0;
 	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
-                if (ept_alloc_nodemask == -1) {
+                if (current_ept_node == -1) {
                     addr = (void *)__get_free_page(GFP_KERNEL);
                     if (!addr)
                         return -ENOMEM;
@@ -949,11 +949,11 @@ mmu_topup_memory_cache_page_norepl(struct kvm_mmu_memory_cache *cache, int min)
                 } else {
                     struct page *page;
                     nodemask_t nm = NODE_MASK_NONE;
-                    node_set(ept_alloc_nodemask, nm);
-                    page = __alloc_pages_nodemask(GFP_KERNEL, 0, ept_alloc_nodemask, &nm);
+                    node_set(current_ept_node, nm);
+                    page = __alloc_pages_nodemask(GFP_KERNEL, 0, current_ept_node, &nm);
                     if (!page)
                         return -ENOMEM;
-                    BUG_ON(page_to_nid(page) != ept_alloc_nodemask);
+                    BUG_ON(page_to_nid(page) != current_ept_node);
                     cache->objects[cache->nobjs++] = (void *)page_address(page);
                 }
 	}
@@ -6094,47 +6094,63 @@ unlock:
 static ssize_t mitosis_ept_nodemask_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%d\n", ept_alloc_nodemask);
+        return sprintf(buf, "%d\n", current_ept_node);
 }
 
 static ssize_t mitosis_ept_nodemask_store(struct kobject *kobj,
             struct kobj_attribute *attr, const char *buf, size_t count)
 {
-    int err;
-    long alloc_nodemask;
+        int err;
+        long alloc_nodemask;
 
-    err = kstrtol(buf, 10, &alloc_nodemask);
-    if (err || alloc_nodemask > MAX_NUMNODES)
-        return -EINVAL;
+        err = kstrtol(buf, 10, &alloc_nodemask);
+        if (err || alloc_nodemask > nr_node_ids)
+                return -EINVAL;
 
-    ept_alloc_nodemask = alloc_nodemask;
+        current_ept_node = alloc_nodemask;
+        if (current_ept_node == -1)
+                printk(KERN_INFO"[MITOSIS] Restoring default EPT allocation\n");
+        else
+                printk(KERN_INFO"[MITOSIS] Setting EPT allocation to node: %d\n",
+                                                        current_ept_node);
+        if (ept_replication) {
+                printk(KERN_INFO"[MITOSIS] WARNING: EPT Replication is enabled!\n");
+                printk(KERN_INFO"[MITPSIS] Disable replication to force EPT allocation\n");
+        }
 
-    return count;
+        return count;
 }
 
 static ssize_t mitosis_ept_replication_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%d\n", ept_replication);
+        return sprintf(buf, "%d\n", ept_replication);
 }
 
 static ssize_t mitosis_ept_replication_store(struct kobject *kobj,
             struct kobj_attribute *attr, const char *buf, size_t count)
 {
-    int err;
-    long replication;
+        int err;
+        long replication;
 
-    err = kstrtol(buf, 10, &replication);
-    if (err || replication < 0  || replication > 1)
-        return -EINVAL;
+        err = kstrtol(buf, 10, &replication);
+        if (err || replication < 0  || replication > 1)
+                return -EINVAL;
 
-    ept_replication = replication;
+        ept_replication = replication;
+        if (ept_replication)
+                printk(KERN_INFO"[MITOSIS] EPT Replication Enabled\n");
+        else {
+                printk(KERN_INFO"[MITOSIS] EPT Replication Disabled\n");
+                printk(KERN_INFO"[MITOSIS] Current EPT Node: %d\n",
+                                                        current_ept_node);
+        }
 
-    return count;
+        return count;
 }
 
 static struct kobj_attribute mitosis_ept_nodemask_attr =
-        __ATTR(ept_nodemask, 0644, mitosis_ept_nodemask_show,
+        __ATTR(current_ept_node, 0644, mitosis_ept_nodemask_show,
                 mitosis_ept_nodemask_store);
 
 static struct kobj_attribute mitosis_ept_replication_attr =
@@ -6142,36 +6158,36 @@ static struct kobj_attribute mitosis_ept_replication_attr =
                 mitosis_ept_replication_store);
 
 static struct attribute *mitosis_attr[] = {
-    &mitosis_ept_nodemask_attr.attr,
-    &mitosis_ept_replication_attr.attr,
-    NULL,
+        &mitosis_ept_nodemask_attr.attr,
+        &mitosis_ept_replication_attr.attr,
+        NULL,
 };
 
 struct attribute_group mitosis_attr_group = {
-    .attrs = mitosis_attr,
-    .name = "mitosis",
+        .attrs = mitosis_attr,
+        .name = "mitosis",
 };
 
 static int mitosis_init_sysfs(struct kobject **kobj)
 {
-    int err;
+        int err;
 
-    *kobj = kobject_get(mm_kobj);
-    err = sysfs_create_group(*kobj, &mitosis_attr_group);
-    if (err) {
-        pr_err("failed to register mitosis sysfs group\n");
-        goto remove_mitosis_kobj;
-    }
-    return 0;
+        *kobj = kobject_get(mm_kobj);
+        err = sysfs_create_group(*kobj, &mitosis_attr_group);
+        if (err) {
+                pr_err("[MITOSIS] failed to register mitosis sysfs group\n");
+                goto remove_mitosis_kobj;
+            }
+        return 0;
 
 remove_mitosis_kobj:
-    kobject_put(*kobj);
-    return err;
+        kobject_put(*kobj);
+        return err;
 }
 #else
 static int mitosis_init_sysfs(struct kobject **kobj)
 {
-    return 0;
+        return 0;
 }
 #endif
 
