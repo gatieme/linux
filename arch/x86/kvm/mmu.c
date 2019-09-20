@@ -2812,6 +2812,15 @@ static void mitosis_drop_replica_entries(u64 *sptep)
                         continue;
 
                 replica = virt_to_page(sp->spt[i]);
+                /*
+                 * TODO: This should never happen as long as EPT replication is not
+                 * enabled/disabled while a VM is running. We observe this case sometimes
+                 * but this needs to be fixed.
+                 */
+                if (!replica) {
+                    printk(KERN_ERR"[MITOSIS]: NULL Pointer Dereference\n");
+                    continue;
+                }
                 addr = REPLICA_ADDRESS(replica, offset);
                 if (!spte_has_volatile_bits(*(u64 *)addr))
                         __update_clear_spte_fast((u64 *)addr, 0ull);
