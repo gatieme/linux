@@ -6387,10 +6387,23 @@ remove_mitosis_kobj:
         kobject_put(*kobj);
         return err;
 }
+
+static void mitosis_remove_sysfs(void)
+{
+    struct kobject *kobj;
+
+    mitosis_drain_caches();
+    kobj = kobject_get(mm_kobj);
+    sysfs_remove_group(kobj, &mitosis_attr_group);
+}
 #else
 static int mitosis_init_sysfs(struct kobject **kobj)
 {
         return 0;
+}
+
+static void mitosis_remove_sysfs(void)
+{
 }
 #endif
 
@@ -6487,4 +6500,5 @@ void kvm_mmu_module_exit(void)
 	percpu_counter_destroy(&kvm_total_used_mmu_pages);
 	unregister_shrinker(&mmu_shrinker);
 	mmu_audit_disable();
+        mitosis_remove_sysfs();
 }
