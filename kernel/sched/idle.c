@@ -391,6 +391,12 @@ static void check_preempt_curr_idle(struct rq *rq, struct task_struct *p, int fl
 	resched_curr(rq);
 }
 
+static struct task_struct *
+pick_task_idle(struct rq *rq)
+{
+	return rq->idle;
+}
+
 static void put_prev_task_idle(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
 }
@@ -404,11 +410,12 @@ static void set_next_task_idle(struct rq *rq, struct task_struct *next)
 static struct task_struct *
 pick_next_task_idle(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
-	struct task_struct *next = rq->idle;
+	struct task_struct *next;
 
 	if (prev)
 		put_prev_task(rq, prev);
 
+	next = pick_task_idle(rq);
 	set_next_task_idle(rq, next);
 
 	return next;
@@ -476,6 +483,7 @@ const struct sched_class idle_sched_class = {
 	.set_next_task          = set_next_task_idle,
 
 #ifdef CONFIG_SMP
+	.pick_task		= pick_task_idle,
 	.select_task_rq		= select_task_rq_idle,
 	.set_cpus_allowed	= set_cpus_allowed_common,
 #endif

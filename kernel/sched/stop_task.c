@@ -30,18 +30,28 @@ static void set_next_task_stop(struct rq *rq, struct task_struct *stop)
 }
 
 static struct task_struct *
-pick_next_task_stop(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+pick_task_stop(struct rq *rq)
 {
 	struct task_struct *stop = rq->stop;
-
-	WARN_ON_ONCE(prev || rf);
 
 	if (!stop || !task_on_rq_queued(stop))
 		return NULL;
 
-	set_next_task_stop(rq, stop);
-
 	return stop;
+}
+
+static struct task_struct *
+pick_next_task_stop(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+{
+	struct task_struct *p;
+
+	WARN_ON_ONCE(prev || rf);
+
+	p = pick_task_stop(rq);
+	if (p)
+		set_next_task_stop(rq, p);
+
+	return p;
 }
 
 static void
@@ -130,6 +140,7 @@ const struct sched_class stop_sched_class = {
 	.set_next_task          = set_next_task_stop,
 
 #ifdef CONFIG_SMP
+	.pick_task		= pick_task_stop,
 	.select_task_rq		= select_task_rq_stop,
 	.set_cpus_allowed	= set_cpus_allowed_common,
 #endif
