@@ -7,7 +7,8 @@
  * Copyright (C) 2008 Qumranet, Inc.
  * Copyright IBM Corporation, 2008
  * Copyright 2010 Red Hat, Inc. and/or its affiliates.
- *
+ * Copyright (C) 2019-2020 VMware, Inc.
+ * 
  * Authors:
  *   Avi Kivity   <avi@qumranet.com>
  *   Yaniv Kamay  <yaniv@qumranet.com>
@@ -17,6 +18,7 @@
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
  *
+ * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/kvm_host.h>
@@ -6649,6 +6651,46 @@ static int kvm_pv_clock_pairing(struct kvm_vcpu *vcpu, gpa_t paddr,
 #endif
 
 /*
+ * Hypercall: Implementation to exchange a given GFN with a page from the
+ * specified socket on the hypervisor (useful for NUMA optimizations).
+ * NOTE: The caller must ensure that the supplied GFN is free in the guest.
+ */
+extern int mt_exchange_pfn(struct mm_struct *mm, unsigned long address,
+                            struct page *page, int nid);
+
+static int kvm_exchange_pfns(struct kvm_vcpu *vcpu, unsigned long gfn,
+                            unsigned long nid)
+{
+        struct mm_struct *mm;
+        unsigned long pfn, addr;
+        int ret;
+
+        /* validate the node id*/
+        if (nid > nr_node_ids)
+            return -EINVAL;
+
+        mm = vcpu->kvm->mm;
+        addr = gfn_to_hva(vcpu->kvm, gfn);
+        pfn = kvm_vcpu_gfn_to_pfn(vcpu, gfn);
+        if (!pfn_valid(pfn))
+                return -EINVAL;
+
+        /*
+         * No action needed if the page is already mapped to the
+         * intended socket.
+         */
+        if (pfn_to_nid(pfn) == nid)
+                return 0;
+
+        /* exchange page with a new page from the specified node */
+        ret = mt_exchange_pfn(mm, addr, pfn_to_page(pfn), nid);
+        if (!ret)
+                kvm_release_page_clean(pfn_to_page(pfn));
+
+        return 0;
+}
+
+/*
  * kvm_pv_kick_cpu_op:  Kick a vcpu.
  *
  * @apicid - apicid of vcpu to be kicked.
@@ -6716,6 +6758,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = kvm_pv_clock_pairing(vcpu, a0, a1);
 		break;
 #endif
+        case KVM_HC_EXCHANGE_PFN:
+                ret = kvm_exchange_pfns(vcpu, a0, a1);
+                break;
 	default:
 		ret = -KVM_ENOSYS;
 		break;

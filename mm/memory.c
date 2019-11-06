@@ -2,6 +2,9 @@
  *  linux/mm/memory.c
  *
  *  Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
+ *  Copyright (C) 2019-2020 VMware, Inc.
+ *
+ *  SPDX-License-Identifier: GPL-2.0
  */
 
 /*
@@ -4721,3 +4724,53 @@ void ptlock_free(struct page *page)
 	kmem_cache_free(page_ptl_cachep, page->ptl);
 }
 #endif
+
+/*
+ * Remap the given address in this task to a new page from the
+ * specified socket. The caller must ensure that the supplied
+ * address is free to be remapped.
+ */
+int mt_exchange_pfn(struct mm_struct *mm, unsigned long address,
+                    struct page *page, int nid)
+{
+        pte_t new_pte, *ptep;
+        pmd_t *pmd;
+        spinlock_t *ptl;
+        struct page *new_page;
+        struct vm_area_struct *vma;
+
+        new_page = alloc_pages_node(nid, GFP_KERNEL, 0);
+        if (!new_page)
+            return -ENOMEM;
+
+        vma = find_vma(mm, address);
+        if (!vma)
+            goto error;
+
+        /* get to the existing host pte */
+        pmd = mm_find_pmd(mm, address);
+        if (!pmd)
+            goto error;
+
+        page_add_new_anon_rmap(new_page, vma, address, false);
+        new_pte = mk_pte(new_page, vma->vm_page_prot);
+        mmu_notifier_invalidate_range_start(mm, address, address + PAGE_SIZE);
+        ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
+        ptep_clear_flush(vma, address, ptep);
+        set_pte_at_notify(mm, address, ptep, new_pte);
+        mmu_notifier_invalidate_range_end(mm, address, address + PAGE_SIZE);
+
+        /* Free the old page */
+        page_remove_rmap(page, false);
+        pte_unmap_unlock(ptep, ptl);
+        free_page_and_swap_cache(page);
+#if 0
+        printk(KERN_INFO"OldPFN: %ld NewPFN: %ld\n", page_to_pfn(page),
+                page_to_pfn(new_page));
+#endif
+
+        return 0;
+error:
+        return -EINVAL;
+}
+EXPORT_SYMBOL(mt_exchange_pfn);
