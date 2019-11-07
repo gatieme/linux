@@ -6690,6 +6690,27 @@ static int kvm_exchange_pfns(struct kvm_vcpu *vcpu, unsigned long gfn,
         return 0;
 }
 
+static int kvm_get_vcpu_info(struct kvm_vcpu *vcpu, unsigned long vcpu_id)
+{
+        int vcpu_count;
+
+        /* return the number of physical nodes */
+        if (vcpu_id == INT_MAX)
+            return nr_node_ids;
+
+        /* return the socket that vcpu_id is current mapped to */
+        vcpu_count = atomic_read(&(vcpu->kvm->online_vcpus));
+        if (vcpu_id < vcpu_count) {
+                vcpu = kvm_get_vcpu(vcpu->kvm, vcpu_id);
+                if (!vcpu)
+                        goto error;
+
+                return numa_cpu_node(vcpu->cpu);
+        }
+error:
+        return -EINVAL;
+}
+
 /*
  * kvm_pv_kick_cpu_op:  Kick a vcpu.
  *
@@ -6760,6 +6781,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 #endif
         case KVM_HC_EXCHANGE_PFN:
                 ret = kvm_exchange_pfns(vcpu, a0, a1);
+                break;
+        case KVM_HC_VCPU_INFO:
+                ret = kvm_get_vcpu_info(vcpu, a0);
                 break;
 	default:
 		ret = -KVM_ENOSYS;

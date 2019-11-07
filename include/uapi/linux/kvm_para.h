@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+/* Copyright (C) 2020 VMware, Inc. */
 #ifndef _UAPI__LINUX_KVM_PARA_H
 #define _UAPI__LINUX_KVM_PARA_H
 
@@ -26,7 +27,8 @@
 #define KVM_HC_MIPS_EXIT_VM		7
 #define KVM_HC_MIPS_CONSOLE_OUTPUT	8
 #define KVM_HC_CLOCK_PAIRING		9
-#define KVM_HC_EXCHANGE_PFN            10
+#define KVM_HC_EXCHANGE_PFN             10
+#define KVM_HC_VCPU_INFO                11
 /*
  * hypercalls use architecture specific
  */
