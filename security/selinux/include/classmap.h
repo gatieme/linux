@@ -1,5 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* 
+ * Copyright (C) 2019 VMware, Inc.
+ * SPDX-License-Identifier: GPL-2.0 
+ */
 #include <linux/capability.h>
+#include <linux/socket.h>
 
 #define COMMON_FILE_SOCK_PERMS "ioctl", "read", "write", "create", \
     "getattr", "setattr", "lock", "relabelfrom", "relabelto", "append", "map"
