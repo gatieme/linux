@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2019 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PARAVIRT_H
 #define _ASM_X86_PARAVIRT_H
@@ -448,6 +449,12 @@ static inline void set_pte(pte_t *ptep, pte_t pte)
 			    pte.pte);
 }
 
+static inline pte_t get_pte(pte_t *ptep)
+{
+	pteval_t pteval = PVOP_CALL1(pteval_t, pv_mmu_ops.get_pte, ptep);
+	return (pte_t) { pteval };
+}
+
 static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 			      pte_t *ptep, pte_t pte)
 {
@@ -458,6 +465,13 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 		PVOP_VCALL4(pv_mmu_ops.set_pte_at, mm, addr, ptep, pte.pte);
 }
 
+static inline pte_t get_pte_at(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep)
+{
+	pteval_t pteval = PVOP_CALL3(pteval_t, pv_mmu_ops.get_pte_at, mm, addr, ptep);
+	return (pte_t) { pteval };
+}
+
 static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
 {
 	pmdval_t val = native_pmd_val(pmd);
@@ -466,6 +480,12 @@ static inline void set_pmd(pmd_t *pmdp, pmd_t pmd)
 		PVOP_VCALL3(pv_mmu_ops.set_pmd, pmdp, val, (u64)val >> 32);
 	else
 		PVOP_VCALL2(pv_mmu_ops.set_pmd, pmdp, val);
+}
+
+static inline pmd_t get_pmd(pmd_t *pmdp)
+{
+	pmdval_t pmdval = PVOP_CALL1(pmdval_t, pv_mmu_ops.get_pmd, pmdp);
+	return (pmd_t){ pmdval };
 }
 
 #if CONFIG_PGTABLE_LEVELS >= 3
@@ -508,6 +528,13 @@ static inline void set_pud(pud_t *pudp, pud_t pud)
 		PVOP_VCALL2(pv_mmu_ops.set_pud, pudp,
 			    val);
 }
+
+static inline pud_t get_pud(pud_t *pudp)
+{
+	pudval_t pudval = PVOP_CALL1(pudval_t, pv_mmu_ops.get_pud, pudp);
+	return (pud_t) { pudval };
+}
+
 #if CONFIG_PGTABLE_LEVELS >= 4
 static inline pud_t __pud(pudval_t val)
 {
@@ -554,6 +581,13 @@ static inline void set_p4d(p4d_t *p4dp, p4d_t p4d)
 			    val);
 }
 
+static inline p4d_t get_p4d(p4d_t *p4dp)
+{
+	p4dval_t p4dval = PVOP_CALL1(p4dval_t, pv_mmu_ops.get_p4d, p4dp);
+	return __p4d(p4dval);
+}
+
+
 #if CONFIG_PGTABLE_LEVELS >= 5
 
 static inline p4d_t __p4d(p4dval_t val)
@@ -573,12 +607,26 @@ static inline void __set_pgd(pgd_t *pgdp, pgd_t pgd)
 	PVOP_VCALL2(pv_mmu_ops.set_pgd, pgdp, native_pgd_val(pgd));
 }
 
+static inline pgd_t __get_pgd(pgd_t *pgdp)
+{
+	pgdval_t pgdval = PVOP_CALL1(pgdval_t, pv_mmu_ops.get_pgd, pgdp);
+	return (pgd_t) { pgdval };
+}
+
 #define set_pgd(pgdp, pgdval) do {					\
 	if (pgtable_l5_enabled)						\
 		__set_pgd(pgdp, pgdval);				\
 	else								\
 		set_p4d((p4d_t *)(pgdp), (p4d_t) { (pgdval).pgd });	\
 } while (0)
+
+#define get_pgd(pgdp) do {			\
+	if (pgtable_l5_enabled)			\
+		__get_pgd(pgdp);			\
+	else							\
+		get_p4d((p4d_t *)(pgdp));	\
+} while (0)
+
 
 #define pgd_clear(pgdp) do {						\
 	if (pgtable_l5_enabled)						\

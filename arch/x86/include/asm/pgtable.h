@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2019 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PGTABLE_H
 #define _ASM_X86_PGTABLE_H
@@ -56,20 +57,27 @@ extern pmdval_t early_pmd_flags;
 #include <asm/paravirt.h>
 #else  /* !CONFIG_PARAVIRT */
 #define set_pte(ptep, pte)		native_set_pte(ptep, pte)
+#define get_pte(ptep)			native_get_pte(ptep)
 #define set_pte_at(mm, addr, ptep, pte)	native_set_pte_at(mm, addr, ptep, pte)
+#define get_pte_at(mm, addr, ptep)	native_get_pte_at(mm, addr, ptep)
 
 #define set_pte_atomic(ptep, pte)					\
 	native_set_pte_atomic(ptep, pte)
+#define get_pte_atomic(ptep)						\
+	native_get_pte_atomic(ptep)
 
 #define set_pmd(pmdp, pmd)		native_set_pmd(pmdp, pmd)
+#define get_pmd(pmdp)			native_get_pmd(pmdp)
 
 #ifndef __PAGETABLE_P4D_FOLDED
 #define set_pgd(pgdp, pgd)		native_set_pgd(pgdp, pgd)
+#define get_ptd(pgdp)			native_get_pgd(pgdp)
 #define pgd_clear(pgd)			(pgtable_l5_enabled ? native_pgd_clear(pgd) : 0)
 #endif
 
 #ifndef set_p4d
 # define set_p4d(p4dp, p4d)		native_set_p4d(p4dp, p4d)
+# define get_p4d(p4dp)			native_get_p4d(p4dp)
 #endif
 
 #ifndef __PAGETABLE_PUD_FOLDED
@@ -78,6 +86,7 @@ extern pmdval_t early_pmd_flags;
 
 #ifndef set_pud
 # define set_pud(pudp, pud)		native_set_pud(pudp, pud)
+# define get_pud(pudp)			native_get_pud(pudp)
 #endif
 
 #ifndef __PAGETABLE_PUD_FOLDED
@@ -1020,13 +1029,13 @@ static inline void native_set_pte_at(struct mm_struct *mm, unsigned long addr,
 static inline void set_pmd_at(struct mm_struct *mm, unsigned long addr,
 			      pmd_t *pmdp, pmd_t pmd)
 {
-	native_set_pmd(pmdp, pmd);
+	set_pmd(pmdp, pmd);
 }
 
 static inline void set_pud_at(struct mm_struct *mm, unsigned long addr,
 			      pud_t *pudp, pud_t pud)
 {
-	native_set_pud(pudp, pud);
+	set_pud(pudp, pud);
 }
 
 /*

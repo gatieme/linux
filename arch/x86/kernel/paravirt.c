@@ -1,5 +1,8 @@
 /*  Paravirtualization interfaces
     Copyright (C) 2006 Rusty Russell IBM Corporation
+	Copyright (C) 2018-2019 VMware, Inc.
+
+	SPDX-License-Identifier: GPL-2.0
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -396,6 +399,7 @@ struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 
 	.read_cr2 = native_read_cr2,
 	.write_cr2 = native_write_cr2,
+
 	.read_cr3 = __native_read_cr3,
 	.write_cr3 = native_write_cr3,
 
@@ -415,10 +419,12 @@ struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 	.release_pmd = paravirt_nop,
 	.release_pud = paravirt_nop,
 	.release_p4d = paravirt_nop,
-
 	.set_pte = native_set_pte,
+	.get_pte = native_get_pte,
 	.set_pte_at = native_set_pte_at,
+	.get_pte_at = native_get_pte_at,
 	.set_pmd = native_set_pmd,
+	.get_pmd = native_get_pmd,
 
 	.ptep_modify_prot_start = __ptep_modify_prot_start,
 	.ptep_modify_prot_commit = __ptep_modify_prot_commit,
@@ -426,10 +432,12 @@ struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 #if CONFIG_PGTABLE_LEVELS >= 3
 #ifdef CONFIG_X86_PAE
 	.set_pte_atomic = native_set_pte_atomic,
+	.get_pte_atomic = native_get_pte_atomic,
 	.pte_clear = native_pte_clear,
 	.pmd_clear = native_pmd_clear,
 #endif
 	.set_pud = native_set_pud,
+	.get_pud = native_get_pud,
 
 	.pmd_val = PTE_IDENT,
 	.make_pmd = PTE_IDENT,
@@ -439,12 +447,14 @@ struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 	.make_pud = PTE_IDENT,
 
 	.set_p4d = native_set_p4d,
+	.get_p4d = native_get_p4d,
 
 #if CONFIG_PGTABLE_LEVELS >= 5
 	.p4d_val = PTE_IDENT,
 	.make_p4d = PTE_IDENT,
 
 	.set_pgd = native_set_pgd,
+	.get_pgd = native_get_pgd,
 #endif /* CONFIG_PGTABLE_LEVELS >= 5 */
 #endif /* CONFIG_PGTABLE_LEVELS >= 4 */
 #endif /* CONFIG_PGTABLE_LEVELS >= 3 */

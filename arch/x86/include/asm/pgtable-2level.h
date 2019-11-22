@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2019 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PGTABLE_2LEVEL_H
 #define _ASM_X86_PGTABLE_2LEVEL_H
@@ -17,9 +18,19 @@ static inline void native_set_pte(pte_t *ptep , pte_t pte)
 	*ptep = pte;
 }
 
+static inline pte_t native_get_pte(pte_t *ptep)
+{
+	return *ptep;
+}
+
 static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
 {
 	*pmdp = pmd;
+}
+
+static inline pmd_t native_get_pmd(pmd_t *pmdp)
+{
+	return *pmdp;
 }
 
 static inline void native_set_pud(pud_t *pudp, pud_t pud)
@@ -29,6 +40,11 @@ static inline void native_set_pud(pud_t *pudp, pud_t pud)
 static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
 {
 	native_set_pte(ptep, pte);
+}
+
+static inline pte_t native_get_pte_atomic(pte_t *ptep)
+{
+	return native_get_pte(ptep);
 }
 
 static inline void native_pmd_clear(pmd_t *pmdp)

@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2019 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PGTABLE_64_H
 #define _ASM_X86_PGTABLE_64_H
@@ -66,6 +67,16 @@ static inline void native_set_pte(pte_t *ptep, pte_t pte)
 	*ptep = pte;
 }
 
+static inline pte_t native_get_pte(pte_t *ptep)
+{
+	return *ptep;
+}
+
+static inline pte_t native_get_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
+{
+        return native_get_pte(ptep);
+}
+
 static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
 {
 	native_set_pte(ptep, pte);
@@ -74,6 +85,11 @@ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
 static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
 {
 	*pmdp = pmd;
+}
+
+static inline pmd_t native_get_pmd(pmd_t *pmdp)
+{
+	return *pmdp;
 }
 
 static inline void native_pmd_clear(pmd_t *pmd)
@@ -110,6 +126,11 @@ static inline pmd_t native_pmdp_get_and_clear(pmd_t *xp)
 static inline void native_set_pud(pud_t *pudp, pud_t pud)
 {
 	*pudp = pud;
+}
+
+static inline pud_t native_get_pud(pud_t *pudp)
+{
+	return *pudp;
 }
 
 static inline void native_pud_clear(pud_t *pud)
@@ -230,6 +251,11 @@ static inline void native_set_p4d(p4d_t *p4dp, p4d_t p4d)
 	*p4dp = native_make_p4d(native_pgd_val(pgd));
 }
 
+static inline p4d_t native_get_p4d(p4d_t *p4dp)
+{
+	return *p4dp;
+}
+
 static inline void native_p4d_clear(p4d_t *p4d)
 {
 	native_set_p4d(p4d, native_make_p4d(0));
@@ -238,6 +264,11 @@ static inline void native_p4d_clear(p4d_t *p4d)
 static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
 {
 	*pgdp = pti_set_user_pgd(pgdp, pgd);
+}
+
+static inline pgd_t native_get_pgd(pgd_t *pgdp)
+{
+	return *pgdp;
 }
 
 static inline void native_pgd_clear(pgd_t *pgd)
