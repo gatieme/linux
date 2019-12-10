@@ -1164,8 +1164,6 @@ static void kvm_mmu_page_set_gfn(struct kvm_mmu_page *sp, int index, gfn_t gfn)
 	if (sp->role.direct)
 		BUG_ON(gfn != kvm_mmu_page_get_gfn(sp, index));
 	else {
-                printk(KERN_INFO"MITOSIS: index: %d gfn: %llu in shadow mode\n",
-                                index, gfn);
 		sp->gfns[index] = gfn;
         }
 }
@@ -2178,6 +2176,7 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
         int i;
+	struct page *page;
 	struct kvm_mmu_page *sp;
 
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
@@ -2191,8 +2190,9 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         }
 
 	if (!direct) {
-                printk("MITOSIS: allocating page for gfn in shadow mode\n");
-		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[0]);
+		page = alloc_page(GFP_KERNEL);
+		BUG_ON(page == NULL);
+		sp->gfns = (void *)page_address(page);
         }
         if (ept_replication) {
                 for (i = 0; i < nr_node_ids; i++)
@@ -2218,7 +2218,6 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         sp->spt = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
 
 	if (!direct) {
-                printk("MITOSIS: allocating page for gfn in shadow mode\n");
 		sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache);
         }
         set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
@@ -4056,8 +4055,21 @@ static void mmu_free_roots(struct kvm_vcpu *vcpu)
         vcpu->arch.mmu.root_hpa = INVALID_PAGE;
 }
 
+static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
+{
+	int ret = 0;
+
+	if (!kvm_is_visible_gfn(vcpu->kvm, root_gfn)) {
+		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		ret = 1;
+	}
+
+	return ret;
+}
+
 #ifdef CONFIG_PGTABLE_REPLICATION
-#define VCPU_NID(vcpu)     (numa_cpu_node(vcpu->cpu))
+//#define VCPU_NID(vcpu)     (numa_cpu_node(vcpu->cpu))
+#define VCPU_NID(vcpu)     (vcpu->cpu % nr_node_ids)
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
@@ -4077,6 +4089,27 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
                         vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_NID(vcpu)]);
                 else
                         vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp));
+	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
+		int i;
+		//printk(KERN_INFO"[MITOSIS]: %s\n", __func__);
+		for (i = 0; i < 4; ++i) {
+			hpa_t root = vcpu->arch.mmu.pae_root[i];
+
+			MMU_WARN_ON(VALID_PAGE(root));
+			spin_lock(&vcpu->kvm->mmu_lock);
+			if (make_mmu_pages_available(vcpu) < 0) {
+				spin_unlock(&vcpu->kvm->mmu_lock);
+				return -ENOSPC;
+			}
+			sp = kvm_mmu_get_page(vcpu, i << (30 - PAGE_SHIFT),
+					i << 30, PT32_ROOT_LEVEL, 1, ACC_ALL);
+			root = __pa(KVM_SPT(sp));
+			//root = __pa(sp->spt[vcpu->cpu % nr_node_ids]);
+			++sp->root_count;
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			vcpu->arch.mmu.pae_root[i] = root | PT_PRESENT_MASK;
+		}
+		vcpu->arch.mmu.root_hpa = __pa(vcpu->arch.mmu.pae_root);
 	} else
 		BUG();
 
@@ -4085,21 +4118,111 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 
 static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 {
+	struct kvm_mmu_page *sp;
+	u64 pdptr, pm_mask;
+	gfn_t root_gfn;
+	int i;
+
+	root_gfn = vcpu->arch.mmu.get_cr3(vcpu) >> PAGE_SHIFT;
+	//printk(KERN_INFO"%s\n", __func__);
+	if (mmu_check_root(vcpu, root_gfn))
+		return 1;
+
+	/*
+	 * Do we shadow a long mode page table? If so we need to
+	 * write-protect the guests page table root.
+	 */
+	if (vcpu->arch.mmu.root_level >= PT64_ROOT_4LEVEL) {
+		hpa_t root = vcpu->arch.mmu.root_hpa;
+
+		MMU_WARN_ON(VALID_PAGE(root));
+
+		spin_lock(&vcpu->kvm->mmu_lock);
+		if (make_mmu_pages_available(vcpu) < 0) {
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			return -ENOSPC;
+		}
+		sp = kvm_mmu_get_page(vcpu, root_gfn, 0,
+				vcpu->arch.mmu.shadow_root_level, 0, ACC_ALL);
+
+		if (ept_replication)
+			root = __pa(sp->spt[VCPU_NID(vcpu)]);
+		else
+			root = __pa(KVM_SPT(sp));
+
+		++sp->root_count;
+		spin_unlock(&vcpu->kvm->mmu_lock);
+                vcpu->arch.mmu.root_hpa = root;
+                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
+		return 0;
+	}
+        printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
         BUG();
+	/*
+	 * We shadow a 32 bit page table. This may be a legacy 2-level
+	 * or a PAE 3-level page table. In either case we need to be aware that
+	 * the shadow page table may be a PAE or a long mode page table.
+	 */
+	pm_mask = PT_PRESENT_MASK;
+	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_4LEVEL)
+		pm_mask |= PT_ACCESSED_MASK | PT_WRITABLE_MASK | PT_USER_MASK;
+
+	for (i = 0; i < 4; ++i) {
+		hpa_t root = vcpu->arch.mmu.pae_root[i];
+
+		MMU_WARN_ON(VALID_PAGE(root));
+		if (vcpu->arch.mmu.root_level == PT32E_ROOT_LEVEL) {
+			pdptr = vcpu->arch.mmu.get_pdptr(vcpu, i);
+			if (!(pdptr & PT_PRESENT_MASK)) {
+				vcpu->arch.mmu.pae_root[i] = 0;
+				continue;
+			}
+			root_gfn = pdptr >> PAGE_SHIFT;
+			if (mmu_check_root(vcpu, root_gfn))
+				return 1;
+		}
+		spin_lock(&vcpu->kvm->mmu_lock);
+		if (make_mmu_pages_available(vcpu) < 0) {
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			return -ENOSPC;
+		}
+		sp = kvm_mmu_get_page(vcpu, root_gfn, i << 30, PT32_ROOT_LEVEL,
+				      0, ACC_ALL);
+		root = __pa(KVM_SPT(sp));
+		++sp->root_count;
+		spin_unlock(&vcpu->kvm->mmu_lock);
+
+		vcpu->arch.mmu.pae_root[i] = root | pm_mask;
+	}
+	vcpu->arch.mmu.root_hpa = __pa(vcpu->arch.mmu.pae_root);
+
+	/*
+	 * If we shadow a 32 bit page table with a long mode page
+	 * table we enter this path.
+	 */
+	if (vcpu->arch.mmu.shadow_root_level == PT64_ROOT_4LEVEL) {
+		if (vcpu->arch.mmu.lm_root == NULL) {
+			/*
+			 * The additional page necessary for this is only
+			 * allocated on demand.
+			 */
+
+			u64 *lm_root;
+
+			lm_root = (void*)get_zeroed_page(GFP_KERNEL);
+			if (lm_root == NULL)
+				return 1;
+
+			lm_root[0] = __pa(vcpu->arch.mmu.pae_root) | pm_mask;
+
+			vcpu->arch.mmu.lm_root = lm_root;
+		}
+
+		vcpu->arch.mmu.root_hpa = __pa(vcpu->arch.mmu.lm_root);
+	}
+	return 0;
 }
 #else
-static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
-{
-	int ret = 0;
-
-	if (!kvm_is_visible_gfn(vcpu->kvm, root_gfn)) {
-		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
-		ret = 1;
-	}
-
-	return ret;
-}
-
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
