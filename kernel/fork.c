@@ -914,6 +914,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	if (current->mm) {
 		mm->flags = current->mm->flags & MMF_INIT_MASK;
 		mm->def_flags = current->mm->def_flags & VM_INIT_DEF_MASK;
+#ifdef CONFIG_PGTABLE_REPLICATION
+		mm->repl_pgd_enabled = current->mm->repl_pgd_enabled;
+#endif		
 	} else {
 		mm->flags = default_dump_filter;
 		mm->def_flags = 0;
