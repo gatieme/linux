@@ -805,6 +805,24 @@ static bool pgtable_repl_activated = false;
 int pgtable_fixed_node = -1;
 nodemask_t pgtable_fixed_nodemask = NODE_MASK_NONE;
 
+
+/*
+ * ==================================================================
+ * Prepare Replication
+ * ==================================================================
+ */
+
+#include <linux/sched/task.h>
+
+#ifndef virt_to_pfn
+#define virt_to_pfn(kaddr)	(__pa(kaddr) >> PAGE_SHIFT)
+#endif
+
+int pgtbl_repl_prepare_replication(struct mm_struct *mm, nodemask_t nodes)
+{
+	return -ENOSYS;
+}
+
 /*
  * procfs control files
  */

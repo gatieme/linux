@@ -1156,7 +1156,7 @@ static inline pmd_t pmdp_establish(struct vm_area_struct *vma,
 {
 	#ifdef CONFIG_PGTABLE_REPLICATION
 	pmd_t old = get_pmd(pmdp);
-	set_pmd(pmdp) = pmd;
+	set_pmd(pmdp, pmd);
 	return old;
 	#else /* CONFIG_PGTABLE_REPLICATION */
 	if (IS_ENABLED(CONFIG_SMP)) {
