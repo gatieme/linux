@@ -511,8 +511,34 @@ extern struct page *alloc_pages_vma(gfp_t gfp_mask, int order,
 #define alloc_page_vma_node(gfp_mask, vma, addr, node)		\
 	alloc_pages_vma(gfp_mask, 0, vma, addr, node, false)
 
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+extern int pgtable_fixed_node;
+extern nodemask_t pgtable_fixed_nodemask;
+static inline struct page *alloc_pages_ptable(gfp_t gfp_mask, int order)
+{
+	nodemask_t nm;
+	if (pgtable_fixed_node == -1) {
+		return alloc_pages(gfp_mask, order);
+	} else {
+		nm = NODE_MASK_NONE;
+		node_set(pgtable_fixed_node, nm);
+
+		/* allocte a new page, and place it in the replica list */
+		return __alloc_pages_nodemask(gfp_mask, 0, pgtable_fixed_node, &nm);
+	}
+}
+
+#define alloc_page_ptable(gfp_mask) \
+       alloc_pages_ptable(gfp_mask, 0)
+
+#else
+
 #define alloc_pages_ptable(gfp_mask, order) alloc_pages(gfp_mask, order)
 #define alloc_page_ptable(gfp_mask) alloc_page(gfp_mask)
+
+#endif // CONFIG_PGTABLE_REPLICATION
 
 extern unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order);
 extern unsigned long get_zeroed_page(gfp_t gfp_mask);

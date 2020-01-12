@@ -788,6 +788,24 @@ int pmd_free_pte_page(pmd_t *pmd)
 
 
 /*
+ * ==================================================================
+ * Page Table replication extension using paravirt ops
+ * ==================================================================
+ */
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+///> pgtable_repl_initialized tracks whether the system is ready for handling page table replication
+static bool pgtable_repl_initialized = false;
+
+///> tracks whether page table replication is activated for new processes by default
+static bool pgtable_repl_activated = false;
+
+///> where to allocate the page tables from
+int pgtable_fixed_node = -1;
+nodemask_t pgtable_fixed_nodemask = NODE_MASK_NONE;
+
+/*
  * procfs control files
  */
 #ifdef CONFIG_PROC_SYSCTL
@@ -795,13 +813,71 @@ int pmd_free_pte_page(pmd_t *pmd)
 int sysctl_numa_pgtable_replication(struct ctl_table *table, int write, void __user *buffer,
                                     size_t *lenp, loff_t *ppos)
 {
-	return -EINVAL;
+	struct ctl_table t;
+	int err;
+	int state = (pgtable_repl_activated ? 1 : pgtable_fixed_node);
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &state;
+	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+	if (write) {
+		if (state == -1) {
+			/* the default behavior */
+			printk("Page table allocation set to normal behavior\n");
+			pgtable_repl_activated = false;
+			pgtable_fixed_node = -1;
+			pgtable_fixed_nodemask = NODE_MASK_NONE;
+		} else if (state == 0) {
+			/* fixed on node 0 */
+			printk("Page table allocation set to fixed on node 0\n");
+			pgtable_repl_activated = false;
+			pgtable_fixed_node = 0;
+			pgtable_fixed_nodemask = NODE_MASK_NONE;
+			node_set(pgtable_fixed_node, pgtable_fixed_nodemask);
+		} else {
+			/* replication enabled */
+			printk("Page table allocation set to replicated\n");
+			pgtable_repl_activated = true;
+			pgtable_fixed_node = 0;
+			pgtable_fixed_nodemask = NODE_MASK_NONE;
+			node_set(pgtable_fixed_node, pgtable_fixed_nodemask);
+		}
+	}
+	return err;
 }
 
 
 int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, int write, void __user *buffer,
                                               size_t *lenp, loff_t *ppos)
 {
-	return -EINVAL;
+	struct ctl_table t;
+	int err;
+	int state = 0;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &state;
+	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+	if (write) {
+		if (state < 0) {
+			/* the default behavior */
+			printk("PROCFS: Command ot drain the pgtable cache\n");
+			//pgtable_cache_drain();
+		} else if (state > 0) {
+			printk("PROCFS: Command ot populate the pgtable cache\n");
+			//pgtable_cache_populate(state);
+		}
+	}
+	return err;
 }
 #endif /* CONFIG_PROC_SYSCTL */
+#endif /* CONFIG_PGTABLE_REPLICATION */
