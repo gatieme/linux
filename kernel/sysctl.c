@@ -388,6 +388,24 @@ static struct ctl_table kern_table[] = {
 	},
 #endif /* CONFIG_SCHEDSTATS */
 #endif /* CONFIG_SMP */
+#ifdef CONFIG_NUMA
+#ifdef CONFIG_PGTABLE_REPLICATION
+	{
+		.procname	= "pgtable_replication",
+		.data		= NULL, /* filled in by handler */
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_numa_pgtable_replication
+	},
+	{
+		.procname	= "pgtable_replication_cache",
+		.data		= NULL, /* filled in by handler */
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_numa_pgtable_replication_cache_ctl
+	},
+#endif
+#endif
 #ifdef CONFIG_NUMA_BALANCING
 	{
 		.procname	= "numa_balancing_scan_delay_ms",

@@ -785,3 +785,23 @@ int pmd_free_pte_page(pmd_t *pmd)
 	return 1;
 }
 #endif	/* CONFIG_HAVE_ARCH_HUGE_VMAP */
+
+
+/*
+ * procfs control files
+ */
+#ifdef CONFIG_PROC_SYSCTL
+
+int sysctl_numa_pgtable_replication(struct ctl_table *table, int write, void __user *buffer,
+                                    size_t *lenp, loff_t *ppos)
+{
+	return -EINVAL;
+}
+
+
+int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, int write, void __user *buffer,
+                                              size_t *lenp, loff_t *ppos)
+{
+	return -EINVAL;
+}
+#endif /* CONFIG_PROC_SYSCTL */
