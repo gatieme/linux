@@ -1154,6 +1154,11 @@ static inline int pud_write(pud_t pud)
 static inline pmd_t pmdp_establish(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmdp, pmd_t pmd)
 {
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	pmd_t old = get_pmd(pmdp);
+	set_pmd(pmdp) = pmd;
+	return old;
+	#else /* CONFIG_PGTABLE_REPLICATION */
 	if (IS_ENABLED(CONFIG_SMP)) {
 		return xchg(pmdp, pmd);
 	} else {
@@ -1161,6 +1166,7 @@ static inline pmd_t pmdp_establish(struct vm_area_struct *vma,
 		*pmdp = pmd;
 		return old;
 	}
+	#endif /* CONFIG_PGTABLE_REPLICATION */
 }
 #endif
 
@@ -1328,6 +1334,91 @@ static inline bool pud_access_permitted(pud_t pud, bool write)
 {
 	return __pte_access_permitted(pud_val(pud), write);
 }
+
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+void pgtable_repl_enable(void);
+void pgtable_repl_disable(void);
+
+unsigned long pgtable_repl_read_cr3(void);
+void pgtable_repl_write_cr3(unsigned long);
+
+/*
+ * ----------------------------------------------------------
+ * Allocation of the global page table (PGD)
+ * ----------------------------------------------------------
+ */
+int pgtable_repl_pgd_alloc(struct mm_struct *mm);
+void pgtable_repl_pgd_free(struct mm_struct *mm, pgd_t *pgd);
+
+/*
+ * ----------------------------------------------------------
+ * Allocation of the lower level page tables
+ * ----------------------------------------------------------
+ */
+
+int pgtbl_repl_prepare_replication(struct mm_struct *mm, nodemask_t nodes);
+void pgtable_repl_activate_mm(struct mm_struct *prev, struct mm_struct *next);
+
+/*
+ * ----------------------------------------------------------
+ * Allocation of the lower level page tables
+ * ----------------------------------------------------------
+ */
+void pgtable_repl_alloc_pte(struct mm_struct *mm, unsigned long pfn);
+void pgtable_repl_alloc_pmd(struct mm_struct *mm, unsigned long pfn);
+void pgtable_repl_alloc_pud(struct mm_struct *mm, unsigned long pfn);
+void pgtable_repl_alloc_p4d(struct mm_struct *mm, unsigned long pfn);
+
+void pgtable_repl_release_pte(unsigned long pfn);
+void pgtable_repl_release_pmd(unsigned long pfn);
+void pgtable_repl_release_pud(unsigned long pfn);
+void pgtable_repl_release_p4d(unsigned long pfn);
+
+
+void pgtable_repl_set_pte(pte_t *ptep, pte_t pteval);
+pte_t pgtable_repl_get_pte(pte_t *ptep);
+void pgtable_repl_set_pte_at(struct mm_struct *mm, unsigned long addr,
+			pte_t *ptep, pte_t pteval);
+pte_t pgtable_repl_get_pte_at(struct mm_struct *mm, unsigned long addr,
+			pte_t *ptep);
+void pgtable_repl_set_pmd(pmd_t *pmdp, pmd_t pmdval);
+
+pte_t pgtable_repl_ptep_modify_prot_start(struct mm_struct *mm, unsigned long addr,
+				pte_t *ptep);
+void pgtable_repl_ptep_modify_prot_commit(struct mm_struct *mm, unsigned long addr,
+				pte_t *ptep, pte_t pte);
+
+
+#if CONFIG_PGTABLE_LEVELS >= 3
+#ifdef CONFIG_X86_PAE
+void pgtable_repl_set_pte_atomic(pte_t *ptep, pte_t pteval);
+pte_t pgtable_repl_get_pte_atomic(pte_t *ptep);
+void pgtable_repl_pte_clear(struct mm_struct *mm, unsigned long addr,
+			pte_t *ptep);
+void pgtable_repl_pmd_clear(pmd_t *pmdp);
+#endif	/* CONFIG_X86_PAE */
+
+void pgtable_repl_set_pud(pud_t *pudp, pud_t pudval);
+pud_t pgtable_repl_get_pud(pud_t *pudp);
+
+#if CONFIG_PGTABLE_LEVELS >= 4
+void pgtable_repl_set_p4d(p4d_t *p4dp, p4d_t p4dval);
+p4d_t pgtable_repl_get_p4d(p4d_t *p4dp);
+
+#if CONFIG_PGTABLE_LEVELS >= 5
+
+void pgtable_repl_set_pgd(pgd_t *pgdp, pgd_t pgdval);
+pgd_t pgtable_repl_get_pgd(pgd_t *pgdp);
+
+#endif	/* CONFIG_PGTABLE_LEVELS >= 5 */
+#endif	/* CONFIG_PGTABLE_LEVELS >= 4 */
+#endif	/* CONFIG_PGTABLE_LEVELS >= 3 */
+#endif  /* CONFIG_PGTABLE_REPLICATION */
+
+
+
 
 #include <asm-generic/pgtable.h>
 #endif	/* __ASSEMBLY__ */
