@@ -906,11 +906,11 @@ static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
 		if (pvmw.pte) {
 			pte_t entry;
 			pte_t *pte = pvmw.pte;
-
-			if (!pte_dirty(*pte) && !pte_write(*pte))
+			entry = get_pte(pte);
+			if (!pte_dirty(entry) && !pte_write(entry))
 				continue;
 
-			flush_cache_page(vma, address, pte_pfn(*pte));
+			flush_cache_page(vma, address, pte_pfn(entry));
 			entry = ptep_clear_flush(vma, address, pte);
 			entry = pte_wrprotect(entry);
 			entry = pte_mkclean(entry);
@@ -921,7 +921,8 @@ static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
 			pmd_t *pmd = pvmw.pmd;
 			pmd_t entry;
 
-			if (!pmd_dirty(*pmd) && !pmd_write(*pmd))
+			entry = get_pmd(pmd);
+			if (!pmd_dirty(entry) && !pmd_write(entry))
 				continue;
 
 			flush_cache_page(vma, address, page_to_pfn(page));

@@ -275,7 +275,7 @@ static void __init pti_setup_vsyscall(void)
 	if (WARN_ON(!target_pte))
 		return;
 
-	*target_pte = *pte;
+	set_pte(target_pte, *pte);
 	set_vsyscall_pgtable_user_bits(kernel_to_user_pgdp(swapper_pg_dir));
 }
 #else

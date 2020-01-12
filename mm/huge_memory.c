@@ -846,7 +846,7 @@ static void touch_pmd(struct vm_area_struct *vma, unsigned long addr,
 {
 	pmd_t _pmd;
 
-	_pmd = pmd_mkyoung(*pmd);
+	_pmd = pmd_mkyoung(get_pmd(pmd));
 	if (flags & FOLL_WRITE)
 		_pmd = pmd_mkdirty(_pmd);
 	if (pmdp_set_access_flags(vma, addr & HPAGE_PMD_MASK,
@@ -922,7 +922,9 @@ int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	spin_lock_nested(src_ptl, SINGLE_DEPTH_NESTING);
 
 	ret = -EAGAIN;
-	pmd = *src_pmd;
+
+	pmd = get_pmd(src_pmd);
+
 
 #ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
 	if (unlikely(is_swap_pmd(pmd))) {
@@ -932,7 +934,7 @@ int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		if (is_write_migration_entry(entry)) {
 			make_migration_entry_read(&entry);
 			pmd = swp_entry_to_pmd(entry);
-			if (pmd_swp_soft_dirty(*src_pmd))
+			if (pmd_swp_soft_dirty(get_pmd(src_pmd)))
 				pmd = pmd_swp_mksoft_dirty(pmd);
 			set_pmd_at(src_mm, addr, src_pmd, pmd);
 		}
@@ -1085,7 +1087,7 @@ void huge_pud_set_accessed(struct vm_fault *vmf, pud_t orig_pud)
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
 
 	vmf->ptl = pud_lock(vmf->vma->vm_mm, vmf->pud);
-	if (unlikely(!pud_same(*vmf->pud, orig_pud)))
+	if (unlikely(!pud_same(get_pud(vmf->pud), orig_pud)))
 		goto unlock;
 
 	entry = pud_mkyoung(orig_pud);
@@ -1107,9 +1109,8 @@ void huge_pmd_set_accessed(struct vm_fault *vmf, pmd_t orig_pmd)
 	bool write = vmf->flags & FAULT_FLAG_WRITE;
 
 	vmf->ptl = pmd_lock(vmf->vma->vm_mm, vmf->pmd);
-	if (unlikely(!pmd_same(*vmf->pmd, orig_pmd)))
+	if (unlikely(!pmd_same(get_pmd(vmf->pmd), orig_pmd)))
 		goto unlock;
-
 	entry = pmd_mkyoung(orig_pmd);
 	if (write)
 		entry = pmd_mkdirty(entry);
@@ -1175,7 +1176,7 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 	mmu_notifier_invalidate_range_start(vma->vm_mm, mmun_start, mmun_end);
 
 	vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
-	if (unlikely(!pmd_same(*vmf->pmd, orig_pmd)))
+	if (unlikely(!pmd_same(get_pmd(vmf->pmd), orig_pmd)))
 		goto out_free_pages;
 	VM_BUG_ON_PAGE(!PageHead(page), page);
 
@@ -1255,7 +1256,7 @@ int do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 	if (is_huge_zero_pmd(orig_pmd))
 		goto alloc;
 	spin_lock(vmf->ptl);
-	if (unlikely(!pmd_same(*vmf->pmd, orig_pmd)))
+	if (unlikely(!pmd_same(get_pmd(vmf->pmd), orig_pmd)))
 		goto out_unlock;
 
 	page = pmd_page(orig_pmd);
@@ -1269,7 +1270,7 @@ int do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 		spin_unlock(vmf->ptl);
 		lock_page(page);
 		spin_lock(vmf->ptl);
-		if (unlikely(!pmd_same(*vmf->pmd, orig_pmd))) {
+		if (unlikely(!pmd_same(get_pmd(vmf->pmd), orig_pmd))) {
 			unlock_page(page);
 			put_page(page);
 			goto out_unlock;
@@ -1341,7 +1342,7 @@ alloc:
 	spin_lock(vmf->ptl);
 	if (page)
 		put_page(page);
-	if (unlikely(!pmd_same(*vmf->pmd, orig_pmd))) {
+	if (unlikely(!pmd_same(get_pmd(vmf->pmd), orig_pmd))) {
 		spin_unlock(vmf->ptl);
 		mem_cgroup_cancel_charge(new_page, memcg, true);
 		put_page(new_page);
@@ -1473,7 +1474,7 @@ int do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 	int flags = 0;
 
 	vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
-	if (unlikely(!pmd_same(pmd, *vmf->pmd)))
+	if (unlikely(!pmd_same(pmd, get_pmd(vmf->pmd))))
 		goto out_unlock;
 
 	/*
@@ -1538,7 +1539,7 @@ int do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t pmd)
 
 	/* Confirm the PMD did not change while page_table_lock was released */
 	spin_lock(vmf->ptl);
-	if (unlikely(!pmd_same(pmd, *vmf->pmd))) {
+	if (unlikely(!pmd_same(pmd, get_pmd(vmf->pmd)))) {
 		unlock_page(page);
 		put_page(page);
 		page_nid = -1;
@@ -1624,7 +1625,7 @@ bool madvise_free_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	if (!ptl)
 		goto out_unlocked;
 
-	orig_pmd = *pmd;
+	orig_pmd = get_pmd(pmd);
 	if (is_huge_zero_pmd(orig_pmd))
 		goto out;
 
@@ -2886,9 +2887,8 @@ void set_pmd_migration_entry(struct page_vma_mapped_walk *pvmw,
 
 	mmu_notifier_invalidate_range_start(mm, address,
 			address + HPAGE_PMD_SIZE);
-
 	flush_cache_range(vma, address, address + HPAGE_PMD_SIZE);
-	pmdval = *pvmw->pmd;
+	pmdval = get_pmd(pvmw->pmd);
 	pmdp_invalidate(vma, address, pvmw->pmd);
 	if (pmd_dirty(pmdval))
 		set_page_dirty(page);
@@ -2916,10 +2916,10 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct page *new)
 	if (!(pvmw->pmd && !pvmw->pte))
 		return;
 
-	entry = pmd_to_swp_entry(*pvmw->pmd);
+	entry = pmd_to_swp_entry(get_pmd(pvmw->pmd));
 	get_page(new);
 	pmde = pmd_mkold(mk_huge_pmd(new, vma->vm_page_prot));
-	if (pmd_swp_soft_dirty(*pvmw->pmd))
+	if (pmd_swp_soft_dirty(get_pmd(pvmw->pmd)))
 		pmde = pmd_mksoft_dirty(pmde);
 	if (is_write_migration_entry(entry))
 		pmde = maybe_pmd_mkwrite(pmde, vma);

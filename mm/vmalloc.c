@@ -303,7 +303,7 @@ struct page *vmalloc_to_page(const void *vmalloc_addr)
 		return NULL;
 
 	ptep = pte_offset_map(pmd, addr);
-	pte = *ptep;
+	pte = get_pte(ptep);
 	if (pte_present(pte))
 		page = pte_page(pte);
 	pte_unmap(ptep);

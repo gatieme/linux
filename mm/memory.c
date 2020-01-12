@@ -1300,7 +1300,7 @@ again:
 	flush_tlb_batched_pending(mm);
 	arch_enter_lazy_mmu_mode();
 	do {
-		pte_t ptent = *pte;
+		pte_t ptent = get_pte(pte);
 		if (pte_none(ptent))
 			continue;
 
@@ -1805,7 +1805,7 @@ static int insert_pfn(struct vm_area_struct *vma, unsigned long addr,
 			 */
 			if (WARN_ON_ONCE(pte_pfn(*pte) != pfn_t_to_pfn(pfn)))
 				goto out_unlock;
-			entry = *pte;
+			entry = get_pte(pte);
 			goto out_mkwrite;
 		} else
 			goto out_unlock;
@@ -2184,7 +2184,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 
 	arch_enter_lazy_mmu_mode();
 
-	token = pmd_pgtable(*pmd);
+	token = pmd_pgtable(get_pmd(pmd));
 
 	do {
 		err = fn(pte++, token, addr, data);
@@ -2304,7 +2304,7 @@ static inline int pte_unmap_same(struct mm_struct *mm, pmd_t *pmd,
 	if (sizeof(pte_t) > sizeof(unsigned long)) {
 		spinlock_t *ptl = pte_lockptr(mm, pmd);
 		spin_lock(ptl);
-		same = pte_same(*page_table, orig_pte);
+		same = pte_same(get_pte(page_table), orig_pte);
 		spin_unlock(ptl);
 	}
 #endif
@@ -2505,7 +2505,7 @@ static int wp_page_copy(struct vm_fault *vmf)
 	 * Re-check the pte - we dropped the lock
 	 */
 	vmf->pte = pte_offset_map_lock(mm, vmf->pmd, vmf->address, &vmf->ptl);
-	if (likely(pte_same(*vmf->pte, vmf->orig_pte))) {
+	if (likely(pte_same(get_pte(vmf->pte), vmf->orig_pte))) {
 		if (old_page) {
 			if (!PageAnon(old_page)) {
 				dec_mm_counter_fast(mm,
@@ -2623,7 +2623,7 @@ int finish_mkwrite_fault(struct vm_fault *vmf)
 	 * We might have raced with another page fault while we released the
 	 * pte_offset_map_lock.
 	 */
-	if (!pte_same(*vmf->pte, vmf->orig_pte)) {
+	if (!pte_same(get_pte(vmf->pte), vmf->orig_pte)) {
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		return VM_FAULT_NOPAGE;
 	}
@@ -2738,7 +2738,7 @@ static int do_wp_page(struct vm_fault *vmf)
 			lock_page(vmf->page);
 			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
 					vmf->address, &vmf->ptl);
-			if (!pte_same(*vmf->pte, vmf->orig_pte)) {
+			if (!pte_same(get_pte(vmf->pte), vmf->orig_pte)) {
 				unlock_page(vmf->page);
 				pte_unmap_unlock(vmf->pte, vmf->ptl);
 				put_page(vmf->page);
@@ -2949,7 +2949,7 @@ int do_swap_page(struct vm_fault *vmf)
 			 */
 			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
 					vmf->address, &vmf->ptl);
-			if (likely(pte_same(*vmf->pte, vmf->orig_pte)))
+			if (likely(pte_same(get_pte(vmf->pte), vmf->orig_pte)))
 				ret = VM_FAULT_OOM;
 			delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 			goto unlock;
@@ -3005,7 +3005,7 @@ int do_swap_page(struct vm_fault *vmf)
 	 */
 	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
 			&vmf->ptl);
-	if (unlikely(!pte_same(*vmf->pte, vmf->orig_pte)))
+	if (unlikely(!pte_same(get_pte(vmf->pte), vmf->orig_pte)))
 		goto out_nomap;
 
 	if (unlikely(!PageUptodate(page))) {
@@ -3777,7 +3777,7 @@ static int do_numa_page(struct vm_fault *vmf)
 	 */
 	vmf->ptl = pte_lockptr(vma->vm_mm, vmf->pmd);
 	spin_lock(vmf->ptl);
-	if (unlikely(!pte_same(*vmf->pte, vmf->orig_pte))) {
+	if (unlikely(!pte_same(get_pte(vmf->pte), vmf->orig_pte))) {
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		goto out;
 	}
@@ -3939,7 +3939,7 @@ static int handle_pte_fault(struct vm_fault *vmf)
 		 * So now it's safe to run pte_offset_map().
 		 */
 		vmf->pte = pte_offset_map(vmf->pmd, vmf->address);
-		vmf->orig_pte = *vmf->pte;
+		vmf->orig_pte = get_pte(vmf->pte);
 
 		/*
 		 * some architectures can have larger ptes than wordsize,
@@ -3972,7 +3972,7 @@ static int handle_pte_fault(struct vm_fault *vmf)
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 	spin_lock(vmf->ptl);
 	entry = vmf->orig_pte;
-	if (unlikely(!pte_same(*vmf->pte, entry)))
+	if (unlikely(!pte_same(get_pte(vmf->pte), entry)))
 		goto unlock;
 	if (vmf->flags & FAULT_FLAG_WRITE) {
 		if (!pte_write(entry))
@@ -4033,7 +4033,7 @@ static int __handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		if (!(ret & VM_FAULT_FALLBACK))
 			return ret;
 	} else {
-		pud_t orig_pud = *vmf.pud;
+		pud_t orig_pud = get_pud(vmf.pud);
 
 		barrier();
 		if (pud_trans_huge(orig_pud) || pud_devmap(orig_pud)) {
@@ -4059,7 +4059,7 @@ static int __handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		if (!(ret & VM_FAULT_FALLBACK))
 			return ret;
 	} else {
-		pmd_t orig_pmd = *vmf.pmd;
+		pmd_t orig_pmd = get_pmd(vmf.pmd);
 
 		barrier();
 		if (unlikely(is_swap_pmd(orig_pmd))) {
@@ -4361,7 +4361,7 @@ int follow_phys(struct vm_area_struct *vma,
 
 	if (follow_pte(vma->vm_mm, address, &ptep, &ptl))
 		goto out;
-	pte = *ptep;
+	pte = get_pte(ptep);
 
 	if ((flags & FOLL_WRITE) && !pte_write(pte))
 		goto unlock;

@@ -79,7 +79,7 @@ static inline int huge_ptep_set_access_flags(struct vm_area_struct *vma,
 
 static inline pte_t huge_ptep_get(pte_t *ptep)
 {
-	return *ptep;
+	return get_pte(ptep);
 }
 
 static inline void arch_clear_hugepage_flags(struct page *page)

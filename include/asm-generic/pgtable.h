@@ -63,7 +63,7 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma,
 					    unsigned long address,
 					    pte_t *ptep)
 {
-	pte_t pte = *ptep;
+	pte_t pte = get_pte(ptep);
 	int r = 1;
 	if (!pte_young(pte))
 		r = 0;
@@ -79,7 +79,7 @@ static inline int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 					    unsigned long address,
 					    pmd_t *pmdp)
 {
-	pmd_t pmd = *pmdp;
+	pmd_t pmd = get_pmd(pmdp);
 	int r = 1;
 	if (!pmd_young(pmd))
 		r = 0;
@@ -138,7 +138,7 @@ static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm,
 					    unsigned long address,
 					    pmd_t *pmdp)
 {
-	pmd_t pmd = *pmdp;
+	pmd_t pmd = get_pmd(pmdp);
 	pmd_clear(pmdp);
 	return pmd;
 }
@@ -148,8 +148,7 @@ static inline pud_t pudp_huge_get_and_clear(struct mm_struct *mm,
 					    unsigned long address,
 					    pud_t *pudp)
 {
-	pud_t pud = *pudp;
-
+	pud_t pud = get_pud(pudp);
 	pud_clear(pudp);
 	return pud;
 }
@@ -221,7 +220,7 @@ extern pud_t pudp_huge_clear_flush(struct vm_area_struct *vma,
 struct mm_struct;
 static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long address, pte_t *ptep)
 {
-	pte_t old_pte = *ptep;
+	pte_t old_pte = get_pte(ptep);
 	set_pte_at(mm, address, ptep, pte_wrprotect(old_pte));
 }
 #endif
@@ -255,7 +254,7 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addres
 static inline void pmdp_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pmd_t *pmdp)
 {
-	pmd_t old_pmd = *pmdp;
+	pmd_t old_pmd = get_pmd(pmdp);
 	set_pmd_at(mm, address, pmdp, pmd_wrprotect(old_pmd));
 }
 #else
@@ -271,7 +270,7 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
 static inline void pudp_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pud_t *pudp)
 {
-	pud_t old_pud = *pudp;
+	pud_t old_pud = get_pud(pudp);
 
 	set_pud_at(mm, address, pudp, pud_wrprotect(old_pud));
 }
@@ -294,7 +293,7 @@ static inline pmd_t pmdp_collapse_flush(struct vm_area_struct *vma,
 					pmd_t *pmdp)
 {
 	BUILD_BUG();
-	return *pmdp;
+	return get_pmd(pmdp);
 }
 #define pmdp_collapse_flush pmdp_collapse_flush
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
@@ -318,7 +317,7 @@ extern pgtable_t pgtable_trans_huge_withdraw(struct mm_struct *mm, pmd_t *pmdp);
 static inline pmd_t generic_pmdp_establish(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmdp, pmd_t pmd)
 {
-	pmd_t old_pmd = *pmdp;
+	pmd_t old_pmd = get_pmd(pmdp);
 	set_pmd_at(vma->vm_mm, address, pmdp, pmd);
 	return old_pmd;
 }
@@ -537,7 +536,7 @@ static inline int pgd_none_or_clear_bad(pgd_t *pgd)
 
 static inline int p4d_none_or_clear_bad(p4d_t *p4d)
 {
-	if (p4d_none(*p4d))
+	if (p4d_none(get_p4d(p4d)))
 		return 1;
 	if (unlikely(p4d_bad(*p4d))) {
 		p4d_clear_bad(p4d);
@@ -548,7 +547,7 @@ static inline int p4d_none_or_clear_bad(p4d_t *p4d)
 
 static inline int pud_none_or_clear_bad(pud_t *pud)
 {
-	if (pud_none(*pud))
+	if (pud_none(get_pud(pud)))
 		return 1;
 	if (unlikely(pud_bad(*pud))) {
 		pud_clear_bad(pud);
@@ -559,7 +558,7 @@ static inline int pud_none_or_clear_bad(pud_t *pud)
 
 static inline int pmd_none_or_clear_bad(pmd_t *pmd)
 {
-	if (pmd_none(*pmd))
+	if (pmd_none(get_pmd(pmd)))
 		return 1;
 	if (unlikely(pmd_bad(*pmd))) {
 		pmd_clear_bad(pmd);
@@ -882,7 +881,7 @@ static inline pmd_t pmd_read_atomic(pmd_t *pmdp)
 	 * only going to work, if the pmdval_t isn't larger than
 	 * an unsigned long.
 	 */
-	return *pmdp;
+	return get_pmd(pmdp);
 }
 #endif
 

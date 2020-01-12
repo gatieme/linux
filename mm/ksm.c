@@ -1005,6 +1005,7 @@ static inline int pages_identical(struct page *page1, struct page *page2)
 static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 			      pte_t *orig_pte)
 {
+	pte_t pte_entry;
 	struct mm_struct *mm = vma->vm_mm;
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
@@ -1030,8 +1031,9 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 	if (WARN_ONCE(!pvmw.pte, "Unexpected PMD mapping?"))
 		goto out_unlock;
 
-	if (pte_write(*pvmw.pte) || pte_dirty(*pvmw.pte) ||
-	    (pte_protnone(*pvmw.pte) && pte_savedwrite(*pvmw.pte)) ||
+	pte_entry = get_pte(pvmw.pte);
+	if (pte_write(pte_entry) || pte_dirty(pte_entry) ||
+	    (pte_protnone(pte_entry) && pte_savedwrite(pte_entry)) ||
 						mm_tlb_flush_pending(mm)) {
 		pte_t entry;
 
@@ -1069,7 +1071,7 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 			entry = pte_mkclean(pte_wrprotect(entry));
 		set_pte_at_notify(mm, pvmw.address, pvmw.pte, entry);
 	}
-	*orig_pte = *pvmw.pte;
+	set_pte(orig_pte, *pvmw.pte);
 	err = 0;
 
 out_unlock:
@@ -1115,7 +1117,7 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	mmu_notifier_invalidate_range_start(mm, mmun_start, mmun_end);
 
 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
-	if (!pte_same(*ptep, orig_pte)) {
+	if (!pte_same(get_pte(ptep), orig_pte)) {
 		pte_unmap_unlock(ptep, ptl);
 		goto out_mn;
 	}

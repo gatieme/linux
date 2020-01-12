@@ -501,7 +501,7 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 	struct vm_area_struct *vma = walk->vma;
 	bool fault, write_fault;
 	uint64_t cpu_flags;
-	pte_t pte = *ptep;
+	pte_t pte = get_pte(ptep);
 	uint64_t orig_pfn = *pfn;
 
 	*pfn = range->values[HMM_PFN_NONE];

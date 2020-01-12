@@ -451,11 +451,10 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 			  unsigned long address, pte_t *ptep,
 			  pte_t entry, int dirty)
 {
-	int changed = !pte_same(*ptep, entry);
-
-	if (changed && dirty)
-		*ptep = entry;
-
+	int changed = !pte_same(get_pte(ptep), entry);
+	if (changed) {
+		set_pte(ptep, entry);
+	}
 	return changed;
 }
 
@@ -464,12 +463,12 @@ int pmdp_set_access_flags(struct vm_area_struct *vma,
 			  unsigned long address, pmd_t *pmdp,
 			  pmd_t entry, int dirty)
 {
-	int changed = !pmd_same(*pmdp, entry);
+	int changed = !pmd_same(get_pmd(pmdp), entry);
 
 	VM_BUG_ON(address & ~HPAGE_PMD_MASK);
 
 	if (changed && dirty) {
-		*pmdp = entry;
+		set_pmd(pmdp, entry);
 		/*
 		 * We had a write-protection fault here and changed the pmd
 		 * to to more permissive. No need to flush the TLB for that,
@@ -484,12 +483,11 @@ int pmdp_set_access_flags(struct vm_area_struct *vma,
 int pudp_set_access_flags(struct vm_area_struct *vma, unsigned long address,
 			  pud_t *pudp, pud_t entry, int dirty)
 {
-	int changed = !pud_same(*pudp, entry);
+	int changed = !pud_same(get_pud(pudp), entry);
 
 	VM_BUG_ON(address & ~HPAGE_PUD_MASK);
-
 	if (changed && dirty) {
-		*pudp = entry;
+		set_pud(pudp, entry);
 		/*
 		 * We had a write-protection fault here and changed the pud
 		 * to to more permissive. No need to flush the TLB for that,
@@ -520,7 +518,7 @@ int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 {
 	int ret = 0;
 
-	if (pmd_young(*pmdp))
+	if (pmd_young(get_pmd(pmdp)))
 		ret = test_and_clear_bit(_PAGE_BIT_ACCESSED,
 					 (unsigned long *)pmdp);
 
@@ -531,7 +529,7 @@ int pudp_test_and_clear_young(struct vm_area_struct *vma,
 {
 	int ret = 0;
 
-	if (pud_young(*pudp))
+	if (pud_young(get_pud(pudp)))
 		ret = test_and_clear_bit(_PAGE_BIT_ACCESSED,
 					 (unsigned long *)pudp);
 

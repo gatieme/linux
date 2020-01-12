@@ -232,13 +232,13 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 
 		get_page(new);
 		pte = pte_mkold(mk_pte(new, READ_ONCE(vma->vm_page_prot)));
-		if (pte_swp_soft_dirty(*pvmw.pte))
+		if (pte_swp_soft_dirty(get_pte(pvmw.pte)))
 			pte = pte_mksoft_dirty(pte);
 
 		/*
 		 * Recheck VMA as permissions can change since migration started
 		 */
-		entry = pte_to_swp_entry(*pvmw.pte);
+		entry = pte_to_swp_entry(get_pte(pvmw.pte));
 		if (is_write_migration_entry(entry))
 			pte = maybe_mkwrite(pte, vma);
 
@@ -312,7 +312,7 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 	struct page *page;
 
 	spin_lock(ptl);
-	pte = *ptep;
+	pte = get_pte(ptep);
 	if (!is_swap_pte(pte))
 		goto out;
 
@@ -2057,7 +2057,7 @@ int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 	/* Recheck the target PMD */
 	mmu_notifier_invalidate_range_start(mm, mmun_start, mmun_end);
 	ptl = pmd_lock(mm, pmd);
-	if (unlikely(!pmd_same(*pmd, entry) || !page_ref_freeze(page, 2))) {
+	if (unlikely(!pmd_same(get_pmd(pmd), entry) || !page_ref_freeze(page, 2))) {
 		spin_unlock(ptl);
 		mmu_notifier_invalidate_range_end(mm, mmun_start, mmun_end);
 
@@ -2128,7 +2128,7 @@ out_fail:
 	count_vm_events(PGMIGRATE_FAIL, HPAGE_PMD_NR);
 out_dropref:
 	ptl = pmd_lock(mm, pmd);
-	if (pmd_same(*pmd, entry)) {
+	if (pmd_same(get_pmd(pmd), entry)) {
 		entry = pmd_modify(entry, vma->vm_page_prot);
 		set_pmd_at(mm, mmun_start, pmd, entry);
 		update_mmu_cache_pmd(vma, address, &entry);
@@ -2251,7 +2251,7 @@ again:
 		swp_entry_t entry;
 		pte_t pte;
 
-		pte = *ptep;
+		pte = get_pte(ptep);
 		pfn = pte_pfn(pte);
 
 		if (pte_none(pte)) {

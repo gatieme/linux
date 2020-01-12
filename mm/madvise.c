@@ -333,7 +333,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	flush_tlb_batched_pending(mm);
 	arch_enter_lazy_mmu_mode();
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
-		ptent = *pte;
+		ptent = get_pte(pte);
 
 		if (pte_none(ptent))
 			continue;

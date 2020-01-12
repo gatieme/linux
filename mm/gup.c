@@ -44,13 +44,13 @@ static int follow_pfn_pte(struct vm_area_struct *vma, unsigned long address,
 		return -EFAULT;
 
 	if (flags & FOLL_TOUCH) {
-		pte_t entry = *pte;
+		pte_t entry = get_pte(pte);
 
 		if (flags & FOLL_WRITE)
 			entry = pte_mkdirty(entry);
 		entry = pte_mkyoung(entry);
 
-		if (!pte_same(*pte, entry)) {
+		if (!pte_same(get_pte(pte), entry)) {
 			set_pte_at(vma->vm_mm, address, pte, entry);
 			update_mmu_cache(vma, address, pte);
 		}
@@ -84,7 +84,7 @@ retry:
 		return no_page_table(vma, flags);
 
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
-	pte = *ptep;
+	pte = get_pte(ptep);
 	if (!pte_present(pte)) {
 		swp_entry_t entry;
 		/*
@@ -1340,7 +1340,7 @@ struct page *get_dump_page(unsigned long addr)
  */
 static inline pte_t gup_get_pte(pte_t *ptep)
 {
-	return READ_ONCE(*ptep);
+	return get_pte(ptep);
 }
 #endif
 
@@ -1393,7 +1393,7 @@ static int gup_pte_range(pmd_t pmd, unsigned long addr, unsigned long end,
 		if (!page_cache_get_speculative(head))
 			goto pte_unmap;
 
-		if (unlikely(pte_val(pte) != pte_val(*ptep))) {
+		if (unlikely(pte_val(pte) != pte_val(get_pte(ptep)))) {
 			put_page(head);
 			goto pte_unmap;
 		}
@@ -1519,7 +1519,7 @@ static int gup_huge_pmd(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 		return 0;
 	}
 
-	if (unlikely(pmd_val(orig) != pmd_val(*pmdp))) {
+	if (unlikely(pmd_val(orig) != pmd_val(get_pmd(pmdp)))) {
 		*nr -= refs;
 		while (refs--)
 			put_page(head);
@@ -1613,7 +1613,7 @@ static int gup_pmd_range(pud_t pud, unsigned long addr, unsigned long end,
 
 	pmdp = pmd_offset(&pud, addr);
 	do {
-		pmd_t pmd = READ_ONCE(*pmdp);
+		pmd_t pmd = get_pmd(pmdp);
 
 		next = pmd_addr_end(addr, end);
 		if (!pmd_present(pmd))

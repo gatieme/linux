@@ -396,7 +396,7 @@ static unsigned long __munlock_pagevec_fill(struct pagevec *pvec,
 		struct page *page = NULL;
 		pte++;
 		if (pte_present(*pte))
-			page = vm_normal_page(vma, start, *pte);
+			page = vm_normal_page(vma, start, get_pte(pte));
 		/*
 		 * Break if page could not be obtained or the page's node+zone does not
 		 * match

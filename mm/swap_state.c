@@ -687,7 +687,7 @@ static void swap_ra_info(struct vm_fault *vmf,
 
 	faddr = vmf->address;
 	orig_pte = pte = pte_offset_map(vmf->pmd, faddr);
-	entry = pte_to_swp_entry(*pte);
+	entry = pte_to_swp_entry(get_pte(pte));
 	if ((unlikely(non_swap_entry(entry)))) {
 		pte_unmap(orig_pte);
 		return;
@@ -751,7 +751,7 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 	blk_start_plug(&plug);
 	for (i = 0, pte = ra_info.ptes; i < ra_info.nr_pte;
 	     i++, pte++) {
-		pentry = *pte;
+		pentry = get_pte(pte);
 		if (pte_none(pentry))
 			continue;
 		if (pte_present(pentry))

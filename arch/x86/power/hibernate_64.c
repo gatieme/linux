@@ -169,12 +169,12 @@ static int relocate_restore_code(void)
 	}
 	pud = pud_offset(p4d, relocated_restore_code);
 	if (pud_large(*pud)) {
-		set_pud(pud, __pud(pud_val(*pud) & ~_PAGE_NX));
+		set_pud(pud, __pud(pud_val(get_pud(pud)) & ~_PAGE_NX));
 		goto out;
 	}
 	pmd = pmd_offset(pud, relocated_restore_code);
 	if (pmd_large(*pmd)) {
-		set_pmd(pmd, __pmd(pmd_val(*pmd) & ~_PAGE_NX));
+		set_pmd(pmd, __pmd(pmd_val(get_pmd(pmd)) & ~_PAGE_NX));
 		goto out;
 	}
 	pte = pte_offset_kernel(pmd, relocated_restore_code);

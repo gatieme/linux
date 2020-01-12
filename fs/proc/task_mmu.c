@@ -526,7 +526,7 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 	if (pte_present(*pte)) {
 		page = vm_normal_page(vma, addr, *pte);
 	} else if (is_swap_pte(*pte)) {
-		swp_entry_t swpent = pte_to_swp_entry(*pte);
+		swp_entry_t swpent = pte_to_swp_entry(get_pte(pte));
 
 		if (!non_swap_entry(swpent)) {
 			int mapcount;
@@ -708,7 +708,7 @@ static int smaps_hugetlb_range(pte_t *pte, unsigned long hmask,
 	if (pte_present(*pte)) {
 		page = vm_normal_page(vma, addr, *pte);
 	} else if (is_swap_pte(*pte)) {
-		swp_entry_t swpent = pte_to_swp_entry(*pte);
+		swp_entry_t swpent = pte_to_swp_entry(get_pte(pte));
 
 		if (is_migration_entry(swpent))
 			page = migration_entry_to_page(swpent);
