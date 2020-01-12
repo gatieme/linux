@@ -4391,7 +4391,11 @@ out:
 	}
 
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
-
+	
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	if (page) page->replica = NULL;
+	#endif
+	
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_nodemask);
@@ -4424,6 +4428,9 @@ EXPORT_SYMBOL(get_zeroed_page);
 
 void __free_pages(struct page *page, unsigned int order)
 {
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	page->replica = NULL;
+	#endif
 	if (put_page_testzero(page)) {
 		if (order == 0)
 			free_unref_page(page);
