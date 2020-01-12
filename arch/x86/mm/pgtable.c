@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2020 VMware, Inc. */
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/mm.h>
 #include <linux/gfp.h>
@@ -20,14 +21,21 @@ gfp_t __userpte_alloc_gfp = PGALLOC_GFP | PGALLOC_USER_GFP;
 
 pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long address)
 {
-	return (pte_t *)__get_free_page(PGALLOC_GFP & ~__GFP_ACCOUNT);
+	struct page *page;
+
+	page = alloc_page_ptable(PGALLOC_GFP & ~__GFP_ACCOUNT);
+	if (page) {
+			return (pte_t *) page_to_virt(page);
+	}
+	return NULL;
 }
 
 pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 {
 	struct page *pte;
 
-	pte = alloc_pages(__userpte_alloc_gfp, 0);
+	pte = alloc_page_ptable(__userpte_alloc_gfp);
+
 	if (!pte)
 		return NULL;
 	if (!pgtable_page_ctor(pte)) {
@@ -223,7 +231,14 @@ static int preallocate_pmds(struct mm_struct *mm, pmd_t *pmds[])
 		gfp &= ~__GFP_ACCOUNT;
 
 	for(i = 0; i < PREALLOCATED_PMDS; i++) {
-		pmd_t *pmd = (pmd_t *)__get_free_page(gfp);
+		struct page *page;
+		pmd_t *pmd = NULL;
+
+		page = alloc_page_ptable(gfp);
+		if (page) {
+			pmd  = (pmd_t *) page_to_virt(page);
+		}
+
 		if (!pmd)
 			failed = true;
 		if (pmd && !pgtable_pmd_page_ctor(virt_to_page(pmd))) {
@@ -292,6 +307,10 @@ static void pgd_prepopulate_pmd(struct mm_struct *mm, pgd_t *pgd, pmd_t *pmds[])
 	}
 }
 
+#if (PGD_ALLOCATION_ORDER != 0)
+#error "Mitosis currenlty doesn't support PGD_ALLOCATION_ORDER > 0"
+#endif
+
 /*
  * Xen paravirt assumes pgd table should be in one page. 64 bit kernel also
  * assumes that pgd should be in one page.
@@ -359,7 +378,12 @@ static inline void _pgd_free(pgd_t *pgd)
 
 static inline pgd_t *_pgd_alloc(void)
 {
-	return (pgd_t *)__get_free_pages(PGALLOC_GFP, PGD_ALLOCATION_ORDER);
+	struct page *page;
+
+	page = alloc_pages_ptable(PGALLOC_GFP, PGD_ALLOCATION_ORDER);
+	if (!page)
+		return 0;
+	return (pgd_t *) page_to_virt(page);
 }
 
 static inline void _pgd_free(pgd_t *pgd)

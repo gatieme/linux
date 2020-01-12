@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2020 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PGALLOC_H
 #define _ASM_X86_PGALLOC_H
@@ -99,7 +100,8 @@ static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
 
 	if (mm == &init_mm)
 		gfp &= ~__GFP_ACCOUNT;
-	page = alloc_pages(gfp, 0);
+	page = alloc_page_ptable(gfp);
+
 	if (!page)
 		return NULL;
 	if (!pgtable_pmd_page_ctor(page)) {
@@ -143,11 +145,18 @@ static inline void p4d_populate(struct mm_struct *mm, p4d_t *p4d, pud_t *pud)
 
 static inline pud_t *pud_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
+	struct page *page;
 	gfp_t gfp = GFP_KERNEL_ACCOUNT;
 
 	if (mm == &init_mm)
 		gfp &= ~__GFP_ACCOUNT;
-	return (pud_t *)get_zeroed_page(gfp);
+
+	page = alloc_page_ptable(gfp | __GFP_ZERO);
+	if (page) {
+		return (pud_t *) page_address(page);
+	}
+
+	return NULL;
 }
 
 static inline void pud_free(struct mm_struct *mm, pud_t *pud)
@@ -175,11 +184,17 @@ static inline void pgd_populate(struct mm_struct *mm, pgd_t *pgd, p4d_t *p4d)
 
 static inline p4d_t *p4d_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
+	struct page *page;
 	gfp_t gfp = GFP_KERNEL_ACCOUNT;
 
 	if (mm == &init_mm)
 		gfp &= ~__GFP_ACCOUNT;
-	return (p4d_t *)get_zeroed_page(gfp);
+
+	page = alloc_page_ptable(gfp | __GFP_ZERO);
+	if (page) {
+		return (p4d_t *)page;
+	}
+	return NULL;
 }
 
 static inline void p4d_free(struct mm_struct *mm, p4d_t *p4d)

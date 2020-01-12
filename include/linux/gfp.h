@@ -1,3 +1,4 @@
+/* Copyright (C) 2018-2020 VMware, Inc. */
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_GFP_H
 #define __LINUX_GFP_H
@@ -509,6 +510,9 @@ extern struct page *alloc_pages_vma(gfp_t gfp_mask, int order,
 	alloc_pages_vma(gfp_mask, 0, vma, addr, numa_node_id(), false)
 #define alloc_page_vma_node(gfp_mask, vma, addr, node)		\
 	alloc_pages_vma(gfp_mask, 0, vma, addr, node, false)
+
+#define alloc_pages_ptable(gfp_mask, order) alloc_pages(gfp_mask, order)
+#define alloc_page_ptable(gfp_mask) alloc_page(gfp_mask)
 
 extern unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order);
 extern unsigned long get_zeroed_page(gfp_t gfp_mask);
