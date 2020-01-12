@@ -1,6 +1,7 @@
 /*
  *  Copyright (C) 2009  Red Hat, Inc.
- *
+ *  Copyright (C) 2018-2019 VMware, Inc.
+ *  SPDX-License-Identifier: GPL-2.0
  *  This work is licensed under the terms of the GNU GPL, version 2. See
  *  the COPYING file in the top-level directory.
  */
