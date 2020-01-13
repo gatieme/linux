@@ -1192,8 +1192,11 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 	pmdp_huge_clear_flush_notify(vma, haddr, vmf->pmd);
 
 	pgtable = pgtable_trans_huge_withdraw(vma->vm_mm, vmf->pmd);
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	pmd_populate_no_rep(vma->vm_mm, &_pmd, pgtable);
+	#else
 	pmd_populate(vma->vm_mm, &_pmd, pgtable);
-
+	#endif
 	for (i = 0; i < HPAGE_PMD_NR; i++, haddr += PAGE_SIZE) {
 		pte_t entry;
 		entry = mk_pte(pages[i], vma->vm_page_prot);
@@ -1211,7 +1214,12 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 	kfree(pages);
 
 	smp_wmb(); /* make pte visible before pmd */
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	unsigned long pfn = page_to_pfn(pgtable);
+	set_pmd(vmf->pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	#else
 	pmd_populate(vma->vm_mm, vmf->pmd, pgtable);
+	#endif
 	page_remove_rmap(page, true);
 	spin_unlock(vmf->ptl);
 
@@ -2033,6 +2041,8 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 	pmd_t _pmd;
 	int i;
 
+	printk("%s:%u page=%p\n", __FUNCTION__, __LINE__, virt_to_page(pmd));
+
 	/*
 	 * Leave pmd empty until pte is filled note that it is fine to delay
 	 * notification until mmu_notifier_invalidate_range_end() as we are
@@ -2044,7 +2054,11 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 	pmdp_huge_clear_flush(vma, haddr, pmd);
 
 	pgtable = pgtable_trans_huge_withdraw(mm, pmd);
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	pmd_populate_no_rep(mm, &_pmd, pgtable);
+	#else
 	pmd_populate(mm, &_pmd, pgtable);
+	#endif
 
 	for (i = 0; i < HPAGE_PMD_NR; i++, haddr += PAGE_SIZE) {
 		pte_t *pte, entry;
@@ -2056,7 +2070,12 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 		pte_unmap(pte);
 	}
 	smp_wmb(); /* make pte visible before pmd */
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	unsigned long pfn = page_to_pfn(pgtable);
+	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	#else
 	pmd_populate(mm, pmd, pgtable);
+	#endif
 }
 
 static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
@@ -2153,7 +2172,12 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	 * This's critical for some architectures (Power).
 	 */
 	pgtable = pgtable_trans_huge_withdraw(mm, pmd);
+
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	pmd_populate_no_rep(mm, &_pmd, pgtable);
+	#else
 	pmd_populate(mm, &_pmd, pgtable);
+	#endif
 
 	for (i = 0, addr = haddr; i < HPAGE_PMD_NR; i++, addr += PAGE_SIZE) {
 		pte_t entry, *pte;
@@ -2205,7 +2229,13 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	}
 
 	smp_wmb(); /* make pte visible before pmd */
+	#ifdef CONFIG_PGTABLE_REPLICATION
+	unsigned long pfn = page_to_pfn(pgtable);
+	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	#else
 	pmd_populate(mm, pmd, pgtable);
+	#endif
+
 
 	if (freeze) {
 		for (i = 0; i < HPAGE_PMD_NR; i++) {

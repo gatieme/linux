@@ -81,6 +81,17 @@ static inline void pmd_populate_kernel(struct mm_struct *mm,
 	set_pmd(pmd, __pmd(__pa(pte) | _PAGE_TABLE));
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+static inline void pmd_populate_no_rep(struct mm_struct *mm, pmd_t *pmd,
+				struct page *pte)
+{
+	unsigned long pfn = page_to_pfn(pte);
+
+	paravirt_alloc_pte(mm, pfn);
+	native_set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+}
+#endif
+
 static inline void pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 				struct page *pte)
 {
