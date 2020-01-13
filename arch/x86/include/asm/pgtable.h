@@ -1060,9 +1060,32 @@ extern int ptep_test_and_clear_young(struct vm_area_struct *vma,
 extern int ptep_clear_flush_young(struct vm_area_struct *vma,
 				  unsigned long address, pte_t *ptep);
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+#define __HAVE_ARCH_PTEP_GET_AND_CLEAR
+pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
+                         pte_t *ptep);
+
+#define __HAVE_ARCH_PMDP_INVALIDATE
+pmd_t pmdp_invalidate(struct vm_area_struct *vma, unsigned long address,
+                      pmd_t *pmdp);
+
+#define __HAVE_ARCH_PTEP_GET_AND_CLEAR_FULL
+static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
+                                            unsigned long addr, pte_t *ptep,
+                                            int full)
+{
+	return ptep_get_and_clear(mm, addr, ptep);
+}
+
+#define __HAVE_ARCH_PTEP_SET_WRPROTECT
+void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep);
+
+#else /* !CONFIG_PGTABLE_REPLICATION */
+
 #define __HAVE_ARCH_PTEP_GET_AND_CLEAR
 static inline pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
-				       pte_t *ptep)
+						pte_t *ptep)
 {
 	pte_t pte = native_ptep_get_and_clear(ptep);
 	return pte;
@@ -1088,10 +1111,13 @@ static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
 
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
 static inline void ptep_set_wrprotect(struct mm_struct *mm,
-				      unsigned long addr, pte_t *ptep)
+                                     unsigned long addr, pte_t *ptep)
 {
 	clear_bit(_PAGE_BIT_RW, (unsigned long *)&ptep->pte);
 }
+
+#endif /* !CONFIG_PGTABLE_REPLICATION */
+
 
 #define flush_tlb_fix_spurious_fault(vma, address) do { } while (0)
 
@@ -1122,6 +1148,26 @@ static inline int pmd_write(pmd_t pmd)
 	return pmd_flags(pmd) & _PAGE_RW;
 }
 
+#ifdef CONFIG_PGTABLE_REPLICATION
+
+#define pmdp_establish pmdp_establish
+pmd_t pmdp_establish(struct vm_area_struct *vma,
+                     unsigned long address, pmd_t *pmdp, pmd_t pmd);
+
+#define __HAVE_ARCH_PMDP_HUGE_GET_AND_CLEAR
+pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm, unsigned long addr,
+                              pmd_t *pmdp);
+
+#define __HAVE_ARCH_PUDP_HUGE_GET_AND_CLEAR
+pud_t pudp_huge_get_and_clear(struct mm_struct *mm,
+                              unsigned long addr, pud_t *pudp);
+
+#define __HAVE_ARCH_PMDP_SET_WRPROTECT
+void pmdp_set_wrprotect(struct mm_struct *mm,
+                        unsigned long addr, pmd_t *pmdp);
+
+#else /* CONFIG_PGTABLE_REPLICATION */
+
 #define __HAVE_ARCH_PMDP_HUGE_GET_AND_CLEAR
 static inline pmd_t pmdp_huge_get_and_clear(struct mm_struct *mm, unsigned long addr,
 				       pmd_t *pmdp)
@@ -1142,6 +1188,7 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
 {
 	clear_bit(_PAGE_BIT_RW, (unsigned long *)pmdp);
 }
+#endif /* CONFIG_PGTABLE_REPLICATION */
 
 #define pud_write pud_write
 static inline int pud_write(pud_t pud)
