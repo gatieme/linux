@@ -806,6 +806,179 @@ int pgtable_fixed_node = -1;
 nodemask_t pgtable_fixed_nodemask = NODE_MASK_NONE;
 
 
+#define MAX_SUPPORTED_NODE 8
+
+///> page table cache
+static struct page *pgtable_cache[MAX_SUPPORTED_NODE] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+
+///> page table cache sizes
+static size_t pgtable_cache_size[MAX_SUPPORTED_NODE] = { 0 };
+
+///> lock for the page table cache
+static DEFINE_SPINLOCK(pgtable_cache_lock);
+
+
+void pgtable_cache_free(int node, struct page *p);
+struct page *pgtable_cache_alloc(int node);
+
+
+/*
+ * ==================================================================
+ * Debug Macros
+ * ==================================================================
+ */
+
+#define DEBUG_PGTABLE_REPLICATION
+#ifdef DEBUG_PGTABLE_REPLICATION
+
+#define check_page(p) \
+	if (unlikely(!(p))) { printk("PTREPL:%s:%u - page was NULL!\n", __FUNCTION__, __LINE__); }
+
+#define check_offset(offset) if (offset >= 4096 || (offset % 8)) { \
+	printk("PTREPL: %s:%d - offset=%lu, %lu\n", __FUNCTION__, __LINE__, offset, offset % 8); }
+
+#define check_page_node(p, n) do {\
+	if (!virt_addr_valid((void *)p)) {/*printk("PTREP: PAGE IS NOT VALID!\n");*/} \
+	if (p == NULL) {printk("PTREPL: PAGE WAS NULL!\n");} \
+	if (pfn_to_nid(page_to_pfn(p)) != (n)) { \
+		printk("PTREPL: %s:%u page table nid mismatch! pfn: %zu, nid %u expected: %u\n", \
+		__FUNCTION__, __LINE__, page_to_pfn(p), pfn_to_nid(page_to_pfn(p)), (int)(n)); \
+		dump_stack();\
+	}} while(0);
+
+#else
+#define check_page(p)
+#define check_offset(offset)
+#define check_page_node(p, n)
+#endif
+
+/*
+ * ==================================================================
+ * Page Table Cache
+ * ==================================================================
+ */
+
+int pgtable_cache_populate(size_t numpgtables)
+{
+	size_t i, j;
+	size_t num_nodes = MAX_SUPPORTED_NODE;
+	struct page *p;
+	nodemask_t nm = NODE_MASK_NONE;
+
+	printk("PGREPL: populating pgtable cache with %zu tables per node\n",
+			numpgtables);
+
+	spin_lock(&pgtable_cache_lock);
+
+	if (nr_node_ids < num_nodes) {
+		num_nodes = nr_node_ids;
+	}
+
+	for (i = 0; i < num_nodes; i++) {
+
+		printk("PGREPL: populating pgtable cache node[%zu] with %zu tables\n",
+				i, numpgtables);
+
+		nodes_clear(nm);
+		node_set(i, nm);
+
+		for (j = 0; j < numpgtables; j++) {
+			/* allocte a new page, and place it in the replica list */
+			p = __alloc_pages_nodemask(PGALLOC_GFP, 0, i, &nm);
+			if (p) {
+				check_page_node(p, i);
+				p->replica = pgtable_cache[i];
+				pgtable_cache[i] = p;
+				pgtable_cache_size[i]++;
+			} else {
+				break;
+			}
+		}
+
+		printk("PGREPL: node[%lu] populated with %zu  tables\n",
+				i, pgtable_cache_size[i]);
+
+	}
+
+	spin_unlock(&pgtable_cache_lock);
+
+	return 0;
+}
+
+int pgtable_cache_drain(void)
+{
+	int i;
+	struct page *p;
+	spin_lock(&pgtable_cache_lock);
+
+	for (i = 0; i < MAX_SUPPORTED_NODE; i++) {
+		p = pgtable_cache[i];
+		while(p) {
+			pgtable_cache[i] = p->replica;
+			pgtable_cache_size[i]--;
+			p->replica = NULL;
+			__free_page(p);
+			p = pgtable_cache[i];
+
+		}
+	}
+
+	spin_unlock(&pgtable_cache_lock);
+
+	return 0;
+}
+
+struct page *pgtable_cache_alloc(int node)
+{
+	struct page *p;
+	nodemask_t nm;
+
+	if (unlikely(node >= MAX_SUPPORTED_NODE)) {
+		panic("PTREPL: WARNING NODE ID %u >= %u. Override to 0 \n",
+				node, nr_node_ids);
+		node = 0;
+	}
+
+	if (pgtable_cache[node] == NULL) {
+		nm = NODE_MASK_NONE;
+		node_set(node, nm);
+
+		/* allocte a new page, and place it in the replica list */
+		p = __alloc_pages_nodemask(PGALLOC_GFP, 0, node, &nm);
+		check_page_node(p, node);
+		return p;
+	}
+
+	spin_lock(&pgtable_cache_lock);
+	p = pgtable_cache[node];
+	pgtable_cache[node] = p->replica;
+	pgtable_cache_size[node]--;
+	p->replica = NULL;
+	spin_unlock(&pgtable_cache_lock);
+
+	/* need to clear the page */
+	clear_page(page_to_virt(p));
+
+	check_page_node(p, node);
+
+	return p;
+}
+
+void pgtable_cache_free(int node, struct page *p)
+{
+	check_page_node(p, node);
+	spin_lock(&pgtable_cache_lock);
+	/* set the replica to NULL */
+	p->replica = NULL;
+
+	p->replica = pgtable_cache[node];
+	pgtable_cache[node] = p;
+	pgtable_cache_size[node]++;
+	spin_unlock(&pgtable_cache_lock);
+}
+
+
+
 /*
  * ==================================================================
  * Prepare Replication
@@ -889,10 +1062,10 @@ int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, int write
 		if (state < 0) {
 			/* the default behavior */
 			printk("PROCFS: Command ot drain the pgtable cache\n");
-			//pgtable_cache_drain();
+			pgtable_cache_drain();
 		} else if (state > 0) {
 			printk("PROCFS: Command ot populate the pgtable cache\n");
-			//pgtable_cache_populate(state);
+			pgtable_cache_populate(state);
 		}
 	}
 	return err;
