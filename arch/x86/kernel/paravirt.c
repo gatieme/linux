@@ -395,6 +395,8 @@ NOKPROBE_SYMBOL(native_load_idt);
 #define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_64)
 #endif
 
+#ifndef CONFIG_PGTABLE_REPLICATION
+
 struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 
 	.read_cr2 = native_read_cr2,
@@ -477,6 +479,91 @@ struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
 
 	.set_fixmap = native_set_fixmap,
 };
+
+#else /* CONFIG_PGTABLE_REPLICATION */
+
+struct pv_mmu_ops pv_mmu_ops __ro_after_init = {
+
+	.read_cr2 = native_read_cr2,
+	.write_cr2 = native_write_cr2,
+
+	.read_cr3 = pgtable_repl_read_cr3,
+	.write_cr3 = pgtable_repl_write_cr3,
+
+	.flush_tlb_user = native_flush_tlb,
+	.flush_tlb_kernel = native_flush_tlb_global,
+	.flush_tlb_one_user = native_flush_tlb_one_user,
+	.flush_tlb_others = native_flush_tlb_others,
+
+	.pgd_alloc = pgtable_repl_pgd_alloc,
+	.pgd_free = pgtable_repl_pgd_free,
+
+	.alloc_pte = pgtable_repl_alloc_pte,
+	.alloc_pmd = pgtable_repl_alloc_pmd,
+	.alloc_pud = pgtable_repl_alloc_pud,
+	.alloc_p4d = pgtable_repl_alloc_p4d,
+	.release_pte = pgtable_repl_release_pte,
+	.release_pmd = pgtable_repl_release_pmd,
+	.release_pud = pgtable_repl_release_pud,
+	.release_p4d = pgtable_repl_release_p4d,
+	.set_pte = pgtable_repl_set_pte,
+	.get_pte = pgtable_repl_get_pte,
+	.set_pte_at = pgtable_repl_set_pte_at,
+	.get_pte_at = pgtable_repl_get_pte_at,
+	.set_pmd = pgtable_repl_set_pmd,
+	.get_pmd = pgtable_repl_get_pmd,
+
+	.ptep_modify_prot_start = pgtable_repl_ptep_modify_prot_start,
+	.ptep_modify_prot_commit = pgtable_repl_ptep_modify_prot_commit,
+
+#if CONFIG_PGTABLE_LEVELS >= 3
+#ifdef CONFIG_X86_PAE
+	.set_pte_atomic = native_set_pte_atomic,
+	.pte_clear = native_pte_clear,
+	.pmd_clear = native_pmd_clear,
+#endif
+	.set_pud = pgtable_repl_set_pud,
+	.get_pud = pgtable_repl_get_pud,
+
+	.pmd_val = PTE_IDENT,
+	.make_pmd = PTE_IDENT,
+
+#if CONFIG_PGTABLE_LEVELS >= 4
+	.pud_val = PTE_IDENT,
+	.make_pud = PTE_IDENT,
+
+	.set_p4d = pgtable_repl_set_p4d,
+	.get_p4d = pgtable_repl_get_p4d,
+
+#if CONFIG_PGTABLE_LEVELS >= 5
+	.p4d_val = PTE_IDENT,
+	.make_p4d = PTE_IDENT,
+
+	.set_pgd = pgtable_repl_set_pgd,
+	.get_pgd = pgtable_repl_get_pgd,
+#endif /* CONFIG_PGTABLE_LEVELS >= 5 */
+#endif /* CONFIG_PGTABLE_LEVELS >= 4 */
+#endif /* CONFIG_PGTABLE_LEVELS >= 3 */
+
+	.pte_val = PTE_IDENT,
+	.pgd_val = PTE_IDENT,
+
+	.make_pte = PTE_IDENT,
+	.make_pgd = PTE_IDENT,
+
+	.dup_mmap = paravirt_nop,
+	.exit_mmap = paravirt_nop,
+	.activate_mm = pgtable_repl_activate_mm,
+
+	.lazy_mode = {
+		.enter = paravirt_nop,
+		.leave = paravirt_nop,
+		.flush = paravirt_nop,
+	},
+
+	.set_fixmap = native_set_fixmap,
+};
+#endif /* CONFIG_PGTABLE_REPLICATION */
 
 EXPORT_SYMBOL_GPL(pv_time_ops);
 EXPORT_SYMBOL    (pv_cpu_ops);

@@ -1431,6 +1431,7 @@ void pgtable_repl_set_pte_at(struct mm_struct *mm, unsigned long addr,
 pte_t pgtable_repl_get_pte_at(struct mm_struct *mm, unsigned long addr,
 			pte_t *ptep);
 void pgtable_repl_set_pmd(pmd_t *pmdp, pmd_t pmdval);
+pmd_t pgtable_repl_get_pmd(pmd_t *pmdp);
 
 pte_t pgtable_repl_ptep_modify_prot_start(struct mm_struct *mm, unsigned long addr,
 				pte_t *ptep);

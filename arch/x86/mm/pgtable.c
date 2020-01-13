@@ -1258,6 +1258,11 @@ pte_t pgtable_repl_get_pte(pte_t *ptep)
 	return native_make_pte(val);
 }
 
+pte_t pgtable_repl_get_pte_at(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
+{
+    return pgtable_repl_get_pte(ptep);
+}
+
 
 pmd_t pgtable_repl_get_pmd(pmd_t *pmdp)
 {
