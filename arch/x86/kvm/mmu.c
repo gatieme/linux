@@ -6309,7 +6309,7 @@ static void mitosis_drain_cache(struct ept_cache *cache)
                 free_page((unsigned long)cache->pages[--cache->nr_objects]);
 
         if (cache->pages) {
-                kfree(cache->pages);
+                vfree(cache->pages);
                 cache->pages = NULL;
         }
         spin_unlock(&cache->lock);
@@ -6368,8 +6368,7 @@ static int mitosis_reserve_ept_cache(unsigned long nr_reserve)
                 if (ept_cache->nr_objects)
                         mitosis_drain_cache(ept_cache);
 
-                ept_cache->pages = (void **)kmalloc(sizeof(void *) * nr_reserve,
-                                                                GFP_KERNEL);
+                ept_cache->pages = (void **)vmalloc(sizeof(void *) * nr_reserve);
                 if (!ept_cache->pages)
                         break;
 
@@ -6386,7 +6385,7 @@ static int mitosis_reserve_ept_cache(unsigned long nr_reserve)
          * cache.
          */
         printk(KERN_INFO"[MITOSIS] EPT cache reservation failed on node: %d\n", i);
-        while (i >= 0) {
+        while (i > 0) {
                 ept_cache = &ept_reserve_cache[--i];
                 mitosis_drain_cache(ept_cache);
         }
