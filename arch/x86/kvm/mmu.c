@@ -3032,19 +3032,20 @@ static bool mitosis_mmu_spte_update_replicas(u64 *sptep, u64 new_spte)
                  * we always atomically update it, see the comments in
                  * spte_has_volatile_bits().
                  */
-                if (spte_can_locklessly_be_made_writable(old_spte))
+                if (spte_can_locklessly_be_made_writable(old_spte) &&
+			!is_writable_pte(new_spte))
                        flush = true;
 
                 /*
                  * Flush TLB when accessed/dirty states are changed in the page tables,
                  * to guarantee consistency between TLB and page tables.
                  */
-                if (is_accessed_spte(old_spte)) {
+                if (is_accessed_spte(old_spte) && !is_accessed_spte(new_spte)) {
                         flush = true;
                         kvm_set_pfn_accessed(spte_to_pfn(old_spte));
                 }
 
-                if (is_dirty_spte(old_spte)) {
+                if (is_dirty_spte(old_spte) && !is_dirty_spte(new_spte)) {
                         flush = true;
                         kvm_set_pfn_dirty(spte_to_pfn(old_spte));
                 }
