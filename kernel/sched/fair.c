@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+/* Copyright (C) 2018-2020 VMware, Inc. */
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Completely Fair Scheduling (CFS) Class (SCHED_NORMAL/SCHED_BATCH)
  *
@@ -1035,6 +1036,9 @@ unsigned int sysctl_numa_balancing_scan_size = 256;
 
 /* Scan @scan_size MB every @scan_period after an initial @scan_delay in ms */
 unsigned int sysctl_numa_balancing_scan_delay = 1000;
+
+/* enable/disable control for pgtable migration feature */
+unsigned int sysctl_numa_pgtable_migration = 0;
 
 struct numa_group {
 	atomic_t refcount;
@@ -2517,7 +2521,7 @@ void task_numa_work(struct callback_head *work)
 	for (; vma; vma = vma->vm_next) {
 		if (!vma_migratable(vma) || !vma_policy_mof(vma) ||
 			is_vm_hugetlb_page(vma) || (vma->vm_flags & VM_MIXEDMAP)) {
-			continue;
+			goto vma_done;
 		}
 
 		/*
@@ -2528,14 +2532,14 @@ void task_numa_work(struct callback_head *work)
 		 */
 		if (!vma->vm_mm ||
 		    (vma->vm_file && (vma->vm_flags & (VM_READ|VM_WRITE)) == (VM_READ)))
-			continue;
+			goto vma_done;
 
 		/*
 		 * Skip inaccessible VMAs to avoid any confusion between
 		 * PROT_NONE and NUMA hinting ptes
 		 */
 		if (!(vma->vm_flags & (VM_READ | VM_EXEC | VM_WRITE)))
-			continue;
+			goto vma_done;
 
 		do {
 			start = max(start, vma->vm_start);
@@ -2561,6 +2565,8 @@ void task_numa_work(struct callback_head *work)
 
 			cond_resched();
 		} while (end != vma->vm_end);
+vma_done:
+		WRITE_ONCE(vma->numa_scan_seq, READ_ONCE(vma->numa_scan_seq) + 1);
 	}
 
 out:
@@ -2574,6 +2580,10 @@ out:
 		mm->numa_scan_offset = start;
 	else
 		reset_ptenuma_scan(p);
+
+	if (sysctl_numa_pgtable_migration)
+		task_pgtables_work(mm);
+
 	up_read(&mm->mmap_sem);
 
 	/*

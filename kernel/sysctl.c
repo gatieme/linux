@@ -1,3 +1,5 @@
+/* Copyright (C) 2018-2020 VMware, Inc. */
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * sysctl.c: General linux system control interface
  *
@@ -444,6 +446,14 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= sysctl_numa_balancing,
 		.extra1		= &zero,
 		.extra2		= &one,
+	},
+	{
+		.procname	= "numa_pgtable_migration",
+		.data		= &sysctl_numa_pgtable_migration,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+		.extra1		= &one,
 	},
 #endif /* CONFIG_NUMA_BALANCING */
 #endif /* CONFIG_SCHED_DEBUG */
