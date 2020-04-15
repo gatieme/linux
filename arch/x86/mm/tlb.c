@@ -1,3 +1,6 @@
+/* Copyright (C) 2020 VMware, Inc. */
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/init.h>
 
 #include <linux/mm.h>
@@ -645,7 +648,7 @@ void flush_tlb_mm_range(struct mm_struct *mm, unsigned long start,
 
 	put_cpu();
 }
-
+EXPORT_SYMBOL(flush_tlb_mm_range);
 
 static void do_flush_tlb_all(void *info)
 {

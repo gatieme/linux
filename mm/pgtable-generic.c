@@ -5,6 +5,7 @@
  *  Generic pgtable methods declared in asm-generic/pgtable.h
  *
  *  Copyright (C) 2010  Linus Torvalds
+ *  Copyright (C) 2020 VMware, Inc.
  */
 
 #include <linux/pagemap.h>
@@ -160,6 +161,7 @@ void pgtable_trans_huge_deposit(struct mm_struct *mm, pmd_t *pmdp,
 		list_add(&pgtable->lru, &pmd_huge_pte(mm, pmdp)->lru);
 	pmd_huge_pte(mm, pmdp) = pgtable;
 }
+EXPORT_SYMBOL(pgtable_trans_huge_deposit);
 #endif
 
 #ifndef __HAVE_ARCH_PGTABLE_WITHDRAW
@@ -178,6 +180,7 @@ pgtable_t pgtable_trans_huge_withdraw(struct mm_struct *mm, pmd_t *pmdp)
 		list_del(&pgtable->lru);
 	return pgtable;
 }
+EXPORT_SYMBOL(pgtable_trans_huge_withdraw);
 #endif
 
 #ifndef __HAVE_ARCH_PMDP_INVALIDATE

@@ -3,6 +3,7 @@
  * Memory Migration functionality - linux/mm/migrate.c
  *
  * Copyright (C) 2006 Silicon Graphics, Inc., Christoph Lameter
+ * Copyright (C) 2020 VMware, Inc.
  *
  * Page migration was first developed in the context of the memory hotplug
  * project. The main authors of the migration code are:
@@ -2001,6 +2002,7 @@ out:
 	put_page(page);
 	return 0;
 }
+EXPORT_SYMBOL(migrate_misplaced_page);
 #endif /* CONFIG_NUMA_BALANCING */
 
 #if defined(CONFIG_NUMA_BALANCING) && defined(CONFIG_TRANSPARENT_HUGEPAGE)

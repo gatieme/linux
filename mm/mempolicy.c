@@ -3,7 +3,7 @@
  *
  * Copyright 2003,2004 Andi Kleen, SuSE Labs.
  * (C) Copyright 2005 Christoph Lameter, Silicon Graphics, Inc.
- * Copyright (C) 2018-2019 VMware, Inc.
+ * Copyright (C) 2018-2020 VMware, Inc.
  *
  * Subject to the GNU Public License, version 2.
  * SPDX-License-Identifier: GPL-2.0
@@ -563,6 +563,7 @@ unsigned long change_prot_numa(struct vm_area_struct *vma,
 
 	return nr_updated;
 }
+EXPORT_SYMBOL(change_prot_numa);
 #else
 static unsigned long change_prot_numa(struct vm_area_struct *vma,
 			unsigned long addr, unsigned long end)

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+/* Copyright (C) 2020 VMware, Inc. */
 #include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/sched.h>
@@ -356,3 +357,4 @@ int walk_page_vma(struct vm_area_struct *vma, struct mm_walk *walk)
 		return err;
 	return __walk_page_range(vma->vm_start, vma->vm_end, walk);
 }
+EXPORT_SYMBOL(walk_page_vma);

@@ -1,5 +1,6 @@
-/* Copyright (C) 2018-2020 VMware, Inc. */
-/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright (C) 2020 VMware, Inc. */
+// SPDX-License-Identifier: GPL-2.0
+
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/mmu_notifier.h>
@@ -496,9 +497,6 @@ void task_pgtables_work(struct mm_struct *mm)
 	struct vm_area_struct *vma;
 	unsigned long start, end;
 
-	/* no need to migrate pgtables if they are being replicated */
-	if (mm->repl_pgd_enabled)
-		return;
 	/*
 	 * pgtable migration is primarily for large memory workloads.
 	 * ignore smaller than 1GB processes.
