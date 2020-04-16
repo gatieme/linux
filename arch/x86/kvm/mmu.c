@@ -56,12 +56,12 @@
  * flag to control ept placement to a specific NUMA node
  */
 static int __read_mostly current_ept_node = -1;
-static int __read_mostly ept_replication = 1;
+static int __read_mostly ept_replication = 0;
 
 /*
- * 75K is about enough for 150GB.
+ * Dont reserved anything upfront.
  */
-static unsigned long ept_replication_cache = 75000;
+static unsigned long ept_replication_cache = 0;
 /*
  * We need to reserve enough space on each NUMA Node
  * to prevent allocation failure while replicating EPTs.
@@ -1064,8 +1064,9 @@ static void mmu_free_memory_caches(struct kvm_vcpu *vcpu)
 
 	mmu_free_memory_cache(&vcpu->arch.mmu_pte_list_desc_cache,
 				pte_list_desc_cache);
-        for (i = 0; i < nr_node_ids; i++)
-                mmu_free_memory_cache_page(&vcpu->arch.mmu_page_cache[i]);
+	if (ept_replication)
+		for (i = 0; i < nr_node_ids; i++)
+			mmu_free_memory_cache_page(&vcpu->arch.mmu_page_cache[i]);
 
 	mmu_free_memory_cache(&vcpu->arch.mmu_page_header_cache,
 				mmu_page_header_cache);
@@ -6499,10 +6500,12 @@ static int mitosis_init_sysfs(struct kobject **kobj)
         }
 
         /* return with failure if unsuccessfull */
-        if(mitosis_reserve_ept_cache(ept_replication_cache))
-                return -ENOMEM;
+	if (ept_replication) {
+		if(mitosis_reserve_ept_cache(ept_replication_cache))
+			return -ENOMEM;
 
-        printk(KERN_INFO"[MITOSIS] EPT Cache reserved successfully\n");
+		printk(KERN_INFO"[MITOSIS] EPT Cache reserved successfully\n");
+	}
 
         return 0;
 
