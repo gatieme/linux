@@ -2901,7 +2901,7 @@ static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect)
                 replica = virt_to_page(sp->spt[i]);
                 addr = (u64 *)REPLICA_ADDRESS(replica, offset);
                 spte = *addr;
-                if (!is_writable_pte(spte) &
+                if (!is_writable_pte(spte) &&
                       !(pt_protect && spte_can_locklessly_be_made_writable(spte)))
 		        continue;
 
