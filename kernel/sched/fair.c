@@ -2505,7 +2505,7 @@ void task_numa_work(struct callback_head *work)
 	start = mm->numa_scan_offset;
 	pages = sysctl_numa_balancing_scan_size;
 	pages <<= 20 - PAGE_SHIFT; /* MB in pages */
-	virtpages = pages * 8;	   /* Scan up to this much virtual space */
+	virtpages = pages * 96;	   /* Scan up to this much virtual space */
 	if (!pages)
 		return;
 
@@ -2621,7 +2621,7 @@ void task_tick_numa(struct rq *rq, struct task_struct *curr)
 	now = curr->se.sum_exec_runtime;
 	period = (u64)curr->numa_scan_period * NSEC_PER_MSEC;
 
-	if (now > curr->node_stamp + period) {
+	//if (now > curr->node_stamp + period) {
 		if (!curr->node_stamp)
 			curr->numa_scan_period = task_scan_start(curr);
 		curr->node_stamp += period;
@@ -2630,7 +2630,7 @@ void task_tick_numa(struct rq *rq, struct task_struct *curr)
 			init_task_work(work, task_numa_work); /* TODO: move this into sched_fork() */
 			task_work_add(curr, work, true);
 		}
-	}
+	//}
 }
 
 #else
