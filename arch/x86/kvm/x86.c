@@ -3048,6 +3048,7 @@ static bool need_emulate_wbinvd(struct kvm_vcpu *vcpu)
 	return kvm_arch_has_noncoherent_dma(vcpu->kvm);
 }
 
+extern void mmu_free_roots(struct kvm_vcpu *vcpu);
 void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 {
 	/* Address WBINVD may be executed by guest */
@@ -3092,9 +3093,9 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 			kvm_make_request(KVM_REQ_GLOBAL_CLOCK_UPDATE, vcpu);
 		if (vcpu->cpu != cpu) {
 			kvm_make_request(KVM_REQ_MIGRATE_TIMER, vcpu);
+#ifdef CONFIG_PGTABLE_REPLICATION
                         if (numa_cpu_node(vcpu->cpu) != numa_cpu_node(cpu)) {
-                                vcpu->arch.mmu.root_hpa = INVALID_PAGE;
-#ifdef CONFIG_PGTABLE_REPLICATON
+				mmu_free_roots(vcpu);
                                 vcpu->arch.mmu.master_root_hpa = INVALID_PAGE;
 #endif
                         }

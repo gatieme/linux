@@ -252,7 +252,7 @@ static const u64 shadow_acc_track_saved_bits_mask = PT64_EPT_READABLE_MASK |
 static const u64 shadow_acc_track_saved_bits_shift = PT64_SECOND_AVAIL_BITS_SHIFT;
 
 static void mmu_spte_set(u64 *sptep, u64 spte);
-static void mmu_free_roots(struct kvm_vcpu *vcpu);
+void mmu_free_roots(struct kvm_vcpu *vcpu);
 
 /*
  * Core APIs for EPT replication.
@@ -2143,6 +2143,7 @@ static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 
 	if (!sp->role.direct)
 		free_page((unsigned long)sp->gfns);
+
 	kmem_cache_free(mmu_page_header_cache, sp);
 }
 
@@ -2177,7 +2178,6 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
         int i;
-	struct page *page;
 	struct kvm_mmu_page *sp;
 
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
@@ -2191,9 +2191,8 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         }
 
 	if (!direct) {
-		page = alloc_page(GFP_KERNEL);
-		BUG_ON(page == NULL);
-		sp->gfns = (void *)page_address(page);
+		sp->gfns = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
+		BUG_ON(sp->gfns == NULL); /* can't afford allocation failure here */
         }
         if (ept_replication) {
                 for (i = 0; i < nr_node_ids; i++)
@@ -4012,7 +4011,7 @@ out_unlock:
 }
 
 
-static void mmu_free_roots(struct kvm_vcpu *vcpu)
+void mmu_free_roots(struct kvm_vcpu *vcpu)
 {
 	int i;
 	struct kvm_mmu_page *sp;
