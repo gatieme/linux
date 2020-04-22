@@ -10,6 +10,8 @@
 #include <asm/mtrr.h>
 #include <linux/swapops.h>
 
+#include <uapi/linux/kvm_para.h>
+
 
 #define PGALLOC_GFP (GFP_KERNEL_ACCOUNT | __GFP_ZERO)
 
@@ -18,7 +20,6 @@
 #else
 #define PGALLOC_USER_GFP 0
 #endif
-
 
 #ifdef CONFIG_PGTABLE_REPLICATION
 void pgtable_cache_free(int node, struct page *p);
@@ -893,15 +894,48 @@ int pmd_free_pte_page(pmd_t *pmd)
 #ifdef CONFIG_PGTABLE_REPLICATION
 
 enum {
+	/* supported in bare-metal and numa-visible VMs */
 	PGTABLE_REPLICATION_MODE_DEFAULT,
+	/*
+	 * paravirtualization based--guest queries all relevant information
+	 * via hypercalls. Reserving pgtable replicas prior to running the
+	 * workload is recommended to avoid hypercalls at runtime.
+	 */
 	PGTABLE_REPLICATION_MODE_PARAVIRTUAL,
+	/*
+	 * The kernel probes inter-cpu communication latency to identify
+	 * which cpus belong to same socket. Allocate replicas and rely on the
+	 * hypervisor to migrate them to the respective nodes.
+	 */
 	PGTABLE_REPLICATION_MODE_PROBE,
 	NR_PGTABLE_REPLICATION_MODES
 };
 
+#define PGTABLE_MAX_CPUS	256
+/* Paravirtual PGTABLE Replication */
+static int			pv_nr_node_ids;
+unsigned int			pv_cpu_info[PGTABLE_MAX_CPUS];
+#define PV_CPU_NID		(pv_cpu_info[smp_processor_id()])
+
+/* Probing-based PGTABLE Replication */
+static int			probe_nr_node_ids;
+unsigned int			probe_cpu_info[PGTABLE_MAX_CPUS];
+#define PROBE_CPU_NID		(probe_cpu_info[smp_processor_id()])
+
 /* start with the default mode */
 int pgtable_replication_mode = PGTABLE_REPLICATION_MODE_DEFAULT;
-#define NR_PGTABLE_REPLICAS	(pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ? NR_PGTABLE_REPLICAS : 1)
+
+
+/* depends on the mode of replication */
+#define NR_PGTABLE_REPLICAS  (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ? nr_node_ids : \
+			     pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PARAVIRTUAL ? pv_nr_node_ids : \
+			     pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PROBE ? probe_nr_node_ids : 1 )
+
+#define PGTABLE_ALLOC_NODE(node)	(pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ? node : 0)
+
+#define PGTABLE_CPU_NID	(pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ? numa_node_id() : \
+			pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PARAVIRTUAL ? PV_CPU_NID : \
+			pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PROBE ? PROBE_CPU_NID : 0 )
 
 
 ///> pgtable_repl_initialized tracks whether the system is ready for handling page table replication
@@ -910,9 +944,6 @@ static bool pgtable_repl_initialized = false;
 ///> tracks whether page table replication is activated for new processes by default
 static bool pgtable_repl_activated = false;
 
-///> where to allocate the page tables from
-int pgtable_fixed_node = -1;
-nodemask_t pgtable_fixed_nodemask = NODE_MASK_NONE;
 
 
 #define MAX_SUPPORTED_NODE 8
@@ -925,6 +956,48 @@ static size_t pgtable_cache_size[MAX_SUPPORTED_NODE] = { 0 };
 
 ///> lock for the page table cache
 static DEFINE_SPINLOCK(pgtable_cache_lock);
+
+
+void arch_setup_pv_numainfo(int cpu, unsigned int node)
+{
+	if (cpu == INT_MAX) {
+		pv_nr_node_ids = node;
+		printk("pvcall: nr_sockets=%d\n", node);
+		return;
+	}
+
+	pv_cpu_info[cpu] = node;
+	printk("pvcall: cpu = %d sockets=%d\n", cpu, node);
+}
+
+static void adjust_page_placement(struct page *page, int node)
+{
+	int ret;
+
+	if (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT)
+		return;
+
+	/*
+	 * This is purely a performance optimization trick. We can continue to
+	 * function (with possibly suboptimal performance) even if this fails. So
+	 * don't worry about the error here but flag it to help debug performance issues.
+	 */
+	ret = kvm_hypercall2(KVM_HC_EXCHANGE_PFN, page_to_pfn(page), node);
+	if (ret < 0)
+		printk(KERN_INFO"ERROR placing guest PFN on node: %d\n", node);
+}
+
+static void prepare_pgtable_nodemask(nodemask_t *nm, int node)
+{
+	if (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT) {
+		nodes_clear(*nm);
+		node_set(node, *nm);
+		return;
+	}
+
+	nodes_clear(*nm);
+	node_set(0, *nm);
+}
 
 
 /*
@@ -950,22 +1023,23 @@ static DEFINE_SPINLOCK(pgtable_cache_lock);
 				offset % 8); 														\
 	}
 
+#if 0
 #define check_page_node(p, n) do {\
-	if (p == NULL) {printk("PTREPL: PAGE WAS NULL!\n");} 									\
-	if (pfn_to_nid(page_to_pfn(p)) != (n)) { 												\
-		printk("PTREPL: %s:%u page table nid mismatch! pfn: %zu, nid %u expected: %u\n",	\
-				__FUNCTION__, __LINE__, page_to_pfn(p), 									\
-				pfn_to_nid(page_to_pfn(p)), (int)(n)); 										\
-		dump_stack();																		\
+	if (!virt_addr_valid((void *)p)) {/*printk("PTREP: PAGE IS NOT VALID!\n");*/} \
+	if (p == NULL) {printk("PTREPL: PAGE WAS NULL!\n");} \
+	if (pfn_to_nid(page_to_pfn(p)) != (n)) { \
+		printk("PTREPL: %s:%u page table nid mismatch! pfn: %zu, nid %u expected: %u\n", \
+		__FUNCTION__, __LINE__, page_to_pfn(p), pfn_to_nid(page_to_pfn(p)), (int)(n)); \
+		dump_stack();\
 	}} while(0);
+#endif
 
+#define check_page_node(p, n)	do { } while(0);
 #else
 #define check_page(p)
 #define check_offset(offset)
 #define check_page_node(p, n)
 #endif
-
-
 
 /*
  * ===============================================================================
@@ -1002,7 +1076,7 @@ unsigned long pgtable_repl_read_cr3(void)
 		return cr3;
 	}
 
-	if (unlikely((cr3 & CR3_ADDR_MASK) != __pa(mm->repl_pgd[numa_node_id()]))) {
+	if (unlikely((cr3 & CR3_ADDR_MASK) != __pa(mm->repl_pgd[PGTABLE_CPU_NID]))) {
 		if (unlikely((cr3 & CR3_ADDR_MASK) == __pa(mm->pgd))) {
 			return cr3;
 		}
@@ -1022,14 +1096,13 @@ void pgtable_repl_write_cr3(unsigned long cr3)
 		return;
 	}
 
-
 	mm = pgd_page_get_mm(page_of_ptable_entry(__va(cr3 & PTE_PFN_MASK)));
 	if (mm == NULL || !mm->repl_pgd_enabled) {
 		native_write_cr3(cr3);
 		return;
 	}
 
-	pgd = mm_get_pgd_for_node(mm);
+	pgd = mm_get_pgd_for_node(mm, PGTABLE_CPU_NID);;
 	check_page_node(page_of_ptable_entry(pgd), numa_node_id());
 	//printk("[mitosis] changing CR3 from %lx -> %lx\n", cr3, build_cr3(pgd, CR3_PCID_MASK & cr3));
 	native_write_cr3(build_cr3(pgd, CR3_PCID_MASK & cr3));
@@ -2376,44 +2449,32 @@ void pgtable_repl_activate_mm(struct mm_struct *prev, struct mm_struct *next)
 
 int pgtable_cache_populate(size_t numpgtables)
 {
-	size_t i, j;
-	size_t num_nodes = MAX_SUPPORTED_NODE;
+	int i, j;
 	struct page *p;
 	nodemask_t nm = NODE_MASK_NONE;
 
-	printk("PGREPL: populating pgtable cache with %zu tables per node\n",
-			numpgtables);
-
+	printk("Populating pgtable cache with %zu tables per node\n", numpgtables);
 	spin_lock(&pgtable_cache_lock);
 
-	if (NR_PGTABLE_REPLICAS < num_nodes) {
-		num_nodes = NR_PGTABLE_REPLICAS;
-	}
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
+		printk("Populating node[%d] with %zu pgtables\n", i, numpgtables);
 
-	for (i = 0; i < num_nodes; i++) {
-
-		printk("PGREPL: populating pgtable cache node[%zu] with %zu tables\n",
-				i, numpgtables);
-
-		nodes_clear(nm);
-		node_set(i, nm);
+		prepare_pgtable_nodemask(&nm, i);
 
 		for (j = 0; j < numpgtables; j++) {
 			/* allocte a new page, and place it in the replica list */
-			p = __alloc_pages_nodemask(PGALLOC_GFP, 0, i, &nm);
-			if (p) {
-				check_page_node(p, i);
-				p->replica = pgtable_cache[i];
-				pgtable_cache[i] = p;
-				pgtable_cache_size[i]++;
-			} else {
+			p = __alloc_pages_nodemask(PGALLOC_GFP, 0, PGTABLE_ALLOC_NODE(i), &nm);
+			if (!p)
 				break;
-			}
+
+			adjust_page_placement(p, i);
+			check_page_node(p, i);
+			p->replica = pgtable_cache[i];
+			pgtable_cache[i] = p;
+			pgtable_cache_size[i]++;
 		}
 
-		printk("PGREPL: node[%lu] populated with %zu  tables\n",
-				i, pgtable_cache_size[i]);
-
+		printk("Node[%d] populated with %zu tables\n", i, pgtable_cache_size[i]);
 	}
 
 	spin_unlock(&pgtable_cache_lock);
@@ -2456,11 +2517,15 @@ struct page *pgtable_cache_alloc(int node)
 	}
 
 	if (pgtable_cache[node] == NULL) {
-		nm = NODE_MASK_NONE;
-		node_set(node, nm);
+
+		prepare_pgtable_nodemask(&nm, node);
 
 		/* allocte a new page, and place it in the replica list */
-		p = __alloc_pages_nodemask(PGALLOC_GFP, 0, node, &nm);
+		p = __alloc_pages_nodemask(PGALLOC_GFP, 0, PGTABLE_ALLOC_NODE(node), &nm);
+		if (!p)
+			return NULL;
+		adjust_page_placement(p, node);
+
 		check_page_node(p, node);
 		return p;
 	}
@@ -2688,8 +2753,7 @@ int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
 				void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table t;
-	int err;
-	int state = 0;
+	int i, err, ret, state = pgtable_replication_mode;
 
 	if (write && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -2703,13 +2767,30 @@ int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
 	if (write) {
 		if (state == PGTABLE_REPLICATION_MODE_DEFAULT) {
 			/* the default behavior */
-			printk(KERN_INFO"Setting pgtable replication to DEFAULT mode\n");
 			if (nr_node_ids <= 1) {
 				printk(KERN_INFO"Invalid mode. Expected a multi-socket machine\n");
 				return -EINVAL;
 			}
+			printk(KERN_INFO"pgtable replication set to default mode\n");
+			pgtable_replication_mode = PGTABLE_REPLICATION_MODE_DEFAULT;
 		} else if (state == PGTABLE_REPLICATION_MODE_PARAVIRTUAL) {
 			printk(KERN_INFO"Setting pgtable replication to PARAVIRTUAL mode\n");
+			ret = kvm_hypercall1(KVM_HC_VCPU_INFO, INT_MAX);
+			if (ret < 0) {
+				printk(KERN_INFO"ERROR quering # nodes on the host\n");
+				return -EINVAL;
+			}
+			arch_setup_pv_numainfo(INT_MAX, ret);
+			for (i = 0; i < nr_cpu_ids; i++) {
+				ret = kvm_hypercall1(KVM_HC_VCPU_INFO, i);
+				if (ret < 0) {
+					printk(KERN_INFO"ERROR quering affinity of cpu : %d\n", i);
+					return -EINVAL;
+				}
+				arch_setup_pv_numainfo(i, ret);
+			}
+			printk(KERN_INFO"pgtable replication set to PARAVIRTUAL mode\n");
+			pgtable_replication_mode = PGTABLE_REPLICATION_MODE_PARAVIRTUAL;
 		} else if (state == PGTABLE_REPLICATION_MODE_PROBE) {
 			printk(KERN_INFO"Setting pgtable replication to PROBING mode\n");
 		}

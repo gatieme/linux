@@ -677,14 +677,14 @@ typedef struct {
 #ifdef CONFIG_PGTABLE_REPLICATION
 #include <linux/topology.h>
 
-static inline pgd_t *mm_get_pgd_for_node(struct mm_struct *mm)
+static inline pgd_t *mm_get_pgd_for_node(struct mm_struct *mm, int node)
 {
 	pgd_t *pgd;
-	pgd = mm->repl_pgd[numa_node_id()];
+	pgd = mm->repl_pgd[node];
 	return (pgd != NULL ? pgd : mm->pgd);
 }
 #else
-#define mm_get_pgd_for_node(_mm) ((_mm)->pgd)
+#define mm_get_pgd_for_node(_mm, node) ((_mm)->pgd)
 #endif
 
 
