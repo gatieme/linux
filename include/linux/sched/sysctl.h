@@ -89,10 +89,9 @@ extern int sysctl_numa_pgtable_replication(struct ctl_table *table, int write,
 				 void __user *buffer, size_t *lenp,
 				 loff_t *ppos);				
 
-int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, 
-											  int write, 
-												void __user *buffer, 
-												size_t *lenp,
-				 								loff_t *ppos);
+int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, int write,
+			void __user *buffer, size_t *lenp, loff_t *ppos);
 
+int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
+			void __user *buffer, size_t *lenp, loff_t *ppos);
 #endif /* _LINUX_SCHED_SYSCTL_H */

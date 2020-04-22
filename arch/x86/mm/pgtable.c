@@ -778,7 +778,7 @@ int pmd_free_pte_page(pmd_t *pmd)
 	page = virt_to_page(pte);
 	if (page != NULL) {
 		page = page->replica;
-		for (i = 0; i < nr_node_ids && page; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
 			pcurrent = page;
 			page = page->replica;
 			pgtable_cache_free(i, pcurrent);
@@ -817,7 +817,7 @@ int pud_free_pmd_page(pud_t *pud)
 	page = virt_to_page(pmd);
 	if (page != NULL) {
 		page = page->replica;
-		for (i = 0; i < nr_node_ids && page; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
 			pcurrent = page;
 			page = page->replica;
 			pgtable_cache_free(i, pcurrent);
@@ -891,6 +891,18 @@ int pmd_free_pte_page(pmd_t *pmd)
  */
 
 #ifdef CONFIG_PGTABLE_REPLICATION
+
+enum {
+	PGTABLE_REPLICATION_MODE_DEFAULT,
+	PGTABLE_REPLICATION_MODE_PARAVIRTUAL,
+	PGTABLE_REPLICATION_MODE_PROBE,
+	NR_PGTABLE_REPLICATION_MODES
+};
+
+/* start with the default mode */
+int pgtable_replication_mode = PGTABLE_REPLICATION_MODE_DEFAULT;
+#define NR_PGTABLE_REPLICAS	(pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ? NR_PGTABLE_REPLICAS : 1)
+
 
 ///> pgtable_repl_initialized tracks whether the system is ready for handling page table replication
 static bool pgtable_repl_initialized = false;
@@ -1054,7 +1066,7 @@ void pgtable_repl_set_pte(pte_t *ptep, pte_t pteval)
 	offset = (long)ptep - (long)page_to_virt(page_pte);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pte = page_pte->replica;
 		check_page_node(page_pte, i);
 
@@ -1099,7 +1111,7 @@ void pgtable_repl_set_pmd(pmd_t *pmdp, pmd_t pmdval)
 	/* the entry is a large entry i.e. pointing to a frame, or the entry is not valid */
 	if (!page_pte || pmd_none(pmdval) || !pmd_present(pmdval) || pmd_large(pmdval)
 			|| is_pmd_migration_entry(pmdval) || is_swap_pmd(pmdval)) {
-		for (i = 0; i < nr_node_ids; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 			page_pmd = page_pmd->replica;
 			check_page_node(page_pmd, i);
 			pmdp = (pmd_t *)((long)page_to_virt(page_pmd) + offset);
@@ -1109,7 +1121,7 @@ void pgtable_repl_set_pmd(pmd_t *pmdp, pmd_t pmdval)
 	}
 
 	/* where the entry points to */
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pmd = page_pmd->replica;
 		page_pte = page_pte->replica;
 
@@ -1151,7 +1163,7 @@ void pgtable_repl_set_pud(pud_t *pudp, pud_t pudval)
 
 	/* there is no age for this entry or the entry is huge or the entry is not present */
 	if (!page_pmd || !pud_present(pudval) || pud_huge(pudval) || pud_none(pudval)) {
-		for (i = 0; i < nr_node_ids; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 			page_pud = page_pud->replica;
 			check_page_node(page_pud, i);
 			pudp = (pud_t *)((long)page_to_virt(page_pud) + offset);
@@ -1160,7 +1172,7 @@ void pgtable_repl_set_pud(pud_t *pudp, pud_t pudval)
 		return;
 	}
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pud = page_pud->replica;
 		page_pmd = page_pmd->replica;
 
@@ -1199,7 +1211,7 @@ void pgtable_repl_set_p4d(p4d_t *p4dp, p4d_t p4dval)
 	page_pud = p4d_page(p4dval);
 
 	if (!page_pud || p4d_none(p4dval) || !p4d_present(p4dval)) {
-		for (i = 0; i < nr_node_ids; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 			page_p4d = page_p4d->replica;
 			check_page_node(page_p4d, i);
 			p4dp = (p4d_t *)((long)page_to_virt(page_p4d) + offset);
@@ -1208,7 +1220,7 @@ void pgtable_repl_set_p4d(p4d_t *p4dp, p4d_t p4dval)
 		return;
 	}
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pud = page_pud->replica;
 		page_p4d = page_p4d->replica;
 
@@ -1261,7 +1273,7 @@ pte_t pgtable_repl_get_pte(pte_t *ptep)
 	offset = ((long)ptep & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1308,7 +1320,7 @@ pmd_t pgtable_repl_get_pmd(pmd_t *pmdp)
 
 	flags = pmd_flags(*pmdp);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1349,7 +1361,7 @@ pud_t pgtable_repl_get_pud(pud_t *pudp)
 
 	flags = pud_flags(*pudp);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1384,7 +1396,7 @@ p4d_t pgtable_repl_get_p4d(p4d_t *p4dp)
 	offset =  ((long)p4dp & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1419,7 +1431,7 @@ pgd_t pgtable_repl_get_pgd(pgd_t *pgdp)
 	offset =  ((long)pgdp & ~PAGE_MASK);;
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 
 		page = page->replica;
 		check_page_node(page, i);
@@ -1467,7 +1479,7 @@ pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
 
 
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pte = page_pte->replica;
 		check_page_node(page_pte, i);
 
@@ -1507,7 +1519,7 @@ pmd_t pmdp_get_and_clear(struct mm_struct *mm, unsigned long addr, pmd_t *pmdp)
 	offset = ((long)pmdp & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pmd = page_pmd->replica;
 		check_page_node(page_pmd, i);
 
@@ -1551,7 +1563,7 @@ pud_t pudp_get_and_clear(struct mm_struct *mm, unsigned long addr, pud_t *pudp)
 
 	flags = pud_flags(pud);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pud = page_pud->replica;
 		check_page_node(page_pud, i);
 
@@ -1597,7 +1609,7 @@ int ptep_test_and_clear_young(struct vm_area_struct *vma,
 	offset = ((long)ptep & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1634,7 +1646,7 @@ int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 	offset = ((long)pmdp & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1671,7 +1683,7 @@ int pudp_test_and_clear_young(struct vm_area_struct *vma,
 	offset =  ((long)pudp & ~PAGE_MASK);;
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1723,7 +1735,7 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 	offset = ((long)ptep & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1770,7 +1782,7 @@ int pmdp_set_access_flags(struct vm_area_struct *vma,
 	check_offset(offset);
 
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1814,7 +1826,7 @@ int pudp_set_access_flags(struct vm_area_struct *vma, unsigned long address,
 	offset =  ((long)pudp & ~PAGE_MASK);;
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page = page->replica;
 		check_page_node(page, i);
 
@@ -1894,7 +1906,7 @@ pmd_t pmdp_establish(struct vm_area_struct *vma, unsigned long address, pmd_t *p
 
 	page_pmd_debug = page_pmd;
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pmd = page_pmd->replica;
 		if (page_pmd == NULL || page_pmd == page_pmd_debug) {
 			panic("PTREPL: %s:%d i=%u, %u %u\n", __FUNCTION__, __LINE__, i, page_pmd == NULL, page_pmd == page_pmd_debug);
@@ -1948,7 +1960,7 @@ pte_t pgtable_repl_ptep_modify_prot_start(struct mm_struct *mm,
 
 	page_pte_debug = page_pte;
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pte = page_pte->replica;
 		if (page_pte == NULL || page_pte == page_pte_debug) {
 			panic("PTREPL: %s:%d i=%u, %u %u\n", __FUNCTION__, __LINE__, i, page_pte == NULL, page_pte == page_pte_debug);
@@ -2004,7 +2016,7 @@ void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
 	offset = ((long)ptep & ~PAGE_MASK);
 	check_offset(offset);
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pte = page_pte->replica;
 		check_page_node(page_pte, i);
 
@@ -2046,7 +2058,7 @@ void pmdp_set_wrprotect(struct mm_struct *mm,
 
 	page_pmd_debug = page_pmd;
 
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		page_pmd = page_pmd->replica;
 		check_page_node(page_pmd, i);
 
@@ -2081,7 +2093,7 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 	}
 
 	if (unlikely(!pgtable_repl_initialized)) {
-		pgtable_repl_initialized = (nr_node_ids != MAX_NUMNODES);
+		pgtable_repl_initialized = (NR_PGTABLE_REPLICAS != MAX_NUMNODES);
 		if (pgtable_repl_initialized) {
 			if (pgtable_fixed_node == -1) {
 				pgtable_repl_activated = false;
@@ -2112,7 +2124,7 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 	pgd = page_of_ptable_entry(mm->pgd);
 
 	pgd2 = pgd;
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 
 		/* allocte a new page, and place it in the replica list */
 		pgd2->replica = pgtable_cache_alloc(i);
@@ -2147,7 +2159,7 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 	/* let's verify */
 	#if 1
 	pgd2 = pgd->replica;
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		check_page_node(pgd2, i);
 		pgd2 = pgd2->replica;
 	}
@@ -2184,7 +2196,7 @@ void pgtable_repl_pgd_free(struct mm_struct *mm, pgd_t *pgd)
 	pgd_page = pgd_page->replica;
 
 	/* XXX: check if there are infact replicas */
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		p = pgd_page;
 		pgd_page = pgd_page->replica;
 
@@ -2230,7 +2242,7 @@ static void __pgtable_repl_alloc_one(struct mm_struct *mm, unsigned long pfn,
 	if (p->replica) {
 		printk("PTREP: Called alloc on an already allocated replica... verifying!\n");
 		p2 = p->replica;
-		for (i = 0; i < nr_node_ids; i++) {
+		for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 			check_page_node(p2, i);
 			p2 = p2->replica;
 		}
@@ -2241,7 +2253,7 @@ static void __pgtable_repl_alloc_one(struct mm_struct *mm, unsigned long pfn,
 	}
 
 	p2 = p;
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		/* allocte a new page, and place it in the replica list */
 		p2->replica  = pgtable_cache_alloc(i);
 		if (p2->replica == NULL) {
@@ -2266,7 +2278,7 @@ static void __pgtable_repl_alloc_one(struct mm_struct *mm, unsigned long pfn,
 	/* let's verify */
 	#if 0
 	p2 = p->replica;
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		printk("page: %lx", (long)p2);
 		check_page_node(p2, i);
 		p2 = p2->replica;
@@ -2296,7 +2308,7 @@ static void __pgtable_repl_release_one(unsigned long pfn, void (*dtor)(struct pa
 	}
 
 	p2 = p->replica;
-	for (i = 0; i < nr_node_ids; i++) {
+	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
 		check_page_node(p2, i);
 		pcurrent = p2;
 		if (dtor) {
@@ -2374,8 +2386,8 @@ int pgtable_cache_populate(size_t numpgtables)
 
 	spin_lock(&pgtable_cache_lock);
 
-	if (nr_node_ids < num_nodes) {
-		num_nodes = nr_node_ids;
+	if (NR_PGTABLE_REPLICAS < num_nodes) {
+		num_nodes = NR_PGTABLE_REPLICAS;
 	}
 
 	for (i = 0; i < num_nodes; i++) {
@@ -2439,7 +2451,7 @@ struct page *pgtable_cache_alloc(int node)
 
 	if (unlikely(node >= MAX_SUPPORTED_NODE)) {
 		panic("PTREPL: WARNING NODE ID %u >= %u. Override to 0 \n",
-				node, nr_node_ids);
+				node, NR_PGTABLE_REPLICAS);
 		node = 0;
 	}
 
@@ -2661,14 +2673,51 @@ int sysctl_numa_pgtable_replication_cache_ctl(struct ctl_table *table, int write
 	if (write) {
 		if (state < 0) {
 			/* the default behavior */
-			printk("PROCFS: Command ot drain the pgtable cache\n");
+			printk("PROCFS: Command to drain the pgtable cache\n");
 			pgtable_cache_drain();
 		} else if (state > 0) {
-			printk("PROCFS: Command ot populate the pgtable cache\n");
+			printk("PROCFS: Command to populate the pgtable cache\n");
 			pgtable_cache_populate(state);
 		}
 	}
 	return err;
 }
+
+
+int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct ctl_table t;
+	int err;
+	int state = 0;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &state;
+	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+
+	if (write) {
+		if (state == PGTABLE_REPLICATION_MODE_DEFAULT) {
+			/* the default behavior */
+			printk(KERN_INFO"Setting pgtable replication to DEFAULT mode\n");
+			if (nr_node_ids <= 1) {
+				printk(KERN_INFO"Invalid mode. Expected a multi-socket machine\n");
+				return -EINVAL;
+			}
+		} else if (state == PGTABLE_REPLICATION_MODE_PARAVIRTUAL) {
+			printk(KERN_INFO"Setting pgtable replication to PARAVIRTUAL mode\n");
+		} else if (state == PGTABLE_REPLICATION_MODE_PROBE) {
+			printk(KERN_INFO"Setting pgtable replication to PROBING mode\n");
+		}
+	}
+	return err;
+}
+
+
+
 #endif /* CONFIG_PROC_SYSCTL */
 #endif /* CONFIG_PGTABLE_REPLICATION */

@@ -406,6 +406,13 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sysctl_numa_pgtable_replication_cache_ctl
 	},
+	{
+		.procname	= "pgtable_replication_mode",
+		.data		= NULL, /* filled in by handler */
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_numa_pgtable_replication_mode_ctl
+	},
 #endif
 #endif
 #ifdef CONFIG_NUMA_BALANCING
