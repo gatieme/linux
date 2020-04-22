@@ -29,6 +29,9 @@
 #define KVM_HC_CLOCK_PAIRING		9
 #define KVM_HC_EXCHANGE_PFN             10
 #define KVM_HC_VCPU_INFO                11
+
+/* Use this to query NUMA node of a gfn */
+#define HC_GET_GFN_NUMA_NID		9999
 /*
  * hypercalls use architecture specific
  */

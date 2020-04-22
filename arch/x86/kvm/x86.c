@@ -6662,10 +6662,16 @@ extern int mt_exchange_pfn(struct mm_struct *mm, unsigned long address,
 static int kvm_exchange_pfns(struct kvm_vcpu *vcpu, unsigned long gfn,
                             unsigned long nid)
 {
+	struct page *page;
         struct mm_struct *mm;
         unsigned long pfn, addr;
         int ret;
 
+	if (nid == HC_GET_GFN_NUMA_NID) {
+		page = kvm_vcpu_gfn_to_page(vcpu, gfn);
+		kvm_release_page_clean(page);
+		return page_to_nid(page);
+	}
         /* validate the node id*/
         if (nid > nr_node_ids)
             return -EINVAL;
