@@ -918,9 +918,10 @@ unsigned int			pv_cpu_info[PGTABLE_MAX_CPUS];
 #define PV_CPU_NID		(pv_cpu_info[smp_processor_id()])
 
 /* Probing-based PGTABLE Replication */
-static int			probe_nr_node_ids;
+static int			probe_nr_node_ids = 4;
 unsigned int			probe_cpu_info[PGTABLE_MAX_CPUS];
-#define PROBE_CPU_NID		(probe_cpu_info[smp_processor_id()])
+//#define PROBE_CPU_NID		(probe_cpu_info[smp_processor_id()])
+#define PROBE_CPU_NID		(smp_processor_id() % 4)
 
 /* start with the default mode */
 int pgtable_replication_mode = PGTABLE_REPLICATION_MODE_DEFAULT;
@@ -974,7 +975,8 @@ static void adjust_page_placement(struct page *page, int node)
 {
 	int ret;
 
-	if (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT)
+	if (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_DEFAULT ||
+		pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PROBE)
 		return;
 
 	/*
@@ -2793,6 +2795,7 @@ int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
 			pgtable_replication_mode = PGTABLE_REPLICATION_MODE_PARAVIRTUAL;
 		} else if (state == PGTABLE_REPLICATION_MODE_PROBE) {
 			printk(KERN_INFO"Setting pgtable replication to PROBING mode\n");
+			pgtable_replication_mode = PGTABLE_REPLICATION_MODE_PROBE;
 		}
 	}
 	return err;
