@@ -2141,8 +2141,22 @@ static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
         else
                 free_page((unsigned long)sp->spt[MASTER_EPT_ROOT]);
 
-	if (!sp->role.direct)
-		free_page((unsigned long)sp->gfns);
+	if (!sp->role.direct) {
+		if (ept_replication) {
+			struct page *page;
+			struct ept_cache *cache;
+
+			page = virt_to_page(sp->gfns);
+			cache = &ept_reserve_cache[page_to_nid(page)];
+			spin_lock(&cache->lock);
+			if (cache->nr_objects < ept_replication_cache)
+				cache->pages[cache->nr_objects++] = (void *)page_address(page);
+			else
+				free_page((unsigned long)sp->gfns);
+			spin_unlock(&cache->lock);
+		} else
+			free_page((unsigned long)sp->gfns);
+	}
 
 	kmem_cache_free(mmu_page_header_cache, sp);
 }
@@ -2178,6 +2192,7 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
         int i;
+	static int gfn_cache_idx = 0;
 	struct kvm_mmu_page *sp;
 
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
@@ -2185,20 +2200,26 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
         if (ept_replication) {
                 for (i = 0; i < nr_node_ids; i++)
                     sp->spt[i] = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[i]);
+
+                for (i = 0; i < nr_node_ids; i++)
+                    set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
+
+		/*
+		 * Placement of this page is not performance critical as this is occasionally touched
+		 * by the hypervisor. However, allocating it though kmalloc all the time creates unnecessary
+		 * load while allocating it from a single cache reservation pools create imbalance. To keep it
+		 * simple, we allocate it in round-robin manner from all pools.
+		 */
+		sp->gfns=mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[gfn_cache_idx]);
+		gfn_cache_idx = (gfn_cache_idx + 1) % nr_node_ids;
         } else {
                 sp->spt[MASTER_EPT_ROOT] =
                         mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[MASTER_EPT_ROOT]);
-        }
 
-	if (!direct) {
-		sp->gfns = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
-		BUG_ON(sp->gfns == NULL); /* can't afford allocation failure here */
+		set_page_private(virt_to_page(sp->spt[MASTER_EPT_ROOT]), (unsigned long)sp);
+		if (!direct)
+			sp->gfns = mmu_memory_page_cache_alloc(&vcpu->arch.mmu_page_cache[MASTER_EPT_ROOT]);
         }
-        if (ept_replication) {
-                for (i = 0; i < nr_node_ids; i++)
-                    set_page_private(virt_to_page(sp->spt[i]), (unsigned long)sp);
-        } else
-                set_page_private(virt_to_page(sp->spt[MASTER_EPT_ROOT]), (unsigned long)sp);
 
 	/*
 	 * The active_mmu_pages list is the FIFO list, do not move the
@@ -6419,7 +6440,7 @@ static ssize_t mitosis_ept_reservation_store(struct kobject *kobj,
         long nr_pages;
 
         err = kstrtol(buf, 10, &nr_pages);
-        if (err || nr_pages < 0 || nr_pages > 1000000)
+        if (err || nr_pages < 0)
                 return -EINVAL;
 
         ept_replication_cache = nr_pages;
