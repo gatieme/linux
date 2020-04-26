@@ -4631,6 +4631,9 @@ void scheduler_tick(void)
 	rq_lock(rq, &rf);
 
 #ifdef CONFIG_PROXY_EXEC
+	/*
+	 * [valsch]: When does that happen? This wants a comment.
+	 */
 	if (task_cpu(curr) != cpu) {
 		BUG_ON(!test_preempt_need_resched() &&
 		       !tif_need_resched());
@@ -5116,6 +5119,10 @@ retry_owner:
 		if (owner == p)
 			goto owned_task;
 
+		/*
+		 * [valsch]: Should that be task_on_rq_queued()? Need to check
+		 * serialization wrt TASK_ON_RQ_MIGRATING and task_cpu()
+		 */
 		if (!owner->on_rq)
 			goto blocked_task;
 
@@ -5205,6 +5212,14 @@ migrate_task:
 	 *		* BOOM *
 	 */
 	put_prev_task(rq, next);
+
+	/*
+	 * [valsch] AFAICT this is only required if rq->curr just blocked on a
+	 * mutex and called into schedule. Otherwise, rq->curr can't be in the
+	 * proxied_by chain, since it's not blocked_on and no one else in the
+	 * proxied_by chain could have been executing.
+	 *
+	 */
 	if (rq->curr != rq->idle) {
 		rq->proxy = rq->idle;
 		set_tsk_need_resched(rq->idle);
@@ -5215,6 +5230,7 @@ migrate_task:
 		trace_printk("proxy_idle: curr=%d\n", task_pid_nr(rq->curr));
 		return rq->idle;
 	}
+	/* [valsch] this used to be fake_task */
 	rq->proxy = rq->idle;
 
 	for (; p; p = p->proxied_by) {
@@ -5303,6 +5319,9 @@ owned_task:
 
 	/*
 	 * If @owner/@p is allowed to run on this CPU, make it go.
+	 *
+	 * [valsch] why is that required? if we end here we already know
+	 * task_cpu(owner) == this_cpu, no?
 	 */
 	if (cpumask_test_cpu(this_cpu, owner->cpus_ptr)) {
 		owner->state = TASK_RUNNING;
@@ -6479,6 +6498,9 @@ change:
 	queued = task_on_rq_queued(p);
 	/*
 	 * XXX and again, how is this safe w.r.t. proxy exec?
+	 * [valsch] setscheduler() on current proxied_by something else isn't
+	 * gonna get the 'running' bit; at the same time the accounting *is*
+	 * against the proxy.
 	 */
 	running = task_current_proxy(rq, p);
 	if (queued)

@@ -1268,6 +1268,7 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 	 * XXX [juril] Proxy Exec forces always an HANDOFF (so that owner is
 	 * never empty when there are waiters wating?). Should we make this
 	 * conditional on having proxy exec configured in?
+	 * [valsch]: That's directly overwritten in the !PE path, so looks OK,
 	 */
 	unsigned long owner = MUTEX_FLAG_HANDOFF;
 	unsigned long flags;
@@ -1322,7 +1323,9 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 	 * this lock, hand the lock to that task, as that is the highest
 	 * waiter, as selected by the scheduling function.
 	 *
-	 * XXX existance guarantee on ->blocked_task ?
+	 * XXX existance guarantee on ->proxied_by ?
+	 * [valsch]: We are preempt disabled, and current->proxied_by can only
+	 * change at __schedule(). That looks somewhat sane to me.
 	 */
 	next = current->proxied_by;
 	if (next) {
