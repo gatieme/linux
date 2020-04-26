@@ -2801,6 +2801,62 @@ int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
 	return err;
 }
 
+int sysctl_numa_pgtable_replication_warmup_ctl(struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct page *page;
+	struct ctl_table t;
+	int i, err, *count, node, state = pgtable_replication_mode;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &state;
+	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+
+	if (write) {
+		if (state < 0 || state > NR_PGTABLE_REPLICAS)
+			return -1;
+
+		spin_lock(&pgtable_cache_lock);
+		/* read each page a few times */
+		for (i = 0; i < 5; i++) {
+			page = pgtable_cache[state];
+			while(page) {
+				clear_highpage(page);
+				page = page->replica;
+			}
+		}
+		spin_unlock(&pgtable_cache_lock);
+		if (state != NR_PGTABLE_REPLICAS) {
+			printk("pgtable warmup done on replica: %d\n", state);
+			return 0;
+		}
+		printk("Querying NUMA mappings for pgtable replicas\n");
+		spin_lock(&pgtable_cache_lock);
+		for(i = 0; i < NR_PGTABLE_REPLICAS; i++) {
+			count = kzalloc(sizeof(int) * NR_PGTABLE_REPLICAS, GFP_KERNEL);
+			if (!count)
+				return -ENOMEM;
+
+			page = pgtable_cache[i];
+			while(page) {
+				node = kvm_hypercall2(KVM_HC_EXCHANGE_PFN, page_to_pfn(page), HC_GET_GFN_NUMA_NID);
+				if (0 <= node && node < NR_PGTABLE_REPLICAS)
+					count[node]++;
+				page = page->replica;
+			}
+			printk("Replica: %d -- Mapping: %d %d %d %d\n", i, count[0], count[1], count[2], count[3]);
+			kfree(count);
+		}
+		spin_unlock(&pgtable_cache_lock);
+	}
+	return err;
+}
+
 
 
 #endif /* CONFIG_PROC_SYSCTL */
