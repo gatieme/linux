@@ -260,9 +260,10 @@ void mmu_free_roots(struct kvm_vcpu *vcpu);
 static void mitosis_link_replica_pages(struct kvm_mmu_page *sp, u64 *sptep);
 static void mitosis_mark_mmio_replicas(u64 *sptep, u64 mask);
 static void mitosis_set_replicas(u64 *sptep, u64 new_spte);
-static void mitosis_drop_replica_entries(u64 *sptep);
 static void mitosis_age_replicas(u64 *sptep);
 static void mitosis_age_ad_replicas(u64 *sptep);
+static int mitosis_drop_replica_entries(u64 *sptep);
+static bool mitosis_is_accessed_replica(u64 *sptep);
 static bool mitosis_write_protect_replicas(u64 *sptep, bool pt_protect);
 static bool mitosis_clear_replicas_dirty(u64 *sptep);
 static bool mitosis_wrprot_ad_disabled_replicas(u64 *sptep);
@@ -856,9 +857,10 @@ static bool mmu_spte_age(u64 *sptep)
 {
 	u64 spte = mmu_spte_get_lockless(sptep);
 
-	if (!is_accessed_spte(spte))
+	if (!is_accessed_spte(spte) && !mitosis_is_accessed_replica(sptep))
 		return false;
 
+	/* to be safe, clear Accessed bit from all copies */
 	if (spte_ad_enabled(spte)) {
                 mitosis_age_replicas(sptep);
 		clear_bit((ffs(shadow_accessed_mask) - 1),
@@ -2813,16 +2815,17 @@ static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
         }
 }
 
-static void mitosis_drop_replica_entries(u64 *sptep)
+static int mitosis_drop_replica_entries(u64 *sptep)
 {
-        int i;
-        u64 offset, addr;
+        int i, ret = 0;
+        u64 offset, addr, old_repl;
+	kvm_pfn_t pfn;
         struct page *replica;
         struct kvm_mmu_page *sp;
 
         /* check if ept_replication is enabled */
         if (!ept_replication)
-                return;
+                return 0;
 
         sp = page_header(__pa(sptep));
         offset = (u64)sptep & ~PAGE_MASK;
@@ -2842,11 +2845,52 @@ static void mitosis_drop_replica_entries(u64 *sptep)
                     continue;
                 }
                 addr = REPLICA_ADDRESS(replica, offset);
-                if (!spte_has_volatile_bits(*(u64 *)addr))
+		old_repl = *(u64 *)addr;
+                if (!spte_has_volatile_bits(old_repl))
                         __update_clear_spte_fast((u64 *)addr, 0ull);
                 else
-                        __update_clear_spte_slow((u64 *)addr, 0ull);
+                        old_repl = __update_clear_spte_slow((u64 *)addr, 0ull);
+
+		if (!is_shadow_present_pte(old_repl))
+			continue;
+
+		pfn = spte_to_pfn(old_repl);
+		WARN_ON(!kvm_is_reserved_pfn(pfn) && !page_count(pfn_to_page(pfn)));
+		if (is_accessed_spte(old_repl))
+			kvm_set_pfn_accessed(pfn);
+
+		if (is_dirty_spte(old_repl))
+			kvm_set_pfn_dirty(pfn);
+
+		ret = 1;
         }
+
+	return ret;
+}
+
+static bool mitosis_is_accessed_replica(u64 *sptep)
+{
+	int i;
+	u64 *addr, offset, repl_spte;
+	struct page *replica;
+	struct kvm_mmu_page *sp;
+
+        if (!ept_replication)
+                return false;
+
+        sp = page_header(__pa(sptep));
+        offset = (u64)sptep & ~PAGE_MASK;
+        for(i = 0; i < nr_node_ids; i++) {
+		if (i == MASTER_EPT_ROOT)
+			continue;
+
+		replica = virt_to_page(sp->spt[i]);
+		addr = (u64 *)REPLICA_ADDRESS(replica, offset);
+		repl_spte = mmu_spte_get_lockless(addr);
+		if (is_accessed_spte(repl_spte))
+			return true;
+	}
+	return false;
 }
 
 static void mitosis_age_replicas(u64 *sptep)
@@ -3086,8 +3130,14 @@ static void mitosis_set_replicas(u64 *sptep, u64 new_spte)
 {
 }
 
-static void mitosis_drop_replica_entries(u64 *sptep)
+static int mitosis_drop_replica_entries(u64 *sptep)
 {
+	return 0;
+}
+
+static bool mitosis_is_accessed_replica(u64 *sptep)
+{
+	return false;
 }
 
 static void mitosis_age_replicas(u64 *sptep)
