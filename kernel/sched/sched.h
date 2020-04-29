@@ -1174,7 +1174,16 @@ static inline u64 rq_clock(struct rq *rq)
 
 static inline u64 rq_clock_task(struct rq *rq)
 {
-	lockdep_assert_held(&rq->lock);
+	//lockdep_assert_held(&rq->lock);
+	if (debug_locks && !lockdep_is_held(&rq->lock)) {
+		int cpu = raw_smp_processor_id();
+
+		trace_printk("%s: BUG cpu=%d curr=%d proxy=%d this_curr=%d this_proxy=%d",
+				__func__, cpu_of(rq), task_pid_nr(rq->curr), task_pid_nr(rq->proxy),
+				task_pid_nr(cpu_rq(cpu)->curr), task_pid_nr(cpu_rq(cpu)->proxy));
+		trace_dump_stack(5);
+		BUG();
+	}
 	assert_clock_updated(rq);
 
 	return rq->clock_task;

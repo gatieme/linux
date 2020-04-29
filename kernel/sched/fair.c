@@ -7049,6 +7049,7 @@ again:
 
 	do {
 		struct sched_entity *curr = cfs_rq->curr;
+		int depth = 0;
 
 		/*
 		 * Since we got here without doing put_prev_entity() we also
@@ -7078,8 +7079,15 @@ again:
 			}
 		}
 
+		trace_printk("pick_next_fair_loop: curr=%d proxy=%d rq.cfs.h_nr_running=%d "
+			     "cfs_rq.nr_running=%d cfs_rq.level=%d\n",
+			     task_pid_nr(rq->curr), task_pid_nr(rq->proxy), rq->cfs.h_nr_running,
+			     cfs_rq->nr_running, depth);
 		se = pick_next_entity(cfs_rq, curr);
+		if (!se)
+			trace_printk("pick_next_NULL: crash=imminent\n");
 		cfs_rq = group_cfs_rq(se);
+		depth++;
 	} while (cfs_rq);
 
 	p = task_of(se);
@@ -7117,9 +7125,21 @@ simple:
 		put_prev_task(rq, prev);
 
 	do {
+		int depth = 0; /* xxx reverse depth */
+
+		trace_printk("pick_next_fair_loop: curr=%d proxy=%d rq.cfs.h_nr_running=%d "
+			     "cfs_rq.nr_running=%d cfs_rq.level=%d\n",
+			     task_pid_nr(rq->curr), task_pid_nr(rq->proxy), rq->cfs.h_nr_running,
+			     cfs_rq->nr_running, depth);
+
 		se = pick_next_entity(cfs_rq, NULL);
+
+		if (!se)
+			trace_printk("pick_next_NULL: crash=imminent\n");
+
 		set_next_entity(cfs_rq, se);
 		cfs_rq = group_cfs_rq(se);
+		depth++;
 	} while (cfs_rq);
 
 	p = task_of(se);

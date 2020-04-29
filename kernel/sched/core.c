@@ -2093,6 +2093,11 @@ __do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask, u32
 	 */
 	running = task_current_proxy(rq, p);
 
+	trace_printk("%s: p=%d p_rq=%d mask=%*pbl new_mask=%*pbl curr=%d proxy=%d\n",
+		     __func__, task_pid_nr(p), cpu_of(rq),
+		     cpumask_pr_args(&p->cpus_mask), cpumask_pr_args(new_mask),
+		     task_pid_nr(rq->curr), task_pid_nr(rq->proxy));
+
 	if (queued) {
 		/*
 		 * Because __kthread_bind() calls this on blocked tasks without
@@ -3066,9 +3071,15 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 	struct rq *rq;
 	int ret = 0;
 
+	trace_printk("%s: pid=%d pid_cpu=%d\n", __func__,
+			task_pid_nr(p), task_cpu(p));
 	rq = __task_rq_lock(p, &rf);
 	if (!task_on_rq_queued(p)) {
-		BUG_ON(p->state == TASK_RUNNING);
+		if (p->state == TASK_RUNNING) {
+			trace_printk("%s: BUG TASK_RUNNING pid=%d rq=%d\n",
+					__func__, task_pid_nr(p), cpu_of(rq));
+			BUG();
+		}
 		goto out_unlock;
 	}
 
@@ -3083,6 +3094,8 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 	 * trigger the on_rq_queued() clause for them.
 	 */
 	if (task_is_blocked(p)) {
+		trace_printk("ttwu_unblock: unblock pid=%d pid_cpu=%d\n",
+				task_pid_nr(p), task_cpu(p));
 		raw_spin_lock(&p->blocked_lock);
 
 		if (task_is_blocked(p)) {
@@ -3093,6 +3106,8 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 		}
 
 		if (!cpumask_test_cpu(cpu_of(rq), p->cpus_ptr)) {
+			trace_printk("ttwu_affinity: pid=%d aff=%*pbl\n",
+				     task_pid_nr(p), cpumask_pr_args(p->cpus_ptr));
 			/*
 			 * proxy stuff moved us outside of the affinity mask
 			 * 'sleep' now and fail the direct wakeup so that the
@@ -3259,6 +3274,9 @@ static void ttwu_queue(struct task_struct *p, int cpu, int wake_flags)
 {
 	struct rq *rq = cpu_rq(cpu);
 	struct rq_flags rf;
+
+	trace_printk("%s: pid=%d cpu=%d\n",
+			__func__, task_pid_nr(p), cpu);
 
 	if (ttwu_queue_wakelist(p, cpu, wake_flags))
 		return;
@@ -3529,6 +3547,8 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	smp_cond_load_acquire(&p->on_cpu, !VAL);
 
 	cpu = select_task_rq(p, p->wake_cpu, wake_flags | WF_TTWU);
+	trace_printk("%s: pid=%d task_cpu=%d select_cpu=%d\n",
+			__func__, task_pid_nr(p), task_cpu(p), cpu);
 	if (task_cpu(p) != cpu) {
 		if (p->in_iowait) {
 			delayacct_blkio_end(p);
@@ -4965,6 +4985,8 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	const struct sched_class *class;
 	struct task_struct *p;
 
+	trace_printk("pick[%d]: { prev=%d\n", cpu_of(rq), task_pid_nr(prev));
+
 	/*
 	 * Optimization: we know that if all tasks are in the fair class we can
 	 * call that function directly, but only if the @prev task wasn't of a
@@ -4975,6 +4997,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		   rq->nr_running == rq->cfs.h_nr_running)) {
 
 		p = pick_next_task_fair(rq, prev, rf);
+		trace_printk("pick[%d]: -- opt p=%px\n", cpu_of(rq), p);
 		if (unlikely(p == RETRY_TASK))
 			goto restart;
 
@@ -4982,8 +5005,10 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		if (!p) {
 			put_prev_task(rq, prev);
 			p = pick_next_task_idle(rq);
+			trace_printk("pick[%d]: -- idle p=%px\n", cpu_of(rq), p);
 		}
 
+		trace_printk("pick[%d]: p=%d }\n", cpu_of(rq), task_pid_nr(p));
 		return p;
 	}
 
@@ -4992,8 +5017,10 @@ restart:
 
 	for_each_class(class) {
 		p = class->pick_next_task(rq);
-		if (p)
+		if (p) {
+			trace_printk("pick[%d]: restart p=%d }\n", cpu_of(rq), task_pid_nr(p));
 			return p;
+		}
 	}
 
 	/* The idle class should always have a runnable task: */
@@ -5039,6 +5066,8 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 
 	this_cpu = cpu_of(rq);
 
+	trace_printk("proxy_start: next=%d\n", task_pid_nr(next));
+
 	/*
 	 * Follow blocked_on chain.
 	 *
@@ -5047,8 +5076,10 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 	for (p = next; p->blocked_on; p = owner) {
 		mutex = p->blocked_on;
 		/* Something changed in the chain, pick_again */
-		if (!mutex)
+		if (!mutex) {
+			trace_printk("proxy_again: p=%d\n", task_pid_nr(p));
 			return NULL;
+		}
 
 		/*
 		 * By taking mutex->wait_lock we hold off concurrent mutex_unlock()
@@ -5067,10 +5098,12 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			 */
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
+			trace_printk("proxy_changed: p=%d\n", task_pid_nr(p));
 			return NULL;
 		}
 
-		owner = __mutex_owner(mutex);
+		owner = mutex_owner(mutex);
+		trace_printk("proxy_owner: blocked=%d mutex=%s owner=%d\n", task_pid_nr(p), mutex->dep_map.name, task_pid_nr(owner));
 		/*
 		 * XXX can't this be 0|FLAGS? See __mutex_unlock_slowpath for(;;)
 		 * Mmm, OK, this can't probably happend because we forse
@@ -5095,6 +5128,7 @@ retry_owner:
 		raw_spin_unlock(&mutex->wait_lock);
 
 		owner->proxied_by = p;
+		trace_printk("proxy_proxied_by: blocked=%d mutex=%s owner=%d\n", task_pid_nr(p), mutex->dep_map.name, task_pid_nr(owner));
 	}
 
 	WARN_ON_ONCE(!owner->on_rq);
@@ -5134,6 +5168,8 @@ migrate_task:
 	 */
 	that_cpu = task_cpu(owner);
 	that_rq = cpu_rq(that_cpu);
+	trace_printk("proxy_migrate: blocked=%d curr=%d to_cpu=%d\n",
+		     task_pid_nr(p), task_pid_nr(rq->curr), that_cpu);
 	/*
 	 * @owner can disappear, simply migrate to @that_cpu and leave that CPU
 	 * to sort things out.
@@ -5176,6 +5212,7 @@ migrate_task:
 		 * XXX [juril] don't we still need to migrate @next to
 		 * @owner's CPU?
 		 */
+		trace_printk("proxy_idle: curr=%d\n", task_pid_nr(rq->curr));
 		return rq->idle;
 	}
 	rq->proxy = rq->idle;
@@ -5222,6 +5259,7 @@ migrate_task:
 	raw_spin_lock(&rq->lock);
 	rq_repin_lock(rq, rf);
 
+	trace_printk("proxy_retry: foo=bar\n");
 	return NULL; /* Retry task selection on _this_ CPU. */
 
 owned_task:
@@ -5260,7 +5298,7 @@ owned_task:
 	 */
 	set_task_blocked_on(owner, NULL);
 	// XXX task_woken
-	trace_printk("proxy: owned_task woken pid=%d mutex=%s",
+	trace_printk("proxy_owned: pid=%d mutex=%s\n",
 			task_pid_nr(owner), mutex->dep_map.name);
 
 	/*
@@ -5278,6 +5316,8 @@ owned_task:
 	 * can't restore the affinity. So dequeue, and continue
 	 * to the blocked_task case.
 	 */
+	trace_printk("proxy_owned_blocked: pid=%d mutex=%s\n",
+			task_pid_nr(owner), mutex->dep_map.name);
 	owner->on_rq = 0;
 	deactivate_task(rq, p, DEQUEUE_SLEEP);
 
@@ -5412,6 +5452,9 @@ static void __sched notrace __schedule(bool preempt)
 	rq_lock(rq, &rf);
 	smp_mb__after_spinlock();
 
+	trace_printk("%s: prev=%d curr_proxy=%d\n", __func__,
+			task_pid_nr(prev), task_pid_nr(rq->proxy));
+
 	/* Promote REQ to ACT */
 	rq->clock_update_flags <<= 1;
 	update_rq_clock(rq);
@@ -5485,6 +5528,7 @@ pick_again:
 		if (!next)
 			goto pick_again;
 	}
+	trace_printk("proxy_end: proxy=%d next=%d\n", task_pid_nr(rq->proxy), task_pid_nr(next));
 
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
