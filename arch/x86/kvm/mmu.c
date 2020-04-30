@@ -3627,15 +3627,6 @@ static kvm_pfn_t pte_prefetch_gfn_to_pfn(struct kvm_vcpu *vcpu, gfn_t gfn,
 	return gfn_to_pfn_memslot_atomic(slot, gfn);
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
-				  struct kvm_mmu_page *sp, u64 *sptep)
-{
-}
-static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
-{
-}
-#else
 static int direct_pte_prefetch_many(struct kvm_vcpu *vcpu,
 				    struct kvm_mmu_page *sp,
 				    u64 *start, u64 *end)
@@ -3670,8 +3661,8 @@ static void __direct_pte_prefetch(struct kvm_vcpu *vcpu,
 
 	WARN_ON(!sp->role.direct);
 
-	i = (sptep - sp->spt) & ~(PTE_PREFETCH_NUM - 1);
-	spte = sp->spt + i;
+	i = (sptep - KVM_SPT(sp)) & ~(PTE_PREFETCH_NUM - 1);
+	spte = KVM_SPT(sp) + i;
 
 	for (i = 0; i < PTE_PREFETCH_NUM; i++, spte++) {
 		if (is_shadow_present_pte(*spte) || spte == sptep) {
@@ -3704,7 +3695,6 @@ static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
 
 	__direct_pte_prefetch(vcpu, sp, sptep);
 }
-#endif
 
 static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 			int level, gfn_t gfn, kvm_pfn_t pfn, bool prefault)
