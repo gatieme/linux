@@ -1779,9 +1779,11 @@ static inline void vpid_sync_vcpu_global(void)
 
 static inline void vpid_sync_context(int vpid)
 {
+#if 0
 	if (cpu_has_vmx_invvpid_single())
 		vpid_sync_vcpu_single(vpid);
 	else
+#endif
 		vpid_sync_vcpu_global();
 }
 
@@ -1792,9 +1794,11 @@ static inline void ept_sync_global(void)
 
 static inline void ept_sync_context(u64 eptp)
 {
+#if 0
 	if (cpu_has_vmx_invept_context())
 		__invept(VMX_EPT_EXTENT_CONTEXT, eptp, 0);
 	else
+#endif
 		ept_sync_global();
 }
 
