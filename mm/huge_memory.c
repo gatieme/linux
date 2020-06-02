@@ -60,6 +60,9 @@ unsigned long transparent_hugepage_flags __read_mostly =
 
 static struct shrinker deferred_split_shrinker;
 
+/* start with the default config: no thp allocation from a remote NUMA node */
+static int remote_thp_alloc = 0;
+
 static atomic_t huge_zero_refcount;
 struct page *huge_zero_page __read_mostly;
 
@@ -146,6 +149,32 @@ static struct shrinker huge_zero_page_shrinker = {
 };
 
 #ifdef CONFIG_SYSFS
+ssize_t remote_thp_alloc_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", remote_thp_alloc);
+}
+
+ssize_t remote_thp_alloc_store(struct kobject *kobj,
+				 struct kobj_attribute *attr,
+				 const char *buf, size_t count)
+{
+	unsigned long value;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &value);
+	if (ret < 0)
+		return ret;
+	if (value > 1)
+		return -EINVAL;
+
+	remote_thp_alloc = value;
+
+	return count;
+}
+static struct kobj_attribute remote_thp_alloc_attr =
+	__ATTR(remote_thp_alloc, 0644, remote_thp_alloc_show, remote_thp_alloc_store);
+
 static ssize_t enabled_show(struct kobject *kobj,
 			    struct kobj_attribute *attr, char *buf)
 {
@@ -326,6 +355,7 @@ static struct attribute *hugepage_attr[] = {
 #ifdef CONFIG_DEBUG_VM
 	&debug_cow_attr.attr,
 #endif
+	&remote_thp_alloc_attr.attr,
 	NULL,
 };
 
@@ -721,6 +751,20 @@ int do_huge_pmd_anonymous_page(struct vm_fault *vmf)
 	}
 	gfp = alloc_hugepage_direct_gfpmask(vma);
 	page = alloc_hugepage_vma(gfp, vma, haddr, HPAGE_PMD_ORDER);
+	/*
+	 * This is fine only if cross-NUMA node latency is same across all
+	 * pairs. Example: Intel x86_64 NUMA machines. Even there, this is not
+	 * the most optimal way of allocating a page. Meant for specific use-cases
+	 * where allocation latency isn't a performance concern.
+	 */
+	if (!page && remote_thp_alloc) {
+		int i;
+		for (i = 0; i < nr_node_ids; i++) {
+			page = alloc_pages_node(i, gfp, HPAGE_PMD_ORDER);
+			if (page)
+				break;
+		}
+	}
 	if (unlikely(!page)) {
 		count_vm_event(THP_FAULT_FALLBACK);
 		return VM_FAULT_FALLBACK;
@@ -1127,7 +1171,7 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 		struct page *page)
 {
 	struct vm_area_struct *vma = vmf->vma;
-	unsigned long haddr = vmf->address & HPAGE_PMD_MASK;
+	unsigned long pfn, haddr = vmf->address & HPAGE_PMD_MASK;
 	struct mem_cgroup *memcg;
 	pgtable_t pgtable;
 	pmd_t _pmd;
@@ -1215,7 +1259,8 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	set_pmd(vmf->pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
+	pfn = page_to_pfn(pgtable);
+	set_pmd(vmf->pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(vma->vm_mm, vmf->pmd, pgtable);
 	#endif
@@ -2039,6 +2084,7 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 	pgtable_t pgtable;
 	pmd_t _pmd;
 	int i;
+	unsigned long pfn;
 
 	printk("%s:%u page=%p\n", __FUNCTION__, __LINE__, virt_to_page(pmd));
 
@@ -2070,7 +2116,8 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 	}
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	set_pmd(pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
+	pfn = page_to_pfn(pgtable);
+	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(mm, pmd, pgtable);
 	#endif
@@ -2084,7 +2131,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	pgtable_t pgtable;
 	pmd_t old_pmd, _pmd;
 	bool young, write, soft_dirty, pmd_migration = false;
-	unsigned long addr;
+	unsigned long pfn, addr;
 	int i;
 
 	VM_BUG_ON(haddr & ~HPAGE_PMD_MASK);
@@ -2228,7 +2275,8 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	set_pmd(pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
+	pfn = page_to_pfn(pgtable);
+	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(mm, pmd, pgtable);
 	#endif
