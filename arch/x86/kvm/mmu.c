@@ -57,6 +57,8 @@
  */
 static int __read_mostly current_ept_node = -1;
 static int __read_mostly ept_replication = 0;
+static int __read_mostly ept_migration = 0;
+static int __read_mostly debug_ept_migration = 0;
 
 /*
  * Dont reserved anything upfront.
@@ -488,24 +490,77 @@ static gfn_t pse36_gfn_delta(u32 gpte)
 }
 
 #ifdef CONFIG_X86_64
+static u64 __get_spte_lockless(u64 *sptep)
+{
+	return READ_ONCE(*sptep);
+}
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+static inline void mmu_sp_update_numa_info(u64 *sptep, u64 new_spte)
+{
+	int i, max, best_idx, curr;
+	u64 old_spte, pfn;
+	struct kvm_mmu_page *sp;
+
+	if (!ept_migration || ept_replication)
+		return;
+
+	sp = page_header(__pa(sptep));
+	old_spte = __get_spte_lockless(sptep);
+	if (is_shadow_present_pte(old_spte)) {
+		pfn = spte_to_pfn(old_spte);
+		sp->spte_numa_map[pfn_to_nid(pfn)]--;
+	}
+	if (is_shadow_present_pte(new_spte)) {
+		pfn = spte_to_pfn(new_spte);
+		sp->spte_numa_map[pfn_to_nid(pfn)]++;
+	}
+	sp->nr_spte_updates++;
+	/*
+	 * check only after certain number of spte updates have
+	 * happened on this page.
+	 */
+	if (sp->nr_spte_updates < 100)
+		return;
+
+	curr = page_to_nid(virt_to_page(KVM_SPT(sp)));
+	max = sp->spte_numa_map[curr];
+	best_idx = curr;
+	for (i = 0; i < nr_node_ids; i++) {
+		if (sp->spte_numa_map[i] > max + (max *10) / 100) {
+			max = sp->spte_numa_map[i];
+			best_idx = i;
+		}
+	}
+	if (best_idx == curr || sp->spte_numa_map[best_idx] < 100)
+		return;
+
+	sp->target_node = best_idx;
+	/* reset updates to delay the numa adjustment calculations */
+	sp->nr_spte_updates = 0;
+}
+#else
+static inline void mmu_sp_update_numa_info(u64 *sptep, u64 new_spte)
+{
+}
+#endif
+
 static void __set_spte(u64 *sptep, u64 spte)
 {
+	mmu_sp_update_numa_info(sptep, spte);
 	WRITE_ONCE(*sptep, spte);
 }
 
 static void __update_clear_spte_fast(u64 *sptep, u64 spte)
 {
+	mmu_sp_update_numa_info(sptep, spte);
 	WRITE_ONCE(*sptep, spte);
 }
 
 static u64 __update_clear_spte_slow(u64 *sptep, u64 spte)
 {
+	mmu_sp_update_numa_info(sptep, spte);
 	return xchg(sptep, spte);
-}
-
-static u64 __get_spte_lockless(u64 *sptep)
-{
-	return READ_ONCE(*sptep);
 }
 #else
 union split_spte {
@@ -1488,6 +1543,18 @@ static void rmap_remove(struct kvm *kvm, u64 *spte)
 	gfn = kvm_mmu_page_get_gfn(sp, spte - KVM_SPT(sp));
 	rmap_head = gfn_to_rmap(kvm, gfn, sp);
 	pte_list_remove(spte, rmap_head);
+}
+
+static int rmap_transfer(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
+			u64 *old_sptep, u64 *new_sptep, int index)
+{
+	struct kvm_rmap_head *rmap_head;
+	gfn_t gfn;
+
+	gfn = kvm_mmu_page_get_gfn(sp, index);
+	rmap_remove(vcpu->kvm, old_sptep);
+	rmap_head = gfn_to_rmap(vcpu->kvm, gfn, sp);
+	return pte_list_add(vcpu, new_sptep, rmap_head);
 }
 
 /*
@@ -2661,8 +2728,13 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	}
 
 	++vcpu->kvm->stat.mmu_cache_miss;
-        //printk(KERN_INFO"MITOSIS: allocating sp through direct interface\n");
 	sp = kvm_mmu_alloc_page(vcpu, direct);
+	/* initialize ePT migration related metadata fields */
+	for (i = 0; i < nr_node_ids; i++)
+		sp->spte_numa_map[i] = 0;
+
+	sp->nr_spte_updates = 0;
+	sp->parent = NULL;
 
 	sp->gfn = gfn;
 	sp->role = role;
@@ -2684,6 +2756,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	}
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
 #ifdef CONFIG_PGTABLE_REPLICATION
+	sp->target_node = -1;
         if (ept_replication) {
                 for (i = 0; i < nr_node_ids; i++)
                     clear_page(sp->spt[i]);
@@ -3178,6 +3251,7 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 			     struct kvm_mmu_page *sp)
 {
 	u64 spte;
+	struct kvm_mmu_page *psp;
 
 	BUILD_BUG_ON(VMX_EPT_WRITABLE_MASK != PT_WRITABLE_MASK);
 
@@ -3193,6 +3267,10 @@ static void link_shadow_page(struct kvm_vcpu *vcpu, u64 *sptep,
 	mmu_page_add_parent_pte(vcpu, sp, sptep);
 	if (sp->unsync_children || sp->unsync)
 		mark_unsync(sptep);
+
+	psp = page_header(__pa(sptep));
+	sp->parent = psp;
+	sp->parent_idx = (u64)sptep & ~PAGE_MASK;
 }
 
 static void validate_direct_spte(struct kvm_vcpu *vcpu, u64 *sptep,
@@ -3453,6 +3531,103 @@ static bool kvm_is_mmio_pfn(kvm_pfn_t pfn)
 
 	return true;
 }
+
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void mmu_sp_transfer_rmap(struct kvm_vcpu *vcpu,
+					struct kvm_mmu_page *sp,
+					struct page *new_page)
+{
+	int i;
+	u64 *old_sptep, *new_sptep;
+
+	old_sptep = (u64 *)KVM_SPT(sp);
+	new_sptep = (u64 *)page_to_virt(new_page);
+	for (i = 0; i < PAGE_SIZE/sizeof(u64); i++) {
+		if (is_shadow_present_pte(old_sptep[i]))
+			rmap_transfer(vcpu, sp, &old_sptep[i], &new_sptep[i], i);
+	}
+	copy_page(page_to_virt(new_page), KVM_SPT(sp));
+}
+
+static void mmu_sp_zap_sptes(struct kvm *kvm, struct kvm_mmu_page *sp)
+{
+	int i;
+	u64 *sptep;
+
+	sptep = (u64 *)KVM_SPT(sp);
+	for (i = 0; i < PAGE_SIZE/sizeof(u64); i++) {
+		if (is_shadow_present_pte(sptep[i]))
+			drop_spte(kvm, &sptep[i]);
+	}
+	/* reset to begin couting again */
+	for (i = 0; i < nr_node_ids; i++)
+		sp->spte_numa_map[i] = 0;
+}
+
+static void mmu_sp_adjust_pgtable_placement(struct kvm_vcpu *vcpu, u64 *curr_sptep)
+{
+	int curr;
+	static int mmu_ptable_migrations = 0;
+	u64 parent_spte, parent_new_spte, *parent_sptep;
+	struct kvm_mmu_page *sp, *parent;
+	struct page *old_page, *page;
+
+	sp = page_header(__pa(curr_sptep));
+	if (sp->role.level != PT_PAGE_TABLE_LEVEL)
+		return;
+
+	curr = page_to_nid(virt_to_page(KVM_SPT(sp)));
+	if (sp->target_node == -1 || curr == sp->target_node)
+		return;
+
+	parent = sp->parent;
+	parent_sptep = (u64 *)((u64)KVM_SPT(parent) + sp->parent_idx);
+	parent_spte = mmu_spte_get_lockless(parent_sptep);
+	if (!is_shadow_present_pte(parent_spte))
+		return;
+
+	page = vcpu->kvm->migration_cache[sp->target_node];
+	if (!page) {
+		if (debug_ept_migration)
+		       trace_printk("Need migration cache refill on node: %d\n",
+							sp->target_node);
+	       return;
+	}
+	vcpu->kvm->migration_cache[sp->target_node] = NULL;
+	vcpu->kvm->need_migration_cache_refill = true;
+
+	if (debug_ept_migration)
+		trace_printk("From-%d To-%d : Total: %d Current: %d--[%llu %llu %llu %llu]\n",
+				page_to_nid(virt_to_page(KVM_SPT(sp))), page_to_nid(page),
+				++mmu_ptable_migrations, ++sp->mmu_pgtable_migrations,
+				sp->spte_numa_map[0], sp->spte_numa_map[1],
+				sp->spte_numa_map[2], sp->spte_numa_map[3]);
+
+	set_page_private(page, (unsigned long)sp);
+
+	/* zap or transfer rmap to the new page */
+	if (!sp->role.direct)
+		mmu_sp_zap_sptes(vcpu->kvm, sp);
+	else
+		mmu_sp_transfer_rmap(vcpu, sp, page);
+
+	old_page = virt_to_page(KVM_SPT(sp));
+	KVM_SPT(sp) = (void *)page_address(page);
+	/* update just the pfn mask */
+	parent_new_spte = parent_spte & ~PT64_BASE_ADDR_MASK;
+	parent_new_spte |= (u64)page_to_pfn(page) << PAGE_SHIFT;
+	/* drop parent spte before updating, to ensure rmap consistency */
+	drop_parent_pte(sp, parent_sptep);
+	mmu_spte_set(parent_sptep, parent_new_spte);
+	mmu_page_add_parent_pte(vcpu, sp, parent_sptep);
+	kvm_flush_remote_tlbs(vcpu->kvm);
+	/* reset metadata */
+	sp->target_node = -1;
+	sp->nr_spte_updates = 0;
+	/* release old page */
+	free_page((unsigned long)page_to_virt(old_page));
+}
+#endif
 
 static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		    unsigned pte_access, int level,
@@ -3725,6 +3900,11 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
                             link_shadow_page(vcpu, iterator.sptep, sp);
                     }
             }
+#ifdef CONFIG_PGTABLE_REPLICATION
+	if (ept_migration && emulate == RET_PF_RETRY && iterator.sptep)
+		mmu_sp_adjust_pgtable_placement(vcpu, iterator.sptep);
+#endif
+
 	return emulate;
 }
 
@@ -4014,6 +4194,46 @@ static bool fast_page_fault(struct kvm_vcpu *vcpu, gva_t gva, int level,
 	return fault_handled;
 }
 
+/*
+ * Trying to hoist memory allocation out of kvm->mmu_lock spin lock.
+ */
+static void kvm_refill_migration_cache(struct kvm *kvm)
+{
+	int i, cache_populated = 0;
+	struct page *page;
+	nodemask_t nm = NODE_MASK_NONE;
+
+	for (i = 0; i < nr_node_ids; i++) {
+		spin_lock(&kvm->mmu_lock);
+		if (kvm->migration_cache[i]) {
+			spin_unlock(&kvm->mmu_lock);
+			continue;
+		}
+		spin_unlock(&kvm->mmu_lock);
+
+		node_set(i, nm);
+		page = __alloc_pages_nodemask(GFP_KERNEL | __GFP_ZERO, 0, i, &nm);
+		if (!page)
+			continue;
+
+		spin_lock(&kvm->mmu_lock);
+		/* some other vcpu might have populated the cache in the meantime */
+		if (!kvm->migration_cache[i]) {
+			kvm->migration_cache[i] = page;
+			cache_populated = 1;
+			if (debug_ept_migration)
+				trace_printk("Populated cache: %d\n", i);
+		} else
+			free_page((unsigned long)page_to_virt(page));
+		spin_unlock(&kvm->mmu_lock);
+	}
+	if (cache_populated) {
+		spin_lock(&kvm->mmu_lock);
+		kvm->need_migration_cache_refill = false;
+		spin_unlock(&kvm->mmu_lock);
+	}
+}
+
 static bool try_async_pf(struct kvm_vcpu *vcpu, bool prefault, gfn_t gfn,
 			 gva_t gva, kvm_pfn_t *pfn, bool write, bool *writable);
 static int make_mmu_pages_available(struct kvm_vcpu *vcpu);
@@ -4043,6 +4263,17 @@ static int nonpaging_map(struct kvm_vcpu *vcpu, gva_t v, u32 error_code,
 
 	if (fast_page_fault(vcpu, v, level, error_code))
 		return RET_PF_RETRY;
+
+	/*
+	* We migh release and reacquire mmu lock several times while refilling
+	* the migration cache (to avoid page allocation inside the spin lock).
+	* So keep it simple and refill caches before doing other things.
+	* We are reading need_migration_cache_refill out of mmu lock here, but
+	* this is atmost a performance concern which helps is optimizing the
+	* common case.
+	*/
+	if (ept_migration && vcpu->kvm->need_migration_cache_refill)
+		kvm_refill_migration_cache(vcpu->kvm);
 
 	mmu_seq = vcpu->kvm->mmu_notifier_seq;
 	smp_rmb();
@@ -4130,8 +4361,7 @@ static int mmu_check_root(struct kvm_vcpu *vcpu, gfn_t root_gfn)
 }
 
 #ifdef CONFIG_PGTABLE_REPLICATION
-//#define VCPU_NID(vcpu)     (numa_cpu_node(vcpu->cpu))
-#define VCPU_NID(vcpu)     (vcpu->cpu % nr_node_ids)
+#define VCPU_NID(vcpu)     (numa_cpu_node(vcpu->cpu))
 static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 {
 	struct kvm_mmu_page *sp;
@@ -4146,14 +4376,12 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
-                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
                 if (ept_replication)
                         vcpu->arch.mmu.root_hpa = __pa(sp->spt[VCPU_NID(vcpu)]);
                 else
                         vcpu->arch.mmu.root_hpa = __pa(KVM_SPT(sp));
 	} else if (vcpu->arch.mmu.shadow_root_level == PT32E_ROOT_LEVEL) {
 		int i;
-		//printk(KERN_INFO"[MITOSIS]: %s\n", __func__);
 		for (i = 0; i < 4; ++i) {
 			hpa_t root = vcpu->arch.mmu.pae_root[i];
 
@@ -4186,7 +4414,6 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 	int i;
 
 	root_gfn = vcpu->arch.mmu.get_cr3(vcpu) >> PAGE_SHIFT;
-	//printk(KERN_INFO"%s\n", __func__);
 	if (mmu_check_root(vcpu, root_gfn))
 		return 1;
 
@@ -4215,7 +4442,6 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
                 vcpu->arch.mmu.root_hpa = root;
-                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
 		return 0;
 	}
         printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
@@ -4362,7 +4588,6 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
                 vcpu->arch.mmu.root_hpa = __pa(sp->spt[idx]);
-                vcpu->arch.mmu.master_root_hpa = __pa(KVM_SPT(sp));
 		return 0;
 	}
         printk(KERN_INFO"MITOSIS: ___incomplete___: %s %d\n", __FUNCTION__, __LINE__);
@@ -4451,7 +4676,6 @@ static void mmu_sync_roots(struct kvm_vcpu *vcpu)
 
 	if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
 		return;
-        //printk(KERN_INFO"MITOSIS: Function: %s\n", __FUNCTION__);
 	vcpu_clear_mmio_info(vcpu, MMIO_GVA_ANY);
 	kvm_mmu_audit(vcpu, AUDIT_PRE_SYNC);
 	if (vcpu->arch.mmu.root_level >= PT64_ROOT_4LEVEL) {
@@ -4798,6 +5022,17 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
 	if (fast_page_fault(vcpu, gpa, level, error_code))
 		return RET_PF_RETRY;
 #endif
+	/*
+	* We migh release and reacquire mmu lock several times while refilling
+	* the migration cache (to avoid page allocation inside the spin lock).
+	* So keep it simple and refill caches before doing other things.
+	* We are reading need_migration_cache_refill out of mmu lock here, but
+	* this is atmost a performance concern which helps is optimizing the
+	* common case.
+	*/
+	if (ept_migration && vcpu->kvm->need_migration_cache_refill)
+		kvm_refill_migration_cache(vcpu->kvm);
+
 	mmu_seq = vcpu->kvm->mmu_notifier_seq;
 	smp_rmb();
 
@@ -6363,6 +6598,63 @@ unlock:
 }
 
 #ifdef CONFIG_SYSFS
+static ssize_t mitosis_ept_migration_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", ept_migration);
+}
+
+static ssize_t mitosis_ept_migration_store(struct kobject *kobj,
+            struct kobj_attribute *attr, const char *buf, size_t count)
+{
+        int err;
+        long value;
+
+        err = kstrtol(buf, 10, &value);
+	if (value > 1)
+		return -EINVAL;
+
+        ept_migration = value;
+	if (ept_migration)
+		printk("EPT Migration Enabled\n");
+	else
+		printk("EPT Migration Disabled\n");
+
+        return count;
+}
+
+static ssize_t mitosis_debug_ept_migration_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+        return sprintf(buf, "%d\n", debug_ept_migration);
+}
+
+static ssize_t mitosis_debug_ept_migration_store(struct kobject *kobj,
+            struct kobj_attribute *attr, const char *buf, size_t count)
+{
+        int err;
+        long value;
+
+        err = kstrtol(buf, 10, &value);
+	if (value > 1)
+		return -EINVAL;
+
+        debug_ept_migration = value;
+	if (debug_ept_migration)
+		printk("EPT Migration Debugging Enabled\n");
+	else
+		printk("EPT Migration Debugging Disabled\n");
+
+        return count;
+}
+
+static struct kobj_attribute mitosis_ept_migration_attr =
+	__ATTR(ept_migration, 0644, mitosis_ept_migration_show,
+		mitosis_ept_migration_store);
+static struct kobj_attribute mitosis_debug_ept_migration_attr =
+	__ATTR(debug_ept_migration, 0644, mitosis_debug_ept_migration_show,
+		mitosis_debug_ept_migration_store);
+
 static void mitosis_drain_cache(struct ept_cache *cache)
 {
         spin_lock(&cache->lock);
@@ -6540,6 +6832,8 @@ static struct kobj_attribute mitosis_ept_reservation_attr =
 static struct attribute *mitosis_attr[] = {
         &mitosis_ept_nodemask_attr.attr,
         &mitosis_ept_reservation_attr.attr,
+        &mitosis_ept_migration_attr.attr,
+        &mitosis_debug_ept_migration_attr.attr,
         NULL,
 };
 

@@ -3096,7 +3096,6 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 #ifdef CONFIG_PGTABLE_REPLICATION
                         if (numa_cpu_node(vcpu->cpu) != numa_cpu_node(cpu)) {
 				mmu_free_roots(vcpu);
-                                vcpu->arch.mmu.master_root_hpa = INVALID_PAGE;
 #endif
                         }
                 }

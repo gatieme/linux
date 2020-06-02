@@ -599,6 +599,17 @@ static int kvm_create_vm_debugfs(struct kvm *kvm, int fd)
 	}
 	return 0;
 }
+#ifdef CONFIG_PGTABLE_REPLICATION
+static void kvm_init_migration_cache(struct kvm *kvm)
+{
+	int i;
+
+	for (i = 0; i < nr_node_ids; i++)
+		kvm->migration_cache[i] = NULL;
+
+	kvm->need_migration_cache_refill = true;
+}
+#endif
 
 static struct kvm *kvm_create_vm(unsigned long type)
 {
@@ -616,6 +627,9 @@ static struct kvm *kvm_create_vm(unsigned long type)
 	mutex_init(&kvm->irq_lock);
 	mutex_init(&kvm->slots_lock);
 	refcount_set(&kvm->users_count, 1);
+#ifdef CONFIG_PGTABLE_REPLICATION
+	kvm_init_migration_cache(kvm);
+#endif
 	INIT_LIST_HEAD(&kvm->devices);
 
 	r = kvm_arch_init_vm(kvm, type);

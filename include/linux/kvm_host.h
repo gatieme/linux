@@ -445,6 +445,10 @@ struct kvm {
 	struct kvm_stat_data **debugfs_stat_data;
 	struct srcu_struct srcu;
 	struct srcu_struct irq_srcu;
+#ifdef CONFIG_PGTABLE_REPLICATION
+	struct page *migration_cache[8];
+	bool need_migration_cache_refill;
+#endif
 	pid_t userspace_pid;
 };
 
