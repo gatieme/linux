@@ -2206,7 +2206,7 @@ static int affine_move_task(struct rq *rq, struct task_struct *p, struct rq_flag
 	 * affinity mask.
 	 */
 	if (cpumask_test_cpu(task_cpu(p), &p->cpus_mask) ||
-	    (task_is_blocked(p) && task_current_proxy(rq, p))) {
+	    (task_current_proxy(rq, p) && !task_current(rq, p))) {
 		struct task_struct *push_task = NULL;
 
 		if ((flags & SCA_MIGRATE_ENABLE) &&
