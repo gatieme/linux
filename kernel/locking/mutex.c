@@ -1022,7 +1022,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	}
 
 	waiter.task = current;
-	current->blocked_on = lock;
+	set_task_blocked_on(current, lock);
 
 	set_current_state(state);
 	for (;;) {
@@ -1070,7 +1070,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 		/*
 		 * Gets reset by ttwu_remote().
 		 */
-		current->blocked_on = lock;
+		set_task_blocked_on(current, lock);
 		set_current_state(state);
 		/*
 		 * Here we order against unlock; we must either see it change
@@ -1095,7 +1095,7 @@ acquired:
 	}
 
 	mutex_remove_waiter(lock, &waiter, current);
-	current->blocked_on = NULL;
+	set_task_blocked_on(current, NULL);
 
 	if (likely(list_empty(&lock->wait_list)))
 		__mutex_clear_flag(lock, MUTEX_FLAGS);

@@ -3079,7 +3079,7 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 		raw_spin_lock(&p->blocked_lock);
 
 		if (task_is_blocked(p)) {
-			p->blocked_on = NULL; /* let it run again */
+			set_task_blocked_on(p, NULL); /* let it run again */
 		} else {
 			raw_spin_unlock(&p->blocked_lock);
 			goto out_wakeup;
@@ -5251,7 +5251,7 @@ owned_task:
 	 * _spurious_ wakeup, but all code should be able to
 	 * deal with that.
 	 */
-	owner->blocked_on = NULL;
+	set_task_blocked_on(owner, NULL);
 	// XXX task_woken
 	trace_printk("proxy: owned_task woken pid=%d mutex=%s",
 			task_pid_nr(owner), mutex->dep_map.name);
