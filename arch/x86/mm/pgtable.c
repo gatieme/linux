@@ -2459,6 +2459,11 @@ int pgtable_cache_populate(size_t numpgtables)
 	spin_lock(&pgtable_cache_lock);
 
 	for (i = 0; i < NR_PGTABLE_REPLICAS; i++) {
+
+		if (pgtable_replication_mode == PGTABLE_REPLICATION_MODE_PROBE &&
+				i != PROBE_CPU_NID)
+			continue;
+
 		printk("Populating node[%d] with %zu pgtables\n", i, numpgtables);
 
 		prepare_pgtable_nodemask(&nm, i);
