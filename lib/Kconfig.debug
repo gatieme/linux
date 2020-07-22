@@ -1353,6 +1353,13 @@ config LOCK_TORTURE_TEST
 	  Say M if you want these torture tests to build as a module.
 	  Say N if you are unsure.
 
+config PROXY_EXEC_TEST
+	bool "torture test for proxy-exec"
+	depends on DEBUG_KERNEL
+	help
+	  This option provides a kernel built-in module that runs torture tests
+	  on scheduler proxy execution.
+
 config WW_MUTEX_SELFTEST
 	tristate "Wait/wound mutex selftests"
 	help
@@ -2429,10 +2436,10 @@ config MEMTEST
 	help
 	  This option adds a kernel parameter 'memtest', which allows memtest
 	  to be set.
-	        memtest=0, mean disabled; -- default
-	        memtest=1, mean do 1 test pattern;
-	        ...
-	        memtest=17, mean do 17 test patterns.
+		memtest=0, mean disabled; -- default
+		memtest=1, mean do 1 test pattern;
+		...
+		memtest=17, mean do 17 test patterns.
 	  If you are unsure how to answer this question, answer N.
 
 
