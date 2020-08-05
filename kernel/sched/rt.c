@@ -996,7 +996,7 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
  */
 static void update_curr_rt(struct rq *rq)
 {
-	struct task_struct *curr = rq->curr;
+	struct task_struct *curr = rq->proxy;
 	struct sched_rt_entity *rt_se = &curr->rt;
 	u64 delta_exec;
 	u64 now;

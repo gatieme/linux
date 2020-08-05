@@ -1254,7 +1254,7 @@ static u64 grub_reclaim(u64 delta, struct rq *rq, struct sched_dl_entity *dl_se)
  */
 static void update_curr_dl(struct rq *rq)
 {
-	struct task_struct *curr = rq->curr;
+	struct task_struct *curr = rq->proxy;
 	struct sched_dl_entity *dl_se = &curr->dl;
 	u64 delta_exec, scaled_delta_exec;
 	int cpu = cpu_of(rq);
