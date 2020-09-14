@@ -1215,8 +1215,7 @@ static int do_huge_pmd_wp_page_fallback(struct vm_fault *vmf, pmd_t orig_pmd,
 
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	unsigned long pfn = page_to_pfn(pgtable);
-	set_pmd(vmf->pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	set_pmd(vmf->pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(vma->vm_mm, vmf->pmd, pgtable);
 	#endif
@@ -2071,8 +2070,7 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 	}
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	unsigned long pfn = page_to_pfn(pgtable);
-	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	set_pmd(pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(mm, pmd, pgtable);
 	#endif
@@ -2230,8 +2228,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 
 	smp_wmb(); /* make pte visible before pmd */
 	#ifdef CONFIG_PGTABLE_REPLICATION
-	unsigned long pfn = page_to_pfn(pgtable);
-	set_pmd(pmd, __pmd(((pteval_t)pfn << PAGE_SHIFT) | _PAGE_TABLE));
+	set_pmd(pmd, __pmd(((pteval_t)page_to_pfn(pgtable) << PAGE_SHIFT) | _PAGE_TABLE));
 	#else
 	pmd_populate(mm, pmd, pgtable);
 	#endif
