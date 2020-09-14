@@ -1524,7 +1524,8 @@ static long kernel_set_pgtlbreplpolicy(int mode, const unsigned long __user *nma
 		/* disable */
 		mm->repl_pgd_enabled = false;
 
-		printk("[mitosis] NOTE: pgtable replication disabled for mm=%lx.\n", mm);
+		printk("[mitosis] pgtable replication disabled for mm=%lx.\n", 
+                        (unsigned long)mm);
 	}
 
 	return 0;
