@@ -776,12 +776,13 @@ int pmd_free_pte_page(pmd_t *pmd)
 	pmd_clear(pmd);
 
 	page = virt_to_page(pte);
-
-	page = page->replica;
-	for (i = 0; i < nr_node_ids && page; i++) {
-		pcurrent = page;
+	if (page != NULL) {
 		page = page->replica;
-		pgtable_cache_free(i, pcurrent);
+		for (i = 0; i < nr_node_ids && page; i++) {
+			pcurrent = page;
+			page = page->replica;
+			pgtable_cache_free(i, pcurrent);
+		}
 	}
 
 	free_page((unsigned long)pte);
@@ -814,11 +815,13 @@ int pud_free_pmd_page(pud_t *pud)
 	pud_clear(pud);
 
 	page = virt_to_page(pmd);
-	page = page->replica;
-	for (i = 0; i < nr_node_ids && page; i++) {
-		pcurrent = page;
+	if (page != NULL) {
 		page = page->replica;
-		pgtable_cache_free(i, pcurrent);
+		for (i = 0; i < nr_node_ids && page; i++) {
+			pcurrent = page;
+			page = page->replica;
+			pgtable_cache_free(i, pcurrent);
+		}
 	}
 
 	free_page((unsigned long)pmd);
