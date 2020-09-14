@@ -978,7 +978,7 @@ unsigned long pgtable_repl_read_cr3(void)
 		return cr3;
 	}
 
-	if (!mm->repl_pgd_enabled) {
+	if (mm == NULL || !mm->repl_pgd_enabled) {
 		return cr3;
 	}
 
@@ -995,20 +995,23 @@ unsigned long pgtable_repl_read_cr3(void)
 void pgtable_repl_write_cr3(unsigned long cr3)
 {
 	pgd_t *pgd;
-	struct mm_struct *mm = this_cpu_read(cpu_tlbstate.loaded_mm);
+	struct mm_struct *mm;
 
 	if (unlikely(!pgtable_repl_initialized)) {
 		native_write_cr3(cr3);
 		return;
 	}
 
-	if (!mm->repl_pgd_enabled) {
+
+	mm = pgd_page_get_mm(page_of_ptable_entry(__va(cr3 & PTE_PFN_MASK)));
+	if (mm == NULL || !mm->repl_pgd_enabled) {
 		native_write_cr3(cr3);
 		return;
 	}
 
 	pgd = mm_get_pgd_for_node(mm);
 	check_page_node(page_of_ptable_entry(pgd), numa_node_id());
+	//printk("[mitosis] changing CR3 from %lx -> %lx\n", cr3, build_cr3(pgd, CR3_PCID_MASK & cr3));
 	native_write_cr3(build_cr3(pgd, CR3_PCID_MASK & cr3));
 }
 
