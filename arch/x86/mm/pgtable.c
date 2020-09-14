@@ -2055,6 +2055,7 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 {
 	int i;
 	struct page *pgd, *pgd2;
+	pgd_t *pgdp;
 
 	for (i = 0; i < sizeof(mm->repl_pgd) / sizeof(mm->repl_pgd[0]); i++) {
 		/* set the first replicatin entry */
@@ -2091,7 +2092,7 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 		return 0;
 	}
 
-	printk("PTREPL: enable replication for the pgd of process\n");
+	printk("[mitosis]: enable replication for the pgd of process\n");
 
 	// replication is enabled for this domain
 	mm->repl_pgd_enabled = true;
@@ -2110,13 +2111,21 @@ int pgtable_repl_pgd_alloc(struct mm_struct *mm)
 
 		check_page_node(pgd2->replica, i);
 
-		/* set the replica pgd poiter */
-		mm->repl_pgd[i] = (pgd_t *) page_to_virt(pgd2->replica);
+		pgdp = (pgd_t *) page_to_virt(pgd2->replica);
 
 		/* call the ctor, which maps the kernel portion of the ptable */
-		spin_lock(&pgd_lock);
-		pgd_ctor(mm, mm->repl_pgd[i]);
-		spin_unlock(&pgd_lock);
+		if (CONFIG_PGTABLE_LEVELS == 2 ||
+			(CONFIG_PGTABLE_LEVELS == 3 && SHARED_KERNEL_PMD) ||
+			CONFIG_PGTABLE_LEVELS >= 4) {
+			clone_pgd_range(pgdp + KERNEL_PGD_BOUNDARY,
+					swapper_pg_dir + KERNEL_PGD_BOUNDARY,
+					KERNEL_PGD_PTRS);
+		}
+
+		pgd_set_mm(pgdp, mm);
+
+		/* set the replica pgd poiter */
+		mm->repl_pgd[i] = pgdp;
 
 		pgd2 = pgd2->replica;
 	}
@@ -2174,8 +2183,6 @@ void pgtable_repl_pgd_free(struct mm_struct *mm, pgd_t *pgd)
 
 		check_page_node(p, i);
 
-		/* call the destructor */
-		pgd_dtor(mm->repl_pgd[i]);
 
 		/* free the pgd */
 		pgtable_cache_free(i, p);
