@@ -921,22 +921,30 @@ static DEFINE_SPINLOCK(pgtable_cache_lock);
  * ==================================================================
  */
 
-#define DEBUG_PGTABLE_REPLICATION
+//#define DEBUG_PGTABLE_REPLICATION
 #ifdef DEBUG_PGTABLE_REPLICATION
 
-#define check_page(p) \
-	if (unlikely(!(p))) { printk("PTREPL:%s:%u - page was NULL!\n", __FUNCTION__, __LINE__); }
+#define check_page(p) 																\
+	if (unlikely(!(p))) { 															\
+		printk("PTREPL:%s:%u - page was NULL!\n", __FUNCTION__, __LINE__); 			\
+	}																				\
+	if (!pfn_valid(page_to_pfn(p))) {												\
+		printk("PTREP:%s:%u PAGE PFN IS NOT VALID!\n", __FUNCTION__, __LINE__);		\
+	}
 
-#define check_offset(offset) if (offset >= 4096 || (offset % 8)) { \
-	printk("PTREPL: %s:%d - offset=%lu, %lu\n", __FUNCTION__, __LINE__, offset, offset % 8); }
+#define check_offset(offset) 														\
+	if (offset >= 4096 || (offset % 8)) { 											\
+		printk("PTREPL: %s:%d - offset=%lu, %lu\n", __FUNCTION__, __LINE__, offset, \
+				offset % 8); 														\
+	}
 
 #define check_page_node(p, n) do {\
-	if (!virt_addr_valid((void *)p)) {/*printk("PTREP: PAGE IS NOT VALID!\n");*/} \
-	if (p == NULL) {printk("PTREPL: PAGE WAS NULL!\n");} \
-	if (pfn_to_nid(page_to_pfn(p)) != (n)) { \
-		printk("PTREPL: %s:%u page table nid mismatch! pfn: %zu, nid %u expected: %u\n", \
-		__FUNCTION__, __LINE__, page_to_pfn(p), pfn_to_nid(page_to_pfn(p)), (int)(n)); \
-		dump_stack();\
+	if (p == NULL) {printk("PTREPL: PAGE WAS NULL!\n");} 									\
+	if (pfn_to_nid(page_to_pfn(p)) != (n)) { 												\
+		printk("PTREPL: %s:%u page table nid mismatch! pfn: %zu, nid %u expected: %u\n",	\
+				__FUNCTION__, __LINE__, page_to_pfn(p), 									\
+				pfn_to_nid(page_to_pfn(p)), (int)(n)); 										\
+		dump_stack();																		\
 	}} while(0);
 
 #else
