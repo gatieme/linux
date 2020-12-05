@@ -2582,7 +2582,7 @@ out:
 		reset_ptenuma_scan(p);
 
 	if (sysctl_numa_pgtable_migration)
-		task_pgtables_work(mm);
+		task_pgtables_work(mm, false);
 
 	up_read(&mm->mmap_sem);
 

@@ -9,6 +9,7 @@
 #include <linux/sched/signal.h>
 #include <linux/mempolicy.h>
 #include <linux/rmap.h>
+#include <linux/sched/mm.h>
 
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
@@ -492,7 +493,7 @@ static void scan_pgd_range(struct mm_struct *mm, unsigned long addr, unsigned lo
 	} while (pgd++, addr = next, addr != end);
 }
 
-void task_pgtables_work(struct mm_struct *mm)
+void task_pgtables_work(struct mm_struct *mm, bool bypass_autonuma)
 {
 	struct vm_area_struct *vma;
 	unsigned long start, end;
@@ -504,7 +505,11 @@ void task_pgtables_work(struct mm_struct *mm)
 	if (get_mm_rss(mm) < 250000)
 		return;
 
-	start = mm->pgtable_scan_offset;
+	if (!bypass_autonuma)
+		start = mm->pgtable_scan_offset;
+	else
+		start = 0;
+
 	vma = find_vma(mm, start);
 	if (!vma) {
 		start = 0;
@@ -516,7 +521,7 @@ void task_pgtables_work(struct mm_struct *mm)
 		 * There is no need to be aggressive here.
 		 * Let AutoNUMA process the VMA before making pgtable placement decisions.
 		 */
-		if (vma->numa_scan_seq <= vma->pgtable_scan_seq)
+		if ((vma->numa_scan_seq <= vma->pgtable_scan_seq) && !bypass_autonuma)
 			continue;
 
 		if (!vma_migratable(vma) || !vma_policy_mof(vma) ||
@@ -540,11 +545,56 @@ void task_pgtables_work(struct mm_struct *mm)
 		 */
 		scan_pgd_range(mm, start, end, true);
 vma_done:
-		WRITE_ONCE(vma->pgtable_scan_seq, READ_ONCE(vma->pgtable_scan_seq) + 1);
+		if (!bypass_autonuma)
+			WRITE_ONCE(vma->pgtable_scan_seq, READ_ONCE(vma->pgtable_scan_seq) + 1);
 	}
+	if (!bypass_autonuma) {
+		if (vma)
+			mm->pgtable_scan_offset = start;
+		else
+			mm->pgtable_scan_offset = 0;
+	}
+}
 
-	if (vma)
-		mm->pgtable_scan_offset = start;
-	else
-		mm->pgtable_scan_offset = 0;
+int sysctl_numa_migrate_pid_pgtable_ctl(struct ctl_table *table, int write,
+				void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct task_struct *task = NULL;
+	struct pid *pid_struct = NULL;
+	struct mm_struct *mm;
+	struct ctl_table t;
+	int err, pid = 0;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &pid;
+	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+	if (write) {
+		if (pid < 2)
+			return -EINVAL;
+
+		pid_struct = find_get_pid(pid);
+		if (!pid_struct) {
+			printk("pid %d not found\n", pid);
+			return -EINVAL;
+		}
+
+		task = pid_task(pid_struct, PIDTYPE_PID);
+		if (!task) {
+			printk("task_struct not found for pid %d\n", pid);
+			return -EINVAL;
+		}
+		mm = get_task_mm(task);
+		down_read(&mm->mmap_sem);
+		printk("migrate pgtables of pid: %d %s\n", pid, task->comm);
+		task_pgtables_work(mm, true);
+		up_read(&mm->mmap_sem);
+		mmput(mm);
+	}
+	printk("pgtable migration complete\n");
+	return err;
 }

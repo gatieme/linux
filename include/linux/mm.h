@@ -2411,7 +2411,7 @@ static inline void vma_set_page_prot(struct vm_area_struct *vma)
 #ifdef CONFIG_NUMA_BALANCING
 unsigned long change_prot_numa(struct vm_area_struct *vma,
 			unsigned long start, unsigned long end);
-void task_pgtables_work(struct mm_struct *mm);
+void task_pgtables_work(struct mm_struct *mm, bool bypass_autonuma);
 #endif
 
 struct vm_area_struct *find_extend_vma(struct mm_struct *, unsigned long addr);
