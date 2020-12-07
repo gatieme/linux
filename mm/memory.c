@@ -4739,10 +4739,6 @@ int mt_exchange_pfn(struct mm_struct *mm, unsigned long address,
         struct page *new_page;
         struct vm_area_struct *vma;
 
-        new_page = alloc_pages_node(nid, GFP_KERNEL, 0);
-        if (!new_page)
-            return -ENOMEM;
-
         vma = find_vma(mm, address);
         if (!vma)
             goto error;
@@ -4751,6 +4747,10 @@ int mt_exchange_pfn(struct mm_struct *mm, unsigned long address,
         pmd = mm_find_pmd(mm, address);
         if (!pmd)
             goto error;
+
+        new_page = alloc_pages_node(nid, GFP_KERNEL, 0);
+        if (!new_page)
+            return -ENOMEM;
 
         page_add_new_anon_rmap(new_page, vma, address, false);
         new_pte = mk_pte(new_page, vma->vm_page_prot);

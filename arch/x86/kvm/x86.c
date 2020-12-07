@@ -6663,8 +6663,8 @@ static int kvm_exchange_pfns(struct kvm_vcpu *vcpu, unsigned long gfn,
 {
 	struct page *page;
         struct mm_struct *mm;
-        unsigned long pfn, addr;
-        int ret;
+        unsigned long addr;
+        int ret = 0;
 
 	if (nid == HC_GET_GFN_NUMA_NID) {
 		page = kvm_vcpu_gfn_to_page(vcpu, gfn);
@@ -6677,21 +6677,20 @@ static int kvm_exchange_pfns(struct kvm_vcpu *vcpu, unsigned long gfn,
 
         mm = vcpu->kvm->mm;
         addr = gfn_to_hva(vcpu->kvm, gfn);
-        pfn = kvm_vcpu_gfn_to_pfn(vcpu, gfn);
-        if (!pfn_valid(pfn))
-                return -EINVAL;
-
+        page = kvm_vcpu_gfn_to_page(vcpu, gfn);
         /*
          * No action needed if the page is already mapped to the
          * intended socket.
          */
-        if (pfn_to_nid(pfn) == nid)
+        if (page_to_nid(page) == nid) {
+		kvm_release_page_clean(page);
                 return 0;
-
+	}
         /* exchange page with a new page from the specified node */
-        ret = mt_exchange_pfn(mm, addr, pfn_to_page(pfn), nid);
-        if (!ret)
-                kvm_release_page_clean(pfn_to_page(pfn));
+        ret = mt_exchange_pfn(mm, addr, page, nid);
+        if (ret)
+		printk(KERN_INFO"Unable to exchange gPT page\n");
+	kvm_release_page_clean(page);
 
         return 0;
 }
