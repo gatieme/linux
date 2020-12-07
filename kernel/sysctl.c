@@ -414,11 +414,11 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= sysctl_numa_pgtable_replication_mode_ctl
 	},
 	{
-		.procname	= "pgtable_replication_warmup",
+		.procname	= "pgtable_replication_misc",
 		.data		= NULL, /* filled in by handler */
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= sysctl_numa_pgtable_replication_warmup_ctl
+		.proc_handler	= sysctl_numa_pgtable_replication_misc_ctl
 	},
 	{
 		.procname	= "numa_pgtable_migration",

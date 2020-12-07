@@ -918,10 +918,10 @@ unsigned int			pv_cpu_info[PGTABLE_MAX_CPUS];
 #define PV_CPU_NID		(pv_cpu_info[smp_processor_id()])
 
 /* Probing-based PGTABLE Replication */
-static int			probe_nr_node_ids = 4;
+static int			probe_nr_node_ids = 1;
 unsigned int			probe_cpu_info[PGTABLE_MAX_CPUS];
-//#define PROBE_CPU_NID		(probe_cpu_info[smp_processor_id()])
-#define PROBE_CPU_NID		(smp_processor_id() % 4)
+#define PROBE_CPU_NID		(probe_cpu_info[smp_processor_id()])
+//#define PROBE_CPU_NID		(smp_processor_id() % probe_nr_node_ids)
 
 /* start with the default mode */
 int pgtable_replication_mode = PGTABLE_REPLICATION_MODE_DEFAULT;
@@ -2806,7 +2806,21 @@ int sysctl_numa_pgtable_replication_mode_ctl(struct ctl_table *table, int write,
 	return err;
 }
 
-int sysctl_numa_pgtable_replication_warmup_ctl(struct ctl_table *table, int write,
+#define PTREPL_CPU_MASK		0xfff
+#define PTREPL_NUMA_NODE_MASK	0xfff000
+static inline void config_cpu_numa_group(int state)
+{
+	int cpu, node_id;
+
+	cpu = state & PTREPL_CPU_MASK;
+	node_id = (state & PTREPL_NUMA_NODE_MASK) >> 12;
+	printk("cpu = %d node_id = %d\n", cpu, node_id);
+	probe_cpu_info[cpu] = node_id;
+	if (node_id >= probe_nr_node_ids)
+		probe_nr_node_ids = node_id + 1;
+}
+
+int sysctl_numa_pgtable_replication_misc_ctl(struct ctl_table *table, int write,
 				void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct page *page;
@@ -2823,8 +2837,13 @@ int sysctl_numa_pgtable_replication_warmup_ctl(struct ctl_table *table, int writ
 		return err;
 
 	if (write) {
-		if (state < 0 || state > NR_PGTABLE_REPLICAS)
+		if (state < 0)
 			return -1;
+
+		if (state > NR_PGTABLE_REPLICAS) {
+			config_cpu_numa_group(state);
+			return 0;
+		}
 
 		spin_lock(&pgtable_cache_lock);
 		/* read each page a few times */
