@@ -748,89 +748,7 @@ int pmd_clear_huge(pmd_t *pmd)
 	return 0;
 }
 
-#ifdef CONFIG_PGTABLE_REPLICATION
-
-/*
- * ===============================================================================
- * Free Sub Page Tables
- * ===============================================================================
- */
-
-
-/**
- * pmd_free_pte_page - Clear pmd entry and free pte page.
- * @pmd: Pointer to a PMD.
- *
- * Context: The pmd range has been unmaped and TLB purged.
- * Return: 1 if clearing the entry succeeded. 0 otherwise.
- */
-int pmd_free_pte_page(pmd_t *pmd)
-{
-	int i;
-	pte_t *pte;
-	struct page *page, *pcurrent;
-
-	if (pmd_none(*pmd))
-		return 1;
-
-	pte = (pte_t *)pmd_page_vaddr(*pmd);
-	pmd_clear(pmd);
-
-	page = virt_to_page(pte);
-	if (page != NULL) {
-		page = page->replica;
-		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
-			pcurrent = page;
-			page = page->replica;
-			pgtable_cache_free(i, pcurrent);
-		}
-	}
-
-	free_page((unsigned long)pte);
-
-	return 1;
-}
-
-/**
- * pupd_free_pmd_page - Clear pud entry and free pmd page.
- * @pud: Pointer to a PUD.
- *
- * Context: The pud range has been unmaped and TLB purged.
- * Return: 1 if clearing the entry succeeded. 0 otherwise.
- */
-int pud_free_pmd_page(pud_t *pud)
-{
-	struct page *page, *pcurrent;
-	pmd_t *pmd;
-	int i;
-
-	if (pud_none(*pud))
-		return 1;
-
-	pmd = (pmd_t *)pud_page_vaddr(*pud);
-
-	for (i = 0; i < PTRS_PER_PMD; i++)
-		if (!pmd_free_pte_page(&pmd[i]))
-			return 0;
-
-	pud_clear(pud);
-
-	page = virt_to_page(pmd);
-	if (page != NULL) {
-		page = page->replica;
-		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
-			pcurrent = page;
-			page = page->replica;
-			pgtable_cache_free(i, pcurrent);
-		}
-	}
-
-	free_page((unsigned long)pmd);
-
-	return 1;
-}
-
-#else // !CONFIG_PGTABLE_REPLICATION
+#ifndef CONFIG_PGTABLE_REPLICATION
 
 /**
  * pud_free_pmd_page - Clear pud entry and free pmd page.
@@ -945,6 +863,9 @@ static bool pgtable_repl_initialized = false;
 ///> tracks whether page table replication is activated for new processes by default
 static bool pgtable_repl_activated = false;
 
+///> where to allocate the page tables from
+int pgtable_fixed_node = -1;
+nodemask_t pgtable_fixed_nodemask = NODE_MASK_NONE;
 
 
 #define MAX_SUPPORTED_NODE 8
@@ -1655,6 +1576,87 @@ pud_t pudp_huge_get_and_clear(struct mm_struct *mm, unsigned long addr, pud_t *p
 	return pudp_get_and_clear(mm, addr, pudp);
 }
 
+
+
+/*
+ * ===============================================================================
+ * Free Sub Page Tables
+ * ===============================================================================
+ */
+
+
+/**
+ * pmd_free_pte_page - Clear pmd entry and free pte page.
+ * @pmd: Pointer to a PMD.
+ *
+ * Context: The pmd range has been unmaped and TLB purged.
+ * Return: 1 if clearing the entry succeeded. 0 otherwise.
+ */
+int pmd_free_pte_page(pmd_t *pmd)
+{
+	int i;
+	pte_t *pte;
+	struct page *page, *pcurrent;
+
+	if (pmd_none(*pmd))
+		return 1;
+
+	pte = (pte_t *)pmd_page_vaddr(*pmd);
+	pmd_clear(pmd);
+
+	page = virt_to_page(pte);
+	if (page != NULL) {
+		page = page->replica;
+		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
+			pcurrent = page;
+			page = page->replica;
+			pgtable_cache_free(i, pcurrent);
+		}
+	}
+
+	free_page((unsigned long)pte);
+
+	return 1;
+}
+
+/**
+ * pupd_free_pmd_page - Clear pud entry and free pmd page.
+ * @pud: Pointer to a PUD.
+ *
+ * Context: The pud range has been unmaped and TLB purged.
+ * Return: 1 if clearing the entry succeeded. 0 otherwise.
+ */
+int pud_free_pmd_page(pud_t *pud)
+{
+	struct page *page, *pcurrent;
+	pmd_t *pmd;
+	int i;
+
+	if (pud_none(*pud))
+		return 1;
+
+	pmd = (pmd_t *)pud_page_vaddr(*pud);
+
+	for (i = 0; i < PTRS_PER_PMD; i++)
+		if (!pmd_free_pte_page(&pmd[i]))
+			return 0;
+
+	pud_clear(pud);
+
+	page = virt_to_page(pmd);
+	if (page != NULL) {
+		page = page->replica;
+		for (i = 0; i < NR_PGTABLE_REPLICAS && page; i++) {
+			pcurrent = page;
+			page = page->replica;
+			pgtable_cache_free(i, pcurrent);
+		}
+	}
+
+	free_page((unsigned long)pmd);
+
+	return 1;
+}
 
 /*
  * ===============================================================================
