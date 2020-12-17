@@ -2,7 +2,7 @@
 VERSION = 4
 PATCHLEVEL = 17
 SUBLEVEL = 0
-EXTRAVERSION = mitosis
+EXTRAVERSION = -mitosis
 NAME = Merciless Moray
 
 # *DOCUMENTATION*
