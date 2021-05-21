@@ -715,6 +715,7 @@ static void set_huge_zero_page(pgtable_t pgtable, struct mm_struct *mm,
 	if (pgtable)
 		pgtable_trans_huge_deposit(mm, pmd, pgtable);
 	set_pmd_at(mm, haddr, pmd, entry);
+	add_mm_counter(mm, MM_ANONPAGES, HPAGE_PMD_NR);
 	mm_inc_nr_ptes(mm);
 }
 
@@ -1627,6 +1628,7 @@ int zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		spin_unlock(ptl);
 	} else if (is_huge_zero_pmd(orig_pmd)) {
 		zap_deposited_table(tlb->mm, pmd);
+		add_mm_counter(tlb->mm, MM_ANONPAGES, -HPAGE_PMD_NR);
 		spin_unlock(ptl);
 	} else {
 		struct page *page = NULL;
