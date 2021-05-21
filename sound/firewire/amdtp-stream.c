@@ -639,39 +639,21 @@ static int parse_ir_ctx_header(struct amdtp_stream *s, unsigned int cycle,
 	unsigned int cip_header_size;
 	int err;
 
-<<<<<<< HEAD
-	*payload_length = be32_to_cpu(ctx_header[0]) >> ISO_DATA_LENGTH_SHIFT;
-=======
 	payload_length = be32_to_cpu(ctx_header[0]) >> ISO_DATA_LENGTH_SHIFT;
->>>>>>> linux-next/akpm-base
 
 	if (!(s->flags & CIP_NO_HEADER))
 		cip_header_size = 8;
 	else
 		cip_header_size = 0;
 
-<<<<<<< HEAD
-	if (*payload_length > cip_header_size + s->ctx_data.tx.max_ctx_payload_length) {
-		dev_err(&s->unit->device,
-			"Detect jumbo payload: %04x %04x\n",
-			*payload_length, cip_header_size + s->ctx_data.tx.max_ctx_payload_length);
-=======
 	if (payload_length > cip_header_size + s->ctx_data.tx.max_ctx_payload_length) {
 		dev_err(&s->unit->device,
 			"Detect jumbo payload: %04x %04x\n",
 			payload_length, cip_header_size + s->ctx_data.tx.max_ctx_payload_length);
->>>>>>> linux-next/akpm-base
 		return -EIO;
 	}
 
 	if (cip_header_size > 0) {
-<<<<<<< HEAD
-		cip_header = ctx_header + 2;
-		err = check_cip_header(s, cip_header, *payload_length,
-				       data_blocks, data_block_counter, syt);
-		if (err < 0)
-			return err;
-=======
 		if (payload_length >= cip_header_size) {
 			cip_header = ctx_header + 2;
 			err = check_cip_header(s, cip_header, payload_length - cip_header_size,
@@ -684,7 +666,6 @@ static int parse_ir_ctx_header(struct amdtp_stream *s, unsigned int cycle,
 			*data_blocks = 0;
 			*syt = 0;
 		}
->>>>>>> linux-next/akpm-base
 	} else {
 		cip_header = NULL;
 		err = 0;
@@ -695,11 +676,7 @@ static int parse_ir_ctx_header(struct amdtp_stream *s, unsigned int cycle,
 			*data_block_counter = 0;
 	}
 
-<<<<<<< HEAD
-	trace_amdtp_packet(s, cycle, cip_header, *payload_length, *data_blocks,
-=======
 	trace_amdtp_packet(s, cycle, cip_header, payload_length, *data_blocks,
->>>>>>> linux-next/akpm-base
 			   *data_block_counter, packet_index, index);
 
 	return err;
@@ -758,11 +735,7 @@ static int generate_device_pkt_descs(struct amdtp_stream *s,
 
 	*desc_count = 0;
 	for (i = 0; i < packets; ++i) {
-<<<<<<< HEAD
-		struct pkt_desc *desc = descs + i;
-=======
 		struct pkt_desc *desc = descs + *desc_count;
->>>>>>> linux-next/akpm-base
 		unsigned int cycle;
 		bool lost;
 		unsigned int data_blocks;
@@ -804,13 +777,8 @@ static int generate_device_pkt_descs(struct amdtp_stream *s,
 			}
 		}
 
-<<<<<<< HEAD
-		err = parse_ir_ctx_header(s, cycle, ctx_header, &payload_length,
-					  &data_blocks, &dbc, &syt, packet_index, i);
-=======
 		err = parse_ir_ctx_header(s, cycle, ctx_header, &data_blocks, &dbc, &syt,
 					  packet_index, i);
->>>>>>> linux-next/akpm-base
 		if (err < 0)
 			return err;
 
@@ -823,15 +791,9 @@ static int generate_device_pkt_descs(struct amdtp_stream *s,
 		if (!(s->flags & CIP_DBC_IS_END_EVENT))
 			dbc = (dbc + desc->data_blocks) & 0xff;
 
-<<<<<<< HEAD
-		ctx_header +=
-			s->ctx_data.tx.ctx_header_size / sizeof(*ctx_header);
-
-=======
 		next_cycle = increment_ohci_cycle_count(next_cycle, 1);
 		++(*desc_count);
 		ctx_header += s->ctx_data.tx.ctx_header_size / sizeof(*ctx_header);
->>>>>>> linux-next/akpm-base
 		packet_index = (packet_index + 1) % queue_size;
 	}
 
