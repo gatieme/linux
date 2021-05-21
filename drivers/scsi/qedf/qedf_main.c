@@ -536,7 +536,9 @@ static void qedf_update_link_speed(struct qedf_ctx *qedf,
 	if (linkmode_intersects(link->supported_caps, sup_caps))
 		lport->link_supported_speeds |= FC_PORTSPEED_20GBIT;
 
-	fc_host_supported_speeds(lport->host) = lport->link_supported_speeds;
+	if (lport->host && lport->host->shost_data)
+		fc_host_supported_speeds(lport->host) =
+			lport->link_supported_speeds;
 }
 
 static void qedf_bw_update(void *dev)
@@ -3971,10 +3973,6 @@ void qedf_stag_change_work(struct work_struct *work)
 	struct qedf_ctx *qedf =
 	    container_of(work, struct qedf_ctx, stag_work.work);
 
-	if (!qedf) {
-		QEDF_ERR(NULL, "qedf is NULL");
-		return;
-	}
 	QEDF_ERR(&qedf->dbg_ctx, "Performing software context reset.\n");
 	qedf_ctx_soft_reset(qedf->lport);
 }

@@ -112,7 +112,8 @@ typedef unsigned int (*amdtp_stream_process_ctx_payloads_t)(
 struct amdtp_domain;
 struct amdtp_stream {
 	struct fw_unit *unit;
-	enum cip_flags flags;
+	// The combination of cip_flags enumeration-constants.
+	unsigned int flags;
 	enum amdtp_stream_direction direction;
 	struct mutex mutex;
 
@@ -146,7 +147,6 @@ struct amdtp_stream {
 
 			// To generate constant hardware IRQ.
 			unsigned int event_count;
-			unsigned int events_per_period;
 		} rx;
 	} ctx_data;
 
@@ -171,6 +171,7 @@ struct amdtp_stream {
 	bool callbacked;
 	wait_queue_head_t callback_wait;
 	u32 start_cycle;
+	unsigned int next_cycle;
 
 	/* For backends to process data blocks. */
 	void *protocol;
@@ -184,7 +185,7 @@ struct amdtp_stream {
 };
 
 int amdtp_stream_init(struct amdtp_stream *s, struct fw_unit *unit,
-		      enum amdtp_stream_direction dir, enum cip_flags flags,
+		      enum amdtp_stream_direction dir, unsigned int flags,
 		      unsigned int fmt,
 		      amdtp_stream_process_ctx_payloads_t process_ctx_payloads,
 		      unsigned int protocol_size);
@@ -287,9 +288,11 @@ struct amdtp_domain {
 
 	struct amdtp_stream *irq_target;
 
-	struct seq_desc *seq_descs;
-	unsigned int seq_size;
-	unsigned int seq_tail;
+	struct {
+		struct seq_desc *descs;
+		unsigned int size;
+		unsigned int tail;
+	} seq;
 
 	unsigned int data_block_state;
 	unsigned int syt_offset_state;

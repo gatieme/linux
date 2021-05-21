@@ -209,12 +209,12 @@ atom_bios_string          = "ATOM"
 #pragma pack(1)                          /* BIOS data must use byte aligment*/
 
 enum atombios_image_offset{
-OFFSET_TO_ATOM_ROM_HEADER_POINTER          =0x00000048,
-OFFSET_TO_ATOM_ROM_IMAGE_SIZE              =0x00000002,
-OFFSET_TO_ATOMBIOS_ASIC_BUS_MEM_TYPE       =0x94,
-MAXSIZE_OF_ATOMBIOS_ASIC_BUS_MEM_TYPE      =20,  /*including the terminator 0x0!*/
-OFFSET_TO_GET_ATOMBIOS_NUMBER_OF_STRINGS   =0x2f,
-OFFSET_TO_GET_ATOMBIOS_STRING_START        =0x6e,
+  OFFSET_TO_ATOM_ROM_HEADER_POINTER          = 0x00000048,
+  OFFSET_TO_ATOM_ROM_IMAGE_SIZE              = 0x00000002,
+  OFFSET_TO_ATOMBIOS_ASIC_BUS_MEM_TYPE       = 0x94,
+  MAXSIZE_OF_ATOMBIOS_ASIC_BUS_MEM_TYPE      = 20,  /*including the terminator 0x0!*/
+  OFFSET_TO_GET_ATOMBIOS_NUMBER_OF_STRINGS   = 0x2f,
+  OFFSET_TO_GET_ATOMBIOS_STRING_START        = 0x6e,
 };
 
 /****************************************************************************   
@@ -501,6 +501,7 @@ enum atombios_firmware_capability
 	ATOM_FIRMWARE_CAP_SRAM_ECC      = 0x00000200,
 	ATOM_FIRMWARE_CAP_ENABLE_2STAGE_BIST_TRAINING  = 0x00000400,
 	ATOM_FIRMWARE_CAP_ENABLE_2ND_USB20PORT = 0x0008000,
+	ATOM_FIRMWARE_CAP_DYNAMIC_BOOT_CFG_ENABLE = 0x0020000,
 };
 
 enum atom_cooling_solution_id{

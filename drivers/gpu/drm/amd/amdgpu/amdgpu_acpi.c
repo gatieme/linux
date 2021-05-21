@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/power_supply.h>
 #include <linux/pm_runtime.h>
+#include <linux/suspend.h>
 #include <acpi/video.h>
 #include <acpi/actbl.h>
 
@@ -71,12 +72,25 @@ struct amdgpu_atif {
 	struct amdgpu_dm_backlight_caps backlight_caps;
 };
 
+struct amdgpu_atcs_functions {
+	bool get_ext_state;
+	bool pcie_perf_req;
+	bool pcie_dev_rdy;
+	bool pcie_bus_width;
+};
+
+struct amdgpu_atcs {
+	acpi_handle handle;
+
+	struct amdgpu_atcs_functions functions;
+};
+
 /* Call the ATIF method
  */
 /**
  * amdgpu_atif_call - call an ATIF method
  *
- * @handle: acpi handle
+ * @atif: atif structure
  * @function: the ATIF function to execute
  * @params: ATIF function params
  *
@@ -166,7 +180,6 @@ static void amdgpu_atif_parse_functions(struct amdgpu_atif_functions *f, u32 mas
 /**
  * amdgpu_atif_verify_interface - verify ATIF
  *
- * @handle: acpi handle
  * @atif: amdgpu atif struct
  *
  * Execute the ATIF_FUNCTION_VERIFY_INTERFACE ATIF function
@@ -237,11 +250,39 @@ out:
 	return handle;
 }
 
+static acpi_handle amdgpu_atcs_probe_handle(acpi_handle dhandle)
+{
+	acpi_handle handle = NULL;
+	char acpi_method_name[255] = { 0 };
+	struct acpi_buffer buffer = { sizeof(acpi_method_name), acpi_method_name };
+	acpi_status status;
+
+	/* For PX/HG systems, ATCS and ATPX are in the iGPU's namespace, on dGPU only
+	 * systems, ATIF is in the dGPU's namespace.
+	 */
+	status = acpi_get_handle(dhandle, "ATCS", &handle);
+	if (ACPI_SUCCESS(status))
+		goto out;
+
+	if (amdgpu_has_atpx()) {
+		status = acpi_get_handle(amdgpu_atpx_get_dhandle(), "ATCS",
+					 &handle);
+		if (ACPI_SUCCESS(status))
+			goto out;
+	}
+
+	DRM_DEBUG_DRIVER("No ATCS handle found\n");
+	return NULL;
+out:
+	acpi_get_name(handle, ACPI_FULL_PATHNAME, &buffer);
+	DRM_DEBUG_DRIVER("Found ATCS handle %s\n", acpi_method_name);
+	return handle;
+}
+
 /**
  * amdgpu_atif_get_notification_params - determine notify configuration
  *
- * @handle: acpi handle
- * @n: atif notification configuration struct
+ * @atif: acpi handle
  *
  * Execute the ATIF_FUNCTION_GET_SYSTEM_PARAMETERS ATIF function
  * to determine if a notifier is used and if so which one
@@ -304,7 +345,7 @@ out:
 /**
  * amdgpu_atif_query_backlight_caps - get min and max backlight input signal
  *
- * @handle: acpi handle
+ * @atif: acpi handle
  *
  * Execute the QUERY_BRIGHTNESS_TRANSFER_CHARACTERISTICS ATIF function
  * to determine the acceptable range of backlight values
@@ -363,7 +404,7 @@ out:
 /**
  * amdgpu_atif_get_sbios_requests - get requested sbios event
  *
- * @handle: acpi handle
+ * @atif: acpi handle
  * @req: atif sbios request struct
  *
  * Execute the ATIF_FUNCTION_GET_SYSTEM_BIOS_REQUESTS ATIF function
@@ -487,14 +528,15 @@ static int amdgpu_atif_handler(struct amdgpu_device *adev,
 /**
  * amdgpu_atcs_call - call an ATCS method
  *
- * @handle: acpi handle
+ * @atcs: atcs structure
  * @function: the ATCS function to execute
  * @params: ATCS function params
  *
  * Executes the requested ATCS function (all asics).
  * Returns a pointer to the acpi output buffer.
  */
-static union acpi_object *amdgpu_atcs_call(acpi_handle handle, int function,
+static union acpi_object *amdgpu_atcs_call(struct amdgpu_atcs *atcs,
+					   int function,
 					   struct acpi_buffer *params)
 {
 	acpi_status status;
@@ -518,7 +560,7 @@ static union acpi_object *amdgpu_atcs_call(acpi_handle handle, int function,
 		atcs_arg_elements[1].integer.value = 0;
 	}
 
-	status = acpi_evaluate_object(handle, "ATCS", &atcs_arg, &buffer);
+	status = acpi_evaluate_object(atcs->handle, "ATCS", &atcs_arg, &buffer);
 
 	/* Fail only if calling the method fails and ATIF is supported */
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
@@ -552,7 +594,6 @@ static void amdgpu_atcs_parse_functions(struct amdgpu_atcs_functions *f, u32 mas
 /**
  * amdgpu_atcs_verify_interface - verify ATCS
  *
- * @handle: acpi handle
  * @atcs: amdgpu atcs struct
  *
  * Execute the ATCS_FUNCTION_VERIFY_INTERFACE ATCS function
@@ -560,15 +601,14 @@ static void amdgpu_atcs_parse_functions(struct amdgpu_atcs_functions *f, u32 mas
  * (all asics).
  * returns 0 on success, error on failure.
  */
-static int amdgpu_atcs_verify_interface(acpi_handle handle,
-					struct amdgpu_atcs *atcs)
+static int amdgpu_atcs_verify_interface(struct amdgpu_atcs *atcs)
 {
 	union acpi_object *info;
 	struct atcs_verify_interface output;
 	size_t size;
 	int err = 0;
 
-	info = amdgpu_atcs_call(handle, ATCS_FUNCTION_VERIFY_INTERFACE, NULL);
+	info = amdgpu_atcs_call(atcs, ATCS_FUNCTION_VERIFY_INTERFACE, NULL);
 	if (!info)
 		return -EIO;
 
@@ -605,8 +645,10 @@ out:
  */
 bool amdgpu_acpi_is_pcie_performance_request_supported(struct amdgpu_device *adev)
 {
-	struct amdgpu_atcs *atcs = &adev->atcs;
+	struct amdgpu_atcs *atcs = adev->atcs;
 
+	if (!atcs)
+		return false;
 	if (atcs->functions.pcie_perf_req && atcs->functions.pcie_dev_rdy)
 		return true;
 
@@ -624,19 +666,15 @@ bool amdgpu_acpi_is_pcie_performance_request_supported(struct amdgpu_device *ade
  */
 int amdgpu_acpi_pcie_notify_device_ready(struct amdgpu_device *adev)
 {
-	acpi_handle handle;
 	union acpi_object *info;
-	struct amdgpu_atcs *atcs = &adev->atcs;
+	struct amdgpu_atcs *atcs = adev->atcs;
 
-	/* Get the device handle */
-	handle = ACPI_HANDLE(&adev->pdev->dev);
-	if (!handle)
+	if (!atcs)
 		return -EINVAL;
-
 	if (!atcs->functions.pcie_dev_rdy)
 		return -EINVAL;
 
-	info = amdgpu_atcs_call(handle, ATCS_FUNCTION_PCIE_DEVICE_READY_NOTIFICATION, NULL);
+	info = amdgpu_atcs_call(atcs, ATCS_FUNCTION_PCIE_DEVICE_READY_NOTIFICATION, NULL);
 	if (!info)
 		return -EIO;
 
@@ -659,21 +697,18 @@ int amdgpu_acpi_pcie_notify_device_ready(struct amdgpu_device *adev)
 int amdgpu_acpi_pcie_performance_request(struct amdgpu_device *adev,
 					 u8 perf_req, bool advertise)
 {
-	acpi_handle handle;
 	union acpi_object *info;
-	struct amdgpu_atcs *atcs = &adev->atcs;
+	struct amdgpu_atcs *atcs = adev->atcs;
 	struct atcs_pref_req_input atcs_input;
 	struct atcs_pref_req_output atcs_output;
 	struct acpi_buffer params;
 	size_t size;
 	u32 retry = 3;
 
-	if (amdgpu_acpi_pcie_notify_device_ready(adev))
+	if (!atcs)
 		return -EINVAL;
 
-	/* Get the device handle */
-	handle = ACPI_HANDLE(&adev->pdev->dev);
-	if (!handle)
+	if (amdgpu_acpi_pcie_notify_device_ready(adev))
 		return -EINVAL;
 
 	if (!atcs->functions.pcie_perf_req)
@@ -693,7 +728,7 @@ int amdgpu_acpi_pcie_performance_request(struct amdgpu_device *adev,
 	params.pointer = &atcs_input;
 
 	while (retry--) {
-		info = amdgpu_atcs_call(handle, ATCS_FUNCTION_PCIE_PERFORMANCE_REQUEST, &params);
+		info = amdgpu_atcs_call(atcs, ATCS_FUNCTION_PCIE_PERFORMANCE_REQUEST, &params);
 		if (!info)
 			return -EIO;
 
@@ -769,9 +804,9 @@ static int amdgpu_acpi_event(struct notifier_block *nb,
  */
 int amdgpu_acpi_init(struct amdgpu_device *adev)
 {
-	acpi_handle handle, atif_handle;
+	acpi_handle handle, atif_handle, atcs_handle;
 	struct amdgpu_atif *atif;
-	struct amdgpu_atcs *atcs = &adev->atcs;
+	struct amdgpu_atcs *atcs;
 	int ret;
 
 	/* Get the device handle */
@@ -780,21 +815,15 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 	if (!adev->bios || !handle)
 		return 0;
 
-	/* Call the ATCS method */
-	ret = amdgpu_atcs_verify_interface(handle, atcs);
-	if (ret) {
-		DRM_DEBUG_DRIVER("Call to ATCS verify_interface failed: %d\n", ret);
-	}
-
 	/* Probe for ATIF, and initialize it if found */
 	atif_handle = amdgpu_atif_probe_handle(handle);
 	if (!atif_handle)
-		goto out;
+		goto atcs;
 
 	atif = kzalloc(sizeof(*atif), GFP_KERNEL);
 	if (!atif) {
 		DRM_WARN("Not enough memory to initialize ATIF\n");
-		goto out;
+		goto atcs;
 	}
 	atif->handle = atif_handle;
 
@@ -803,7 +832,7 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 	if (ret) {
 		DRM_DEBUG_DRIVER("Call to ATIF verify_interface failed: %d\n", ret);
 		kfree(atif);
-		goto out;
+		goto atcs;
 	}
 	adev->atif = atif;
 
@@ -812,7 +841,8 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 		if (amdgpu_device_has_dc_support(adev)) {
 #if defined(CONFIG_DRM_AMD_DC)
 			struct amdgpu_display_manager *dm = &adev->dm;
-			atif->bd = dm->backlight_dev;
+			if (dm->backlight_dev)
+				atif->bd = dm->backlight_dev;
 #endif
 		} else {
 			struct drm_encoder *tmp;
@@ -864,6 +894,28 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 		atif->backlight_caps.caps_valid = false;
 	}
 
+atcs:
+	/* Probe for ATCS, and initialize it if found */
+	atcs_handle = amdgpu_atcs_probe_handle(handle);
+	if (!atcs_handle)
+		goto out;
+
+	atcs = kzalloc(sizeof(*atcs), GFP_KERNEL);
+	if (!atif) {
+		DRM_WARN("Not enough memory to initialize ATCS\n");
+		goto out;
+	}
+	atcs->handle = atcs_handle;
+
+	/* Call the ATCS method */
+	ret = amdgpu_atcs_verify_interface(atcs);
+	if (ret) {
+		DRM_DEBUG_DRIVER("Call to ATCS verify_interface failed: %d\n", ret);
+		kfree(atcs);
+		goto out;
+	}
+	adev->atcs = atcs;
+
 out:
 	adev->acpi_nb.notifier_call = amdgpu_acpi_event;
 	register_acpi_notifier(&adev->acpi_nb);
@@ -894,10 +946,13 @@ void amdgpu_acpi_fini(struct amdgpu_device *adev)
 {
 	unregister_acpi_notifier(&adev->acpi_nb);
 	kfree(adev->atif);
+	kfree(adev->atcs);
 }
 
 /**
  * amdgpu_acpi_is_s0ix_supported
+ *
+ * @adev: amdgpu_device_pointer
  *
  * returns true if supported, false if not.
  */
@@ -906,7 +961,7 @@ bool amdgpu_acpi_is_s0ix_supported(struct amdgpu_device *adev)
 #if defined(CONFIG_AMD_PMC) || defined(CONFIG_AMD_PMC_MODULE)
 	if (acpi_gbl_FADT.flags & ACPI_FADT_LOW_POWER_S0) {
 		if (adev->flags & AMD_IS_APU)
-			return true;
+			return pm_suspend_default_s2idle();
 	}
 #endif
 	return false;

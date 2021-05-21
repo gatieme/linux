@@ -668,7 +668,7 @@ free_port:
  *
  * Return: status of removal
  */
-static int vcc_remove(struct vio_dev *vdev)
+static void vcc_remove(struct vio_dev *vdev)
 {
 	struct vcc_port *port = dev_get_drvdata(&vdev->dev);
 
@@ -703,8 +703,6 @@ static int vcc_remove(struct vio_dev *vdev)
 		kfree(port->domain);
 		kfree(port);
 	}
-
-	return 0;
 }
 
 static const struct vio_device_id vcc_match[] = {
@@ -870,10 +868,10 @@ static int vcc_write(struct tty_struct *tty, const unsigned char *buf,
 	return total_sent ? total_sent : rv;
 }
 
-static int vcc_write_room(struct tty_struct *tty)
+static unsigned int vcc_write_room(struct tty_struct *tty)
 {
 	struct vcc_port *port;
-	u64 num;
+	unsigned int num;
 
 	port = vcc_get_ne(tty->index);
 	if (unlikely(!port)) {
@@ -888,10 +886,10 @@ static int vcc_write_room(struct tty_struct *tty)
 	return num;
 }
 
-static int vcc_chars_in_buffer(struct tty_struct *tty)
+static unsigned int vcc_chars_in_buffer(struct tty_struct *tty)
 {
 	struct vcc_port *port;
-	u64 num;
+	unsigned int num;
 
 	port = vcc_get_ne(tty->index);
 	if (unlikely(!port)) {

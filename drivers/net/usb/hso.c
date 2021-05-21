@@ -1357,10 +1357,10 @@ out:
 }
 
 /* how much room is there for writing */
-static int hso_serial_write_room(struct tty_struct *tty)
+static unsigned int hso_serial_write_room(struct tty_struct *tty)
 {
 	struct hso_serial *serial = tty->driver_data;
-	int room;
+	unsigned int room;
 	unsigned long flags;
 
 	spin_lock_irqsave(&serial->serial_lock, flags);
@@ -1404,11 +1404,11 @@ static void hso_serial_set_termios(struct tty_struct *tty, struct ktermios *old)
 }
 
 /* how many characters in the buffer */
-static int hso_serial_chars_in_buffer(struct tty_struct *tty)
+static unsigned int hso_serial_chars_in_buffer(struct tty_struct *tty)
 {
 	struct hso_serial *serial = tty->driver_data;
-	int chars;
 	unsigned long flags;
+	unsigned int chars;
 
 	/* sanity check */
 	if (serial == NULL)
@@ -2618,32 +2618,31 @@ static struct hso_device *hso_create_bulk_serial_device(
 		num_urbs = 2;
 		serial->tiocmget = kzalloc(sizeof(struct hso_tiocmget),
 					   GFP_KERNEL);
+		if (!serial->tiocmget)
+			goto exit;
 		serial->tiocmget->serial_state_notification
 			= kzalloc(sizeof(struct hso_serial_state_notification),
 					   GFP_KERNEL);
-		/* it isn't going to break our heart if serial->tiocmget
-		 *  allocation fails don't bother checking this.
-		 */
-		if (serial->tiocmget && serial->tiocmget->serial_state_notification) {
-			tiocmget = serial->tiocmget;
-			tiocmget->endp = hso_get_ep(interface,
-						    USB_ENDPOINT_XFER_INT,
-						    USB_DIR_IN);
-			if (!tiocmget->endp) {
-				dev_err(&interface->dev, "Failed to find INT IN ep\n");
-				goto exit;
-			}
-
-			tiocmget->urb = usb_alloc_urb(0, GFP_KERNEL);
-			if (tiocmget->urb) {
-				mutex_init(&tiocmget->mutex);
-				init_waitqueue_head(&tiocmget->waitq);
-			} else
-				hso_free_tiomget(serial);
+		if (!serial->tiocmget->serial_state_notification)
+			goto exit;
+		tiocmget = serial->tiocmget;
+		tiocmget->endp = hso_get_ep(interface,
+					    USB_ENDPOINT_XFER_INT,
+					    USB_DIR_IN);
+		if (!tiocmget->endp) {
+			dev_err(&interface->dev, "Failed to find INT IN ep\n");
+			goto exit;
 		}
-	}
-	else
+
+		tiocmget->urb = usb_alloc_urb(0, GFP_KERNEL);
+		if (!tiocmget->urb)
+			goto exit;
+
+		mutex_init(&tiocmget->mutex);
+		init_waitqueue_head(&tiocmget->waitq);
+	} else {
 		num_urbs = 1;
+	}
 
 	if (hso_serial_common_create(serial, num_urbs, BULK_URB_RX_SIZE,
 				     BULK_URB_TX_SIZE))

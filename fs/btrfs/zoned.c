@@ -1127,6 +1127,10 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 		}
 
 		if (zone.type == BLK_ZONE_TYPE_CONVENTIONAL) {
+			btrfs_err_in_rcu(fs_info,
+	"zoned: unexpected conventional zone %llu on device %s (devid %llu)",
+				zone.start << SECTOR_SHIFT,
+				rcu_str_deref(device->name), device->devid);
 			ret = -EIO;
 			goto out;
 		}
@@ -1187,6 +1191,13 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 
 	switch (map->type & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
 	case 0: /* single */
+		if (alloc_offsets[0] == WP_MISSING_DEV) {
+			btrfs_err(fs_info,
+			"zoned: cannot recover write pointer for zone %llu",
+				physical);
+			ret = -EIO;
+			goto out;
+		}
 		cache->alloc_offset = alloc_offsets[0];
 		break;
 	case BTRFS_BLOCK_GROUP_DUP:
@@ -1204,6 +1215,13 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 	}
 
 out:
+	if (cache->alloc_offset > fs_info->zone_size) {
+		btrfs_err(fs_info,
+			"zoned: invalid write pointer %llu in block group %llu",
+			cache->alloc_offset, cache->start);
+		ret = -EIO;
+	}
+
 	/* An extent is allocated after the write pointer */
 	if (!ret && num_conventional && last_alloc > cache->alloc_offset) {
 		btrfs_err(fs_info,
@@ -1278,7 +1296,7 @@ void btrfs_free_redirty_list(struct btrfs_transaction *trans)
 	spin_unlock(&trans->releasing_ebs_lock);
 }
 
-bool btrfs_use_zone_append(struct btrfs_inode *inode, struct extent_map *em)
+bool btrfs_use_zone_append(struct btrfs_inode *inode, u64 start)
 {
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct btrfs_block_group *cache;
@@ -1293,7 +1311,7 @@ bool btrfs_use_zone_append(struct btrfs_inode *inode, struct extent_map *em)
 	if (!is_data_inode(&inode->vfs_inode))
 		return false;
 
-	cache = btrfs_lookup_block_group(fs_info, em->block_start);
+	cache = btrfs_lookup_block_group(fs_info, start);
 	ASSERT(cache);
 	if (!cache)
 		return false;
@@ -1501,4 +1519,25 @@ int btrfs_sync_zone_write_pointer(struct btrfs_device *tgt_dev, u64 logical,
 
 	length = wp - physical_pos;
 	return btrfs_zoned_issue_zeroout(tgt_dev, physical_pos, length);
+}
+
+struct btrfs_device *btrfs_zoned_get_device(struct btrfs_fs_info *fs_info,
+					    u64 logical, u64 length)
+{
+	struct btrfs_device *device;
+	struct extent_map *em;
+	struct map_lookup *map;
+
+	em = btrfs_get_chunk_map(fs_info, logical, length);
+	if (IS_ERR(em))
+		return ERR_CAST(em);
+
+	map = em->map_lookup;
+	/* We only support single profile for now */
+	ASSERT(map->num_stripes == 1);
+	device = map->stripes[0].dev;
+
+	free_extent_map(em);
+
+	return device;
 }

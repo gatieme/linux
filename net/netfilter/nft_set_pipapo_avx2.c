@@ -1131,10 +1131,18 @@ bool nft_pipapo_avx2_lookup(const struct net *net, const struct nft_set *set,
 	bool map_index;
 	int i, ret = 0;
 
+	if (unlikely(!irq_fpu_usable()))
+		return nft_pipapo_lookup(net, set, key, ext);
+
 	m = rcu_dereference(priv->match);
 
-	/* This also protects access to all data related to scratch maps */
-	kernel_fpu_begin();
+	/* This also protects access to all data related to scratch maps.
+	 *
+	 * Note that we don't need a valid MXCSR state for any of the
+	 * operations we use here, so pass 0 as mask and spare a LDMXCSR
+	 * instruction.
+	 */
+	kernel_fpu_begin_mask(0);
 
 	scratch = *raw_cpu_ptr(m->scratch_aligned);
 	if (unlikely(!scratch)) {

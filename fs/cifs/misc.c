@@ -672,6 +672,9 @@ cifs_add_pending_open(struct cifs_fid *fid, struct tcon_link *tlink,
 	spin_unlock(&tlink_tcon(open->tlink)->open_file_lock);
 }
 
+/*
+ * Critical section which runs after acquiring deferred_lock.
+ */
 bool
 cifs_is_deferred_close(struct cifsFileInfo *cfile, struct cifs_deferred_close **pdclose)
 {
@@ -688,6 +691,9 @@ cifs_is_deferred_close(struct cifsFileInfo *cfile, struct cifs_deferred_close **
 	return false;
 }
 
+/*
+ * Critical section which runs after acquiring deferred_lock.
+ */
 void
 cifs_add_deferred_close(struct cifsFileInfo *cfile, struct cifs_deferred_close *dclose)
 {
@@ -707,6 +713,9 @@ cifs_add_deferred_close(struct cifsFileInfo *cfile, struct cifs_deferred_close *
 	list_add_tail(&dclose->dlist, &CIFS_I(d_inode(cfile->dentry))->deferred_closes);
 }
 
+/*
+ * Critical section which runs after acquiring deferred_lock.
+ */
 void
 cifs_del_deferred_close(struct cifsFileInfo *cfile)
 {
@@ -738,13 +747,11 @@ void
 cifs_close_all_deferred_files(struct cifs_tcon *tcon)
 {
 	struct cifsFileInfo *cfile;
-	struct cifsInodeInfo *cinode;
 	struct list_head *tmp;
 
 	spin_lock(&tcon->open_file_lock);
 	list_for_each(tmp, &tcon->openFileList) {
 		cfile = list_entry(tmp, struct cifsFileInfo, tlist);
-		cinode = CIFS_I(d_inode(cfile->dentry));
 		if (delayed_work_pending(&cfile->deferred))
 			mod_delayed_work(deferredclose_wq, &cfile->deferred, 0);
 	}

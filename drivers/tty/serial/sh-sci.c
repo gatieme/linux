@@ -1023,10 +1023,10 @@ static int scif_set_rtrg(struct uart_port *port, int rx_trig)
 {
 	unsigned int bits;
 
+	if (rx_trig >= port->fifosize)
+		rx_trig = port->fifosize - 1;
 	if (rx_trig < 1)
 		rx_trig = 1;
-	if (rx_trig >= port->fifosize)
-		rx_trig = port->fifosize;
 
 	/* HSCIF can be set to an arbitrary level. */
 	if (sci_getreg(port, HSRTRGR)->size) {
@@ -2961,10 +2961,7 @@ static int sci_init_single(struct platform_device *dev,
 	port->fifosize		= sci_port->params->fifosize;
 
 	if (port->type == PORT_SCI) {
-		if (sci_port->reg_size >= 0x20)
-			port->regshift = 2;
-		else
-			port->regshift = 1;
+		port->regshift = sci_port->reg_size >> 4;
 	}
 
 	/*
