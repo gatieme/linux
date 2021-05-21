@@ -211,8 +211,12 @@ EXPORT_SYMBOL(hex_dump_to_buffer);
  * @level: kernel log level (e.g. KERN_DEBUG)
  * @prefix_str: string to prefix each line with;
  *  caller supplies trailing spaces for alignment if desired
- * @prefix_type: controls whether prefix of an offset, address, or none
- *  is printed (%DUMP_PREFIX_OFFSET, %DUMP_PREFIX_ADDRESS, %DUMP_PREFIX_NONE)
+ * @prefix_type: controls how prefix is printed
+ *   %DUMP_PREFIX_OFFSET - offset prefix
+ *   %DUMP_PREFIX_ADDRESS - hashed address prefix
+ *   %DUMP_PREFIX_RAW_ADDRESS - non-hashed address prefix
+ *   %DUMP_PREFIX_NONE - no prefix
+ *
  * @rowsize: number of bytes to print per line; must be 16 or 32
  * @groupsize: number of bytes to print at a time (1, 2, 4, 8; default = 1)
  * @buf: data blob to dump
@@ -258,6 +262,10 @@ void print_hex_dump(const char *level, const char *prefix_str, int prefix_type,
 		switch (prefix_type) {
 		case DUMP_PREFIX_ADDRESS:
 			printk("%s%s%p: %s\n",
+			       level, prefix_str, ptr + i, linebuf);
+			break;
+		case DUMP_PREFIX_RAW_ADDRESS:
+			printk("%s%s%px: %s\n",
 			       level, prefix_str, ptr + i, linebuf);
 			break;
 		case DUMP_PREFIX_OFFSET:
