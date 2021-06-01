@@ -1141,11 +1141,7 @@ static int seccomp_do_user_notification(int this_syscall,
 						 struct seccomp_kaddfd, list);
 		/* Check if we were woken up by a addfd message */
 		if (addfd)
-<<<<<<< HEAD
-			seccomp_handle_addfd(addfd);
-=======
 			seccomp_handle_addfd(addfd, &n);
->>>>>>> linux-next/akpm-base
 
 	}  while (n.state != SECCOMP_NOTIFY_REPLIED);
 

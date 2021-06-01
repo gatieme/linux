@@ -577,17 +577,6 @@ static vm_fault_t gfs2_fault(struct vm_fault *vmf)
 	struct gfs2_holder *outer_gh = gfs2_glock_is_locked_by_me(ip->i_gl);
 	struct gfs2_holder gh;
 	vm_fault_t ret;
-<<<<<<< HEAD
-	u16 state;
-	int err;
-
-	state = (vmf->flags & FAULT_FLAG_WRITE) ? LM_ST_EXCLUSIVE : LM_ST_SHARED;
-	gfs2_holder_init(ip->i_gl, state, 0, &gh);
-	err = gfs2_glock_nq(&gh);
-	if (err) {
-		ret = block_page_mkwrite_return(err);
-		goto out_uninit;
-=======
 	u16 state, flags = 0;
 	int err;
 
@@ -613,7 +602,6 @@ static vm_fault_t gfs2_fault(struct vm_fault *vmf)
 			ret = VM_FAULT_SIGBUS;
 			goto out_uninit;
 		}
->>>>>>> linux-next/akpm-base
 	}
 	ret = filemap_fault(vmf);
 	if (likely(!outer_gh))
@@ -1021,13 +1009,7 @@ static ssize_t gfs2_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 			goto out_unlock;
 
 		iocb->ki_flags |= IOCB_DSYNC;
-<<<<<<< HEAD
-		current->backing_dev_info = inode_to_bdi(inode);
-		buffered = iomap_file_buffered_write(iocb, from, &gfs2_iomap_ops);
-		current->backing_dev_info = NULL;
-=======
 		buffered = gfs2_file_buffered_write(iocb, from);
->>>>>>> linux-next/akpm-base
 		if (unlikely(buffered <= 0)) {
 			if (!ret)
 				ret = buffered;
