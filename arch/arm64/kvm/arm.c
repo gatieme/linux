@@ -899,7 +899,10 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 
 	kvm_sigset_deactivate(vcpu);
 
+<<<<<<< HEAD
 out:
+=======
+>>>>>>> linux-next/akpm-base
 	/*
 	 * In the unlikely event that we are returning to userspace
 	 * with pending exceptions or PC adjustment, commit these
@@ -1078,7 +1081,7 @@ static int kvm_arch_vcpu_ioctl_vcpu_init(struct kvm_vcpu *vcpu,
 		if (!cpus_have_final_cap(ARM64_HAS_STAGE2_FWB))
 			stage2_unmap_vm(vcpu->kvm);
 		else
-			__flush_icache_all();
+			icache_inval_all_pou();
 	}
 
 	vcpu_reset_hcr(vcpu);
