@@ -345,6 +345,11 @@ struct rsnd_mod_ops {
 	int (*id)(struct rsnd_mod *mod);
 	int (*id_sub)(struct rsnd_mod *mod);
 	int (*id_cmd)(struct rsnd_mod *mod);
+
+#ifdef CONFIG_DEBUG_FS
+	void (*debug_info)(struct seq_file *m,
+			   struct rsnd_dai_stream *io, struct rsnd_mod *mod);
+#endif
 };
 
 struct rsnd_dai_stream;
@@ -392,12 +397,12 @@ struct rsnd_mod {
 #define __rsnd_mod_add_remove		0
 #define __rsnd_mod_add_prepare		0
 #define __rsnd_mod_add_cleanup		0
-#define __rsnd_mod_add_init		 1
-#define __rsnd_mod_add_quit		-1
-#define __rsnd_mod_add_start		 1
-#define __rsnd_mod_add_stop		-1
-#define __rsnd_mod_add_hw_params	1
-#define __rsnd_mod_add_hw_free		-1
+#define __rsnd_mod_add_init		 1 /* needs protect */
+#define __rsnd_mod_add_quit		-1 /* needs protect */
+#define __rsnd_mod_add_start		 1 /* needs protect */
+#define __rsnd_mod_add_stop		-1 /* needs protect */
+#define __rsnd_mod_add_hw_params	 1 /* needs protect */
+#define __rsnd_mod_add_hw_free		-1 /* needs protect */
 #define __rsnd_mod_add_irq		0
 #define __rsnd_mod_add_pcm_new		0
 #define __rsnd_mod_add_fallback		0
@@ -592,6 +597,9 @@ void __iomem *rsnd_gen_reg_get(struct rsnd_priv *priv,
 			       struct rsnd_mod *mod,
 			       enum rsnd_reg reg);
 phys_addr_t rsnd_gen_get_phy_addr(struct rsnd_priv *priv, int reg_id);
+#ifdef CONFIG_DEBUG_FS
+void __iomem *rsnd_gen_get_base_addr(struct rsnd_priv *priv, int reg_id);
+#endif
 
 /*
  *	R-Car ADG
@@ -610,6 +618,7 @@ int rsnd_adg_set_cmd_timsel_gen2(struct rsnd_mod *cmd_mod,
 #define rsnd_adg_clk_enable(priv)	rsnd_adg_clk_control(priv, 1)
 #define rsnd_adg_clk_disable(priv)	rsnd_adg_clk_control(priv, 0)
 void rsnd_adg_clk_control(struct rsnd_priv *priv, int enable);
+void rsnd_adg_clk_dbg_info(struct rsnd_priv *priv, struct seq_file *m);
 
 /*
  *	R-Car sound priv
@@ -635,6 +644,7 @@ struct rsnd_priv {
 	 * below value will be filled on rsnd_adg_probe()
 	 */
 	void *adg;
+	struct clk_hw *null_hw;
 
 	/*
 	 * below value will be filled on rsnd_dma_probe()
@@ -776,6 +786,7 @@ void rsnd_ssi_remove(struct rsnd_priv *priv);
 struct rsnd_mod *rsnd_ssi_mod_get(struct rsnd_priv *priv, int id);
 int rsnd_ssi_use_busif(struct rsnd_dai_stream *io);
 u32 rsnd_ssi_multi_secondaries_runtime(struct rsnd_dai_stream *io);
+int rsnd_ssi_is_dma_mode(struct rsnd_mod *mod);
 
 #define rsnd_ssi_is_pin_sharing(io)	\
 	__rsnd_ssi_is_pin_sharing(rsnd_io_to_mod_ssi(io))
@@ -799,6 +810,7 @@ void rsnd_parse_connect_ssiu(struct rsnd_dai *rdai,
 			     struct device_node *playback,
 			     struct device_node *capture);
 #define rsnd_ssiu_of_node(priv) rsnd_parse_of_node(priv, RSND_NODE_SSIU)
+bool rsnd_ssiu_busif_err_status_clear(struct rsnd_mod *mod);
 
 /*
  *	R-Car SRC
@@ -879,9 +891,10 @@ void rsnd_mod_make_sure(struct rsnd_mod *mod, enum rsnd_mod_type type);
  *
  * #define RSND_DEBUG_NO_IRQ_STATUS 1
  */
-#define rsnd_dbg_irq_status(dev, param...)		\
+#define rsnd_print_irq_status(dev, param...) do {	\
 	if (!IS_BUILTIN(RSND_DEBUG_NO_IRQ_STATUS))	\
-		dev_dbg(dev, param)
+		dev_info(dev, param);			\
+} while (0)
 
 /*
  * If you don't need rsnd_dai_call debug message,
@@ -893,4 +906,15 @@ void rsnd_mod_make_sure(struct rsnd_mod *mod, enum rsnd_mod_type type);
 	if (!IS_BUILTIN(RSND_DEBUG_NO_DAI_CALL))	\
 		dev_dbg(dev, param)
 
+#endif
+
+#ifdef CONFIG_DEBUG_FS
+int rsnd_debugfs_probe(struct snd_soc_component *component);
+void rsnd_debugfs_reg_show(struct seq_file *m, phys_addr_t _addr,
+			   void __iomem *base, int offset, int size);
+void rsnd_debugfs_mod_reg_show(struct seq_file *m, struct rsnd_mod *mod,
+			       int reg_id, int offset, int size);
+
+#else
+#define rsnd_debugfs_probe  NULL
 #endif

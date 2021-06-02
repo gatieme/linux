@@ -17,7 +17,7 @@
 /*
  * you can enable below define if you don't need
  * SSI interrupt status debug message when debugging
- * see rsnd_dbg_irq_status()
+ * see rsnd_print_irq_status()
  *
  * #define RSND_DEBUG_NO_IRQ_STATUS 1
  */
@@ -421,8 +421,8 @@ static bool rsnd_src_error_occurred(struct rsnd_mod *mod)
 	status0 = rsnd_mod_read(mod, SCU_SYS_STATUS0);
 	status1 = rsnd_mod_read(mod, SCU_SYS_STATUS1);
 	if ((status0 & val0) || (status1 & val1)) {
-		rsnd_dbg_irq_status(dev, "%s err status : 0x%08x, 0x%08x\n",
-			rsnd_mod_name(mod), status0, status1);
+		rsnd_print_irq_status(dev, "%s err status : 0x%08x, 0x%08x\n",
+				      rsnd_mod_name(mod), status0, status1);
 
 		ret = true;
 	}
@@ -597,6 +597,25 @@ static int rsnd_src_pcm_new(struct rsnd_mod *mod,
 	return ret;
 }
 
+#ifdef CONFIG_DEBUG_FS
+static void rsnd_src_debug_info(struct seq_file *m,
+				struct rsnd_dai_stream *io,
+				struct rsnd_mod *mod)
+{
+	rsnd_debugfs_mod_reg_show(m, mod, RSND_GEN2_SCU,
+				  rsnd_mod_id(mod) * 0x20, 0x20);
+	seq_puts(m, "\n");
+	rsnd_debugfs_mod_reg_show(m, mod, RSND_GEN2_SCU,
+				  0x1c0, 0x20);
+	seq_puts(m, "\n");
+	rsnd_debugfs_mod_reg_show(m, mod, RSND_GEN2_SCU,
+				  0x200 + rsnd_mod_id(mod) * 0x40, 0x40);
+}
+#define DEBUG_INFO .debug_info = rsnd_src_debug_info
+#else
+#define DEBUG_INFO
+#endif
+
 static struct rsnd_mod_ops rsnd_src_ops = {
 	.name		= SRC_NAME,
 	.dma_req	= rsnd_src_dma_req,
@@ -608,6 +627,7 @@ static struct rsnd_mod_ops rsnd_src_ops = {
 	.irq		= rsnd_src_irq,
 	.pcm_new	= rsnd_src_pcm_new,
 	.get_status	= rsnd_mod_get_status,
+	DEBUG_INFO
 };
 
 struct rsnd_mod *rsnd_src_mod_get(struct rsnd_priv *priv, int id)

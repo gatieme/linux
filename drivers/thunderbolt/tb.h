@@ -20,6 +20,7 @@
 
 #define NVM_MIN_SIZE		SZ_32K
 #define NVM_MAX_SIZE		SZ_512K
+#define NVM_DATA_DWORDS		16
 
 /* Intel specific NVM offsets */
 #define NVM_DEVID		0x05
@@ -346,6 +347,7 @@ struct tb_path {
 #define TB_WAKE_ON_USB4		BIT(2)
 #define TB_WAKE_ON_USB3		BIT(3)
 #define TB_WAKE_ON_PCIE		BIT(4)
+#define TB_WAKE_ON_DP		BIT(5)
 
 /**
  * struct tb_cm_ops - Connection manager specific operations vector
@@ -673,6 +675,16 @@ int tb_nvm_add_non_active(struct tb_nvm *nvm, size_t size,
 			  nvmem_reg_write_t reg_write);
 void tb_nvm_free(struct tb_nvm *nvm);
 void tb_nvm_exit(void);
+
+typedef int (*read_block_fn)(void *, unsigned int, void *, size_t);
+typedef int (*write_block_fn)(void *, unsigned int, const void *, size_t);
+
+int tb_nvm_read_data(unsigned int address, void *buf, size_t size,
+		     unsigned int retries, read_block_fn read_block,
+		     void *read_block_data);
+int tb_nvm_write_data(unsigned int address, const void *buf, size_t size,
+		      unsigned int retries, write_block_fn write_next_block,
+		      void *write_block_data);
 
 struct tb_switch *tb_switch_alloc(struct tb *tb, struct device *parent,
 				  u64 route);
