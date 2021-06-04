@@ -862,6 +862,8 @@ struct module;
  *              MSI-X vectors available for distribution to the VFs.
  * @err_handler: See Documentation/PCI/pci-error-recovery.rst
  * @groups:	Sysfs attribute groups.
+ * @dev_groups: Attributes attached to the device that will be
+ *              created once it is bound to the driver.
  * @driver:	Driver model structure.
  * @dynids:	List of dynamically added device IDs.
  */
@@ -879,6 +881,7 @@ struct pci_driver {
 	u32  (*sriov_get_vf_total_msix)(struct pci_dev *pf);
 	const struct pci_error_handlers *err_handler;
 	const struct attribute_group **groups;
+	const struct attribute_group **dev_groups;
 	struct device_driver	driver;
 	struct pci_dynids	dynids;
 };
@@ -1772,6 +1775,10 @@ static inline int pci_request_regions(struct pci_dev *dev, const char *res_name)
 { return -EIO; }
 static inline void pci_release_regions(struct pci_dev *dev) { }
 
+static inline int pci_register_io_range(struct fwnode_handle *fwnode,
+					phys_addr_t addr, resource_size_t size)
+{ return -EINVAL; }
+
 static inline unsigned long pci_address_to_pio(phys_addr_t addr) { return -1; }
 
 static inline struct pci_bus *pci_find_next_bus(const struct pci_bus *from)
@@ -2344,6 +2351,7 @@ int pci_vpd_find_info_keyword(const u8 *buf, unsigned int off,
 struct device_node;
 struct irq_domain;
 struct irq_domain *pci_host_bridge_of_msi_domain(struct pci_bus *bus);
+bool pci_host_of_has_msi_map(struct device *dev);
 
 /* Arch may override this (weak) */
 struct device_node *pcibios_get_phb_of_node(struct pci_bus *bus);
@@ -2351,6 +2359,7 @@ struct device_node *pcibios_get_phb_of_node(struct pci_bus *bus);
 #else	/* CONFIG_OF */
 static inline struct irq_domain *
 pci_host_bridge_of_msi_domain(struct pci_bus *bus) { return NULL; }
+static inline bool pci_host_of_has_msi_map(struct device *dev) { return false; }
 #endif  /* CONFIG_OF */
 
 static inline struct device_node *
