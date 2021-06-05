@@ -105,8 +105,14 @@ static int ice_vsi_alloc_arrays(struct ice_vsi *vsi)
 	if (!vsi->q_vectors)
 		goto err_vectors;
 
+	vsi->af_xdp_zc_qps = bitmap_zalloc(max_t(int, vsi->alloc_txq, vsi->alloc_rxq), GFP_KERNEL);
+	if (!vsi->af_xdp_zc_qps)
+		goto err_zc_qps;
+
 	return 0;
 
+err_zc_qps:
+	devm_kfree(dev, vsi->q_vectors);
 err_vectors:
 	devm_kfree(dev, vsi->rxq_map);
 err_rxq_map:
@@ -288,6 +294,10 @@ static void ice_vsi_free_arrays(struct ice_vsi *vsi)
 
 	dev = ice_pf_to_dev(pf);
 
+	if (vsi->af_xdp_zc_qps) {
+		bitmap_free(vsi->af_xdp_zc_qps);
+		vsi->af_xdp_zc_qps = NULL;
+	}
 	/* free the ring and vector containers */
 	if (vsi->q_vectors) {
 		devm_kfree(dev, vsi->q_vectors);
@@ -614,6 +624,17 @@ static void ice_vsi_put_qs(struct ice_vsi *vsi)
 bool ice_is_safe_mode(struct ice_pf *pf)
 {
 	return !test_bit(ICE_FLAG_ADV_FEATURES, pf->flags);
+}
+
+/**
+ * ice_is_aux_ena
+ * @pf: pointer to the PF struct
+ *
+ * returns true if AUX devices/drivers are supported, false otherwise
+ */
+bool ice_is_aux_ena(struct ice_pf *pf)
+{
+	return test_bit(ICE_FLAG_AUX_ENA, pf->flags);
 }
 
 /**

@@ -37,6 +37,7 @@ enum {
 #endif
 	RESERVED_BLOCKS,	/* struct f2fs_sb_info */
 	CPRC_INFO,	/* struct ckpt_req_control */
+	ATGC_INFO,	/* struct atgc_management */
 };
 
 struct f2fs_attr {
@@ -75,6 +76,8 @@ static unsigned char *__struct_ptr(struct f2fs_sb_info *sbi, int struct_type)
 #endif
 	else if (struct_type == CPRC_INFO)
 		return (unsigned char *)&sbi->cprc_info;
+	else if (struct_type == ATGC_INFO)
+		return (unsigned char *)&sbi->am;
 	return NULL;
 }
 
@@ -155,9 +158,15 @@ static ssize_t features_show(struct f2fs_attr *a,
 	if (f2fs_sb_has_casefold(sbi))
 		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "casefold");
+	if (f2fs_sb_has_readonly(sbi))
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
+				len ? ", " : "", "readonly");
 	if (f2fs_sb_has_compression(sbi))
 		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "compression");
+	if (f2fs_sb_has_casefold(sbi) && f2fs_sb_has_encrypt(sbi))
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
+				len ? ", " : "", "encrypted_casefold");
 	len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "pin_file");
 	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
@@ -495,6 +504,20 @@ out:
 	}
 #endif
 
+	if (!strcmp(a->attr.name, "atgc_candidate_ratio")) {
+		if (t > 100)
+			return -EINVAL;
+		sbi->am.candidate_ratio = t;
+		return count;
+	}
+
+	if (!strcmp(a->attr.name, "atgc_age_weight")) {
+		if (t > 100)
+			return -EINVAL;
+		sbi->am.age_weight = t;
+		return count;
+	}
+
 	*ui = (unsigned int)t;
 
 	return count;
@@ -561,31 +584,88 @@ enum feat_id {
 	FEAT_SB_CHECKSUM,
 	FEAT_CASEFOLD,
 	FEAT_COMPRESSION,
+	FEAT_RO,
 	FEAT_TEST_DUMMY_ENCRYPTION_V2,
+	FEAT_ENCRYPTED_CASEFOLD,
+	FEAT_PIN_FILE,
 };
 
 static ssize_t f2fs_feature_show(struct f2fs_attr *a,
 		struct f2fs_sb_info *sbi, char *buf)
 {
+	unsigned long feat_supp = 0;
+
 	switch (a->id) {
 	case FEAT_CRYPTO:
+		feat_supp |= f2fs_sb_has_encrypt(sbi) ?
+					(1 << FEAT_CRYPTO) : 0;
+		fallthrough;
 	case FEAT_BLKZONED:
-	case FEAT_ATOMIC_WRITE:
+		feat_supp |= f2fs_sb_has_blkzoned(sbi) ?
+					(1 << FEAT_BLKZONED) : 0;
+		fallthrough;
 	case FEAT_EXTRA_ATTR:
+		feat_supp |= f2fs_sb_has_extra_attr(sbi) ?
+					(1 << FEAT_EXTRA_ATTR) : 0;
+		fallthrough;
 	case FEAT_PROJECT_QUOTA:
+		feat_supp |= f2fs_sb_has_project_quota(sbi) ?
+					(1 << FEAT_PROJECT_QUOTA) : 0;
+		fallthrough;
 	case FEAT_INODE_CHECKSUM:
+		feat_supp |= f2fs_sb_has_inode_chksum(sbi) ?
+					(1 << FEAT_INODE_CHECKSUM) : 0;
+		fallthrough;
 	case FEAT_FLEXIBLE_INLINE_XATTR:
+		feat_supp |= f2fs_sb_has_flexible_inline_xattr(sbi) ?
+					(1 << FEAT_FLEXIBLE_INLINE_XATTR) : 0;
+		fallthrough;
 	case FEAT_QUOTA_INO:
+		feat_supp |= f2fs_sb_has_quota_ino(sbi) ?
+					(1 << FEAT_QUOTA_INO) : 0;
+		fallthrough;
 	case FEAT_INODE_CRTIME:
+		feat_supp |= f2fs_sb_has_inode_crtime(sbi) ?
+					(1 << FEAT_INODE_CRTIME) : 0;
+		fallthrough;
 	case FEAT_LOST_FOUND:
+		feat_supp |= f2fs_sb_has_lost_found(sbi) ?
+					(1 << FEAT_LOST_FOUND) : 0;
+		fallthrough;
 	case FEAT_VERITY:
+		feat_supp |= f2fs_sb_has_verity(sbi) ?
+					(1 << FEAT_VERITY) : 0;
+		fallthrough;
 	case FEAT_SB_CHECKSUM:
+		feat_supp |= f2fs_sb_has_sb_chksum(sbi) ?
+					(1 << FEAT_SB_CHECKSUM) : 0;
+		fallthrough;
 	case FEAT_CASEFOLD:
+		feat_supp |= f2fs_sb_has_casefold(sbi) ?
+					(1 << FEAT_CASEFOLD) : 0;
+		fallthrough;
 	case FEAT_COMPRESSION:
+		feat_supp |= f2fs_sb_has_compression(sbi) ?
+					(1 << FEAT_COMPRESSION) : 0;
+		fallthrough;
+	case FEAT_RO:
+		feat_supp |= f2fs_sb_has_readonly(sbi) ?
+					(1 << FEAT_RO) : 0;
+		fallthrough;
+	case FEAT_ENCRYPTED_CASEFOLD:
+		feat_supp |= (f2fs_sb_has_casefold(sbi) &&
+				f2fs_sb_has_encrypt(sbi)) ?
+					(1 << FEAT_ENCRYPTED_CASEFOLD) : 0;
+		fallthrough;
+	case FEAT_PIN_FILE:
+		feat_supp |= (1 << FEAT_PIN_FILE);
+		fallthrough;
 	case FEAT_TEST_DUMMY_ENCRYPTION_V2:
-		return sprintf(buf, "supported\n");
+	case FEAT_ATOMIC_WRITE:
+		if (!a->offset || feat_supp & (1 << a->id))
+			return sprintf(buf, "supported\n");
 	}
-	return 0;
+	return sprintf(buf, "not supported\n");
 }
 
 #define F2FS_ATTR_OFFSET(_struct_type, _name, _mode, _show, _store, _offset) \
@@ -609,6 +689,7 @@ static struct f2fs_attr f2fs_attr_##name = __ATTR(name, 0444, name##_show, NULL)
 static struct f2fs_attr f2fs_attr_##_name = {			\
 	.attr = {.name = __stringify(_name), .mode = 0444 },	\
 	.show	= f2fs_feature_show,				\
+	.offset	= 0,						\
 	.id	= _id,						\
 }
 
@@ -687,7 +768,10 @@ F2FS_GENERAL_RO_ATTR(avg_vblocks);
 #ifdef CONFIG_FS_ENCRYPTION
 F2FS_FEATURE_RO_ATTR(encryption, FEAT_CRYPTO);
 F2FS_FEATURE_RO_ATTR(test_dummy_encryption_v2, FEAT_TEST_DUMMY_ENCRYPTION_V2);
-#endif
+#ifdef CONFIG_UNICODE
+F2FS_FEATURE_RO_ATTR(encrypted_casefold, FEAT_ENCRYPTED_CASEFOLD);
+#endif /* CONFIG_UNICODE */
+#endif /* CONFIG_FS_ENCRYPTION */
 #ifdef CONFIG_BLK_DEV_ZONED
 F2FS_FEATURE_RO_ATTR(block_zoned, FEAT_BLKZONED);
 #endif
@@ -703,13 +787,23 @@ F2FS_FEATURE_RO_ATTR(lost_found, FEAT_LOST_FOUND);
 F2FS_FEATURE_RO_ATTR(verity, FEAT_VERITY);
 #endif
 F2FS_FEATURE_RO_ATTR(sb_checksum, FEAT_SB_CHECKSUM);
+#ifdef CONFIG_UNICODE
 F2FS_FEATURE_RO_ATTR(casefold, FEAT_CASEFOLD);
+#endif
+F2FS_FEATURE_RO_ATTR(readonly, FEAT_RO);
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 F2FS_FEATURE_RO_ATTR(compression, FEAT_COMPRESSION);
 F2FS_RW_ATTR(F2FS_SBI, f2fs_sb_info, compr_written_block, compr_written_block);
 F2FS_RW_ATTR(F2FS_SBI, f2fs_sb_info, compr_saved_block, compr_saved_block);
 F2FS_RW_ATTR(F2FS_SBI, f2fs_sb_info, compr_new_inode, compr_new_inode);
 #endif
+F2FS_FEATURE_RO_ATTR(pin_file, FEAT_PIN_FILE);
+
+/* For ATGC */
+F2FS_RW_ATTR(ATGC_INFO, atgc_management, atgc_candidate_ratio, candidate_ratio);
+F2FS_RW_ATTR(ATGC_INFO, atgc_management, atgc_candidate_count, max_candidate_count);
+F2FS_RW_ATTR(ATGC_INFO, atgc_management, atgc_age_weight, age_weight);
+F2FS_RW_ATTR(ATGC_INFO, atgc_management, atgc_age_threshold, age_threshold);
 
 #define ATTR_LIST(name) (&f2fs_attr_##name.attr)
 static struct attribute *f2fs_attrs[] = {
@@ -778,6 +872,11 @@ static struct attribute *f2fs_attrs[] = {
 	ATTR_LIST(compr_saved_block),
 	ATTR_LIST(compr_new_inode),
 #endif
+	/* For ATGC */
+	ATTR_LIST(atgc_candidate_ratio),
+	ATTR_LIST(atgc_candidate_count),
+	ATTR_LIST(atgc_age_weight),
+	ATTR_LIST(atgc_age_threshold),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs);
@@ -786,7 +885,10 @@ static struct attribute *f2fs_feat_attrs[] = {
 #ifdef CONFIG_FS_ENCRYPTION
 	ATTR_LIST(encryption),
 	ATTR_LIST(test_dummy_encryption_v2),
-#endif
+#ifdef CONFIG_UNICODE
+	ATTR_LIST(encrypted_casefold),
+#endif /* CONFIG_UNICODE */
+#endif /* CONFIG_FS_ENCRYPTION */
 #ifdef CONFIG_BLK_DEV_ZONED
 	ATTR_LIST(block_zoned),
 #endif
@@ -802,10 +904,14 @@ static struct attribute *f2fs_feat_attrs[] = {
 	ATTR_LIST(verity),
 #endif
 	ATTR_LIST(sb_checksum),
+#ifdef CONFIG_UNICODE
 	ATTR_LIST(casefold),
+#endif
+	ATTR_LIST(readonly),
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 	ATTR_LIST(compression),
 #endif
+	ATTR_LIST(pin_file),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs_feat);
@@ -816,6 +922,52 @@ static struct attribute *f2fs_stat_attrs[] = {
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs_stat);
+
+#define F2FS_DISK_FEATURE_RO_ATTR(_name, _id)			\
+static struct f2fs_attr f2fs_attr_disk_##_name = {		\
+	.attr = {.name = __stringify(_name), .mode = 0444 },	\
+	.show	= f2fs_feature_show,				\
+	.offset	= 1,						\
+	.id	= _id,						\
+}
+
+F2FS_DISK_FEATURE_RO_ATTR(encryption, FEAT_CRYPTO);
+F2FS_DISK_FEATURE_RO_ATTR(block_zoned, FEAT_BLKZONED);
+F2FS_DISK_FEATURE_RO_ATTR(extra_attr, FEAT_EXTRA_ATTR);
+F2FS_DISK_FEATURE_RO_ATTR(project_quota, FEAT_PROJECT_QUOTA);
+F2FS_DISK_FEATURE_RO_ATTR(inode_checksum, FEAT_INODE_CHECKSUM);
+F2FS_DISK_FEATURE_RO_ATTR(flexible_inline_xattr, FEAT_FLEXIBLE_INLINE_XATTR);
+F2FS_DISK_FEATURE_RO_ATTR(quota_ino, FEAT_QUOTA_INO);
+F2FS_DISK_FEATURE_RO_ATTR(inode_crtime, FEAT_INODE_CRTIME);
+F2FS_DISK_FEATURE_RO_ATTR(lost_found, FEAT_LOST_FOUND);
+F2FS_DISK_FEATURE_RO_ATTR(verity, FEAT_VERITY);
+F2FS_DISK_FEATURE_RO_ATTR(sb_checksum, FEAT_SB_CHECKSUM);
+F2FS_DISK_FEATURE_RO_ATTR(casefold, FEAT_CASEFOLD);
+F2FS_DISK_FEATURE_RO_ATTR(compression, FEAT_COMPRESSION);
+F2FS_DISK_FEATURE_RO_ATTR(readonly, FEAT_RO);
+F2FS_DISK_FEATURE_RO_ATTR(encrypted_casefold, FEAT_ENCRYPTED_CASEFOLD);
+F2FS_DISK_FEATURE_RO_ATTR(pin_file, FEAT_PIN_FILE);
+
+static struct attribute *f2fs_disk_feat_attrs[] = {
+	ATTR_LIST(disk_encryption),
+	ATTR_LIST(disk_block_zoned),
+	ATTR_LIST(disk_extra_attr),
+	ATTR_LIST(disk_project_quota),
+	ATTR_LIST(disk_inode_checksum),
+	ATTR_LIST(disk_flexible_inline_xattr),
+	ATTR_LIST(disk_quota_ino),
+	ATTR_LIST(disk_inode_crtime),
+	ATTR_LIST(disk_lost_found),
+	ATTR_LIST(disk_verity),
+	ATTR_LIST(disk_sb_checksum),
+	ATTR_LIST(disk_casefold),
+	ATTR_LIST(disk_compression),
+	ATTR_LIST(disk_readonly),
+	ATTR_LIST(disk_encrypted_casefold),
+	ATTR_LIST(disk_pin_file),
+	NULL,
+};
+ATTRIBUTE_GROUPS(f2fs_disk_feat);
 
 static const struct sysfs_ops f2fs_attr_ops = {
 	.show	= f2fs_attr_show,
@@ -882,6 +1034,34 @@ static struct kobj_type f2fs_stat_ktype = {
 	.sysfs_ops	= &f2fs_stat_attr_ops,
 	.release	= f2fs_stat_kobj_release,
 };
+
+static ssize_t f2fs_disk_feat_attr_show(struct kobject *kobj,
+				struct attribute *attr, char *buf)
+{
+	struct f2fs_sb_info *sbi = container_of(kobj, struct f2fs_sb_info,
+							s_disk_feat_kobj);
+	struct f2fs_attr *a = container_of(attr, struct f2fs_attr, attr);
+
+	return a->show ? a->show(a, sbi, buf) : 0;
+}
+
+static void f2fs_disk_feat_kobj_release(struct kobject *kobj)
+{
+	struct f2fs_sb_info *sbi = container_of(kobj, struct f2fs_sb_info,
+							s_disk_feat_kobj);
+	complete(&sbi->s_disk_feat_kobj_unregister);
+}
+
+static const struct sysfs_ops f2fs_disk_feat_attr_ops = {
+	.show	= f2fs_disk_feat_attr_show,
+};
+
+static struct kobj_type f2fs_disk_feat_ktype = {
+	.default_groups = f2fs_disk_feat_groups,
+	.sysfs_ops	= &f2fs_disk_feat_attr_ops,
+	.release	= f2fs_disk_feat_kobj_release,
+};
+
 
 static int __maybe_unused segment_info_seq_show(struct seq_file *seq,
 						void *offset)
@@ -1099,6 +1279,15 @@ int f2fs_register_sysfs(struct f2fs_sb_info *sbi)
 	if (err)
 		goto put_stat_kobj;
 
+	sbi->s_disk_feat_kobj.kset = &f2fs_kset;
+	init_completion(&sbi->s_disk_feat_kobj_unregister);
+	err = kobject_init_and_add(&sbi->s_disk_feat_kobj,
+						&f2fs_disk_feat_ktype,
+						&sbi->s_kobj, "feature_list");
+	if (err)
+		goto put_stat_kobj;
+
+
 	if (f2fs_proc_root)
 		sbi->s_proc = proc_mkdir(sb->s_id, f2fs_proc_root);
 
@@ -1116,6 +1305,8 @@ int f2fs_register_sysfs(struct f2fs_sb_info *sbi)
 put_stat_kobj:
 	kobject_put(&sbi->s_stat_kobj);
 	wait_for_completion(&sbi->s_stat_kobj_unregister);
+	kobject_put(&sbi->s_disk_feat_kobj);
+	wait_for_completion(&sbi->s_disk_feat_kobj_unregister);
 put_sb_kobj:
 	kobject_put(&sbi->s_kobj);
 	wait_for_completion(&sbi->s_kobj_unregister);
@@ -1135,6 +1326,9 @@ void f2fs_unregister_sysfs(struct f2fs_sb_info *sbi)
 	kobject_del(&sbi->s_stat_kobj);
 	kobject_put(&sbi->s_stat_kobj);
 	wait_for_completion(&sbi->s_stat_kobj_unregister);
+	kobject_del(&sbi->s_disk_feat_kobj);
+	kobject_put(&sbi->s_disk_feat_kobj);
+	wait_for_completion(&sbi->s_disk_feat_kobj_unregister);
 
 	kobject_del(&sbi->s_kobj);
 	kobject_put(&sbi->s_kobj);

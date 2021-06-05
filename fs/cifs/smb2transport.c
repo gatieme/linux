@@ -114,7 +114,8 @@ int smb2_get_sign_key(__u64 ses_id, struct TCP_Server_Info *server, u8 *key)
 	goto out;
 
 found:
-	if (ses->binding) {
+	if (cifs_chan_needs_reconnect(ses, server) &&
+	    !CIFS_ALL_CHANS_NEED_RECONNECT(ses)) {
 		/*
 		 * If we are in the process of binding a new channel
 		 * to an existing session, use the master connection
@@ -154,6 +155,7 @@ smb2_find_smb_ses_unlocked(struct TCP_Server_Info *server, __u64 ses_id)
 	list_for_each_entry(ses, &server->smb_ses_list, smb_ses_list) {
 		if (ses->Suid != ses_id)
 			continue;
+		++ses->ses_count;
 		return ses;
 	}
 
@@ -205,6 +207,11 @@ smb2_find_smb_tcon(struct TCP_Server_Info *server, __u64 ses_id, __u32  tid)
 		return NULL;
 	}
 	tcon = smb2_find_smb_sess_tcon_unlocked(ses, tid);
+	if (!tcon) {
+		spin_unlock(&cifs_tcp_ses_lock);
+		cifs_put_smb_ses(ses);
+		return NULL;
+	}
 	spin_unlock(&cifs_tcp_ses_lock);
 
 	return tcon;
@@ -239,7 +246,7 @@ smb2_calc_signature(struct smb_rqst *rqst, struct TCP_Server_Info *server,
 		if (rc) {
 			cifs_server_dbg(VFS,
 					"%s: sha256 alloc failed\n", __func__);
-			return rc;
+			goto out;
 		}
 		shash = &sdesc->shash;
 	} else {
@@ -290,6 +297,8 @@ smb2_calc_signature(struct smb_rqst *rqst, struct TCP_Server_Info *server,
 out:
 	if (allocate_crypto)
 		cifs_free_hash(&hash, &sdesc);
+	if (ses)
+		cifs_put_smb_ses(ses);
 	return rc;
 }
 
@@ -394,12 +403,11 @@ struct derivation_triplet {
 
 static int
 generate_smb3signingkey(struct cifs_ses *ses,
+			struct TCP_Server_Info *server,
 			const struct derivation_triplet *ptriplet)
 {
 	int rc;
-#ifdef CONFIG_CIFS_DEBUG_DUMP_KEYS
-	struct TCP_Server_Info *server = ses->server;
-#endif
+	size_t chan_index;
 
 	/*
 	 * All channels use the same encryption/decryption keys but
@@ -411,10 +419,11 @@ generate_smb3signingkey(struct cifs_ses *ses,
 	 * master connection signing key stored in the session
 	 */
 
-	if (ses->binding) {
+	if (!CIFS_ALL_CHANS_NEED_RECONNECT(ses)) {
+		chan_index = cifs_ses_get_chan_index(ses, server);
 		rc = generate_key(ses, ptriplet->signing.label,
 				  ptriplet->signing.context,
-				  cifs_ses_binding_channel(ses)->signkey,
+				  ses->chans[chan_index].signkey,
 				  SMB3_SIGN_KEY_SIZE);
 		if (rc)
 			return rc;
@@ -474,7 +483,8 @@ generate_smb3signingkey(struct cifs_ses *ses,
 }
 
 int
-generate_smb30signingkey(struct cifs_ses *ses)
+generate_smb30signingkey(struct cifs_ses *ses,
+			 struct TCP_Server_Info *server)
 
 {
 	struct derivation_triplet triplet;
@@ -498,11 +508,12 @@ generate_smb30signingkey(struct cifs_ses *ses)
 	d->context.iov_base = "ServerOut";
 	d->context.iov_len = 10;
 
-	return generate_smb3signingkey(ses, &triplet);
+	return generate_smb3signingkey(ses, server, &triplet);
 }
 
 int
-generate_smb311signingkey(struct cifs_ses *ses)
+generate_smb311signingkey(struct cifs_ses *ses,
+			  struct TCP_Server_Info *server)
 
 {
 	struct derivation_triplet triplet;
@@ -526,7 +537,7 @@ generate_smb311signingkey(struct cifs_ses *ses)
 	d->context.iov_base = ses->preauth_sha_hash;
 	d->context.iov_len = 64;
 
-	return generate_smb3signingkey(ses, &triplet);
+	return generate_smb3signingkey(ses, server, &triplet);
 }
 
 int
