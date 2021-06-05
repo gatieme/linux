@@ -364,8 +364,6 @@ static int amdgpu_ctx_query2(struct amdgpu_device *adev,
 	if (atomic_read(&ctx->guilty))
 		out->state.flags |= AMDGPU_CTX_QUERY2_FLAGS_GUILTY;
 
-<<<<<<< HEAD
-=======
 	if (adev->ras_enabled && con) {
 		/* Return the cached values in O(1),
 		 * and schedule delayed work to cache
@@ -390,7 +388,6 @@ static int amdgpu_ctx_query2(struct amdgpu_device *adev,
 				      msecs_to_jiffies(AMDGPU_RAS_COUNTE_DELAY_MS));
 	}
 
->>>>>>> linux-next/akpm-base
 	mutex_unlock(&mgr->lock);
 	return 0;
 }

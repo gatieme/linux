@@ -632,11 +632,7 @@ static void tegra_shared_plane_atomic_update(struct drm_plane *plane,
 	 * dGPU sector layout.
 	 */
 	if (tegra_plane_state->tiling.sector_layout == TEGRA_BO_SECTOR_LAYOUT_GPU)
-<<<<<<< HEAD
-		base |= BIT_ULL(39);
-=======
 		addr_flag = BIT_ULL(39);
->>>>>>> linux-next/akpm-base
 #endif
 
 	base = tegra_plane_state->iova[0] + fb->offsets[0];

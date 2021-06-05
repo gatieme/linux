@@ -10060,11 +10060,7 @@ static int validate_overlay(struct drm_atomic_state *state)
 {
 	int i;
 	struct drm_plane *plane;
-<<<<<<< HEAD
-	struct drm_plane_state *old_plane_state, *new_plane_state;
-=======
 	struct drm_plane_state *new_plane_state;
->>>>>>> linux-next/akpm-base
 	struct drm_plane_state *primary_state, *cursor_state, *overlay_state = NULL;
 
 	/* Check if primary plane is contained inside overlay */
