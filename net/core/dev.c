@@ -4363,7 +4363,7 @@ static inline void ____napi_schedule(struct softnet_data *sd,
 			 * makes sure to proceed with napi polling
 			 * if the thread is explicitly woken from here.
 			 */
-			if (READ_ONCE(thread->state) != TASK_INTERRUPTIBLE)
+			if (READ_ONCE(thread->__state) != TASK_INTERRUPTIBLE)
 				set_bit(NAPI_STATE_SCHED_THREADED, &napi->state);
 			wake_up_process(thread);
 			return;
@@ -5277,9 +5277,9 @@ another_round:
 	if (static_branch_unlikely(&generic_xdp_needed_key)) {
 		int ret2;
 
-		preempt_disable();
+		migrate_disable();
 		ret2 = do_xdp_generic(rcu_dereference(skb->dev->xdp_prog), skb);
-		preempt_enable();
+		migrate_enable();
 
 		if (ret2 != XDP_PASS) {
 			ret = NET_RX_DROP;
@@ -6520,11 +6520,18 @@ EXPORT_SYMBOL(napi_schedule_prep);
  * __napi_schedule_irqoff - schedule for receive
  * @n: entry to schedule
  *
- * Variant of __napi_schedule() assuming hard irqs are masked
+ * Variant of __napi_schedule() assuming hard irqs are masked.
+ *
+ * On PREEMPT_RT enabled kernels this maps to __napi_schedule()
+ * because the interrupt disabled assumption might not be true
+ * due to force-threaded interrupts and spinlock substitution.
  */
 void __napi_schedule_irqoff(struct napi_struct *n)
 {
-	____napi_schedule(this_cpu_ptr(&softnet_data), n);
+	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
+		____napi_schedule(this_cpu_ptr(&softnet_data), n);
+	else
+		__napi_schedule(n);
 }
 EXPORT_SYMBOL(__napi_schedule_irqoff);
 
