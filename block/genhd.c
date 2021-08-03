@@ -1100,11 +1100,7 @@ static void disk_release(struct device *dev)
 	xa_destroy(&disk->part_tbl);
 	if (test_bit(GD_QUEUE_REF, &disk->state) && disk->queue)
 		blk_put_queue(disk->queue);
-<<<<<<< HEAD
-	bdput(disk->part0);	/* frees the disk */
-=======
 	iput(disk->part0->bd_inode);	/* frees the disk */
->>>>>>> linux-next/akpm-base
 }
 
 static int block_uevent(struct device *dev, struct kobj_uevent_env *env)

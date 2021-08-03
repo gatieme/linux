@@ -2554,10 +2554,6 @@ static void wacom_wac_finger_slot(struct wacom_wac *wacom_wac,
 		int slot;
 
 		slot = input_mt_get_slot_by_key(input, hid_data->id);
-<<<<<<< HEAD
-		if (slot < 0)
-			return;
-=======
 		if (slot < 0) {
 			return;
 		} else {
@@ -2569,7 +2565,6 @@ static void wacom_wac_finger_slot(struct wacom_wac *wacom_wac,
 				return;
 			}
 		}
->>>>>>> linux-next/akpm-base
 
 		input_mt_slot(input, slot);
 		input_mt_report_slot_state(input, MT_TOOL_FINGER, prox);
@@ -3865,10 +3860,7 @@ int wacom_setup_touch_input_capabilities(struct input_dev *input_dev,
 			input_dev->evbit[0] |= BIT_MASK(EV_SW);
 			__set_bit(SW_MUTE_DEVICE, input_dev->swbit);
 			wacom_wac->has_mute_touch_switch = true;
-<<<<<<< HEAD
-=======
 			wacom_wac->is_soft_touch_switch = true;
->>>>>>> linux-next/akpm-base
 		}
 		fallthrough;
 

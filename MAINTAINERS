@@ -11365,19 +11365,11 @@ W:	https://linuxtv.org
 T:	git git://linuxtv.org/media_tree.git
 F:	drivers/media/radio/radio-maxiradio*
 
-<<<<<<< HEAD
-MCAB MICROCHIP CAN BUS ANALYZER TOOL DRIVER
-R:	Yasushi SHOJI <yashi@spacecubics.com>
-L:	linux-can@vger.kernel.org
-S:	Maintained
-F:	drivers/net/can/usb/mcba_usb.c
-=======
 MAXLINEAR ETHERNET PHY DRIVER
 M:	Xu Liang <lxu@maxlinear.com>
 L:	netdev@vger.kernel.org
 S:	Supported
 F:	drivers/net/phy/mxl-gpy.c
->>>>>>> linux-next/akpm-base
 
 MCAN MMIO DEVICE DRIVER
 M:	Chandrasekar Ramakrishnan <rcsekar@samsung.com>

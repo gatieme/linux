@@ -423,11 +423,7 @@ int s3fwrn5_fw_download(struct s3fwrn5_fw_info *fw_info)
 	if (IS_ERR(tfm)) {
 		dev_err(&fw_info->ndev->nfc_dev->dev,
 			"Cannot allocate shash (code=%pe)\n", tfm);
-<<<<<<< HEAD
-		goto out;
-=======
 		return PTR_ERR(tfm);
->>>>>>> linux-next/akpm-base
 	}
 
 	ret = crypto_shash_tfm_digest(tfm, fw->image, image_size, hash_data);
