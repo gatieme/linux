@@ -572,7 +572,7 @@ static int cq_create(struct mlx5_vdpa_net *ndev, u16 idx, u32 num_ent)
 	cqc = MLX5_ADDR_OF(create_cq_in, in, cq_context);
 	MLX5_SET(cqc, cqc, log_cq_size, ilog2(num_ent));
 	MLX5_SET(cqc, cqc, uar_page, ndev->mvdev.res.uar->index);
-	MLX5_SET(cqc, cqc, c_eqn, eqn);
+	MLX5_SET(cqc, cqc, c_eqn_or_apu_element, eqn);
 	MLX5_SET64(cqc, cqc, dbr_addr, vcq->db.dma);
 
 	err = mlx5_core_create_cq(mdev, &vcq->mcq, in, inlen, out, sizeof(out));
@@ -752,12 +752,12 @@ static int get_queue_type(struct mlx5_vdpa_net *ndev)
 	type_mask = MLX5_CAP_DEV_VDPA_EMULATION(ndev->mvdev.mdev, virtio_queue_type);
 
 	/* prefer split queue */
-	if (type_mask & MLX5_VIRTIO_EMULATION_CAP_VIRTIO_QUEUE_TYPE_PACKED)
-		return MLX5_VIRTIO_EMULATION_VIRTIO_QUEUE_TYPE_PACKED;
+	if (type_mask & MLX5_VIRTIO_EMULATION_CAP_VIRTIO_QUEUE_TYPE_SPLIT)
+		return MLX5_VIRTIO_EMULATION_VIRTIO_QUEUE_TYPE_SPLIT;
 
-	WARN_ON(!(type_mask & MLX5_VIRTIO_EMULATION_CAP_VIRTIO_QUEUE_TYPE_SPLIT));
+	WARN_ON(!(type_mask & MLX5_VIRTIO_EMULATION_CAP_VIRTIO_QUEUE_TYPE_PACKED));
 
-	return MLX5_VIRTIO_EMULATION_VIRTIO_QUEUE_TYPE_SPLIT;
+	return MLX5_VIRTIO_EMULATION_VIRTIO_QUEUE_TYPE_PACKED;
 }
 
 static bool vq_is_tx(u16 idx)
@@ -2029,6 +2029,12 @@ static int mlx5_vdpa_dev_add(struct vdpa_mgmt_dev *v_mdev, const char *name)
 		return -ENOSPC;
 
 	mdev = mgtdev->madev->mdev;
+	if (!(MLX5_CAP_DEV_VDPA_EMULATION(mdev, virtio_queue_type) &
+	    MLX5_VIRTIO_EMULATION_CAP_VIRTIO_QUEUE_TYPE_SPLIT)) {
+		dev_warn(mdev->device, "missing support for split virtqueues\n");
+		return -EOPNOTSUPP;
+	}
+
 	/* we save one virtqueue for control virtqueue should we require it */
 	max_vqs = MLX5_CAP_DEV_VDPA_EMULATION(mdev, max_num_virtio_queues);
 	max_vqs = min_t(u32, max_vqs, MLX5_MAX_SUPPORTED_VQS);

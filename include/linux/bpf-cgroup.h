@@ -27,19 +27,6 @@ struct task_struct;
 extern struct static_key_false cgroup_bpf_enabled_key[MAX_BPF_ATTACH_TYPE];
 #define cgroup_bpf_enabled(type) static_branch_unlikely(&cgroup_bpf_enabled_key[type])
 
-#define BPF_CGROUP_STORAGE_NEST_MAX	8
-
-struct bpf_cgroup_storage_info {
-	struct task_struct *task;
-	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE];
-};
-
-/* For each cpu, permit maximum BPF_CGROUP_STORAGE_NEST_MAX number of tasks
- * to use bpf cgroup storage simultaneously.
- */
-DECLARE_PER_CPU(struct bpf_cgroup_storage_info,
-		bpf_cgroup_storage_info[BPF_CGROUP_STORAGE_NEST_MAX]);
-
 #define for_each_cgroup_storage_type(stype) \
 	for (stype = 0; stype < MAX_BPF_CGROUP_STORAGE_TYPE; stype++)
 
@@ -172,6 +159,7 @@ static inline enum bpf_cgroup_storage_type cgroup_storage_type(
 	return BPF_CGROUP_STORAGE_SHARED;
 }
 
+<<<<<<< HEAD
 static inline int bpf_cgroup_storage_set(struct bpf_cgroup_storage
 					 *storage[MAX_BPF_CGROUP_STORAGE_TYPE])
 {
@@ -210,6 +198,8 @@ static inline void bpf_cgroup_storage_unset(void)
 	}
 }
 
+=======
+>>>>>>> linux-next/akpm-base
 struct bpf_cgroup_storage *
 cgroup_storage_lookup(struct bpf_cgroup_storage_map *map,
 		      void *key, bool locked);
@@ -487,9 +477,6 @@ static inline int cgroup_bpf_prog_query(const union bpf_attr *attr,
 	return -EINVAL;
 }
 
-static inline int bpf_cgroup_storage_set(
-	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE]) { return 0; }
-static inline void bpf_cgroup_storage_unset(void) {}
 static inline int bpf_cgroup_storage_assign(struct bpf_prog_aux *aux,
 					    struct bpf_map *map) { return 0; }
 static inline struct bpf_cgroup_storage *bpf_cgroup_storage_alloc(
