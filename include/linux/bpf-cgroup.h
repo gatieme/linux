@@ -159,47 +159,6 @@ static inline enum bpf_cgroup_storage_type cgroup_storage_type(
 	return BPF_CGROUP_STORAGE_SHARED;
 }
 
-<<<<<<< HEAD
-static inline int bpf_cgroup_storage_set(struct bpf_cgroup_storage
-					 *storage[MAX_BPF_CGROUP_STORAGE_TYPE])
-{
-	enum bpf_cgroup_storage_type stype;
-	int i, err = 0;
-
-	preempt_disable();
-	for (i = 0; i < BPF_CGROUP_STORAGE_NEST_MAX; i++) {
-		if (unlikely(this_cpu_read(bpf_cgroup_storage_info[i].task) != NULL))
-			continue;
-
-		this_cpu_write(bpf_cgroup_storage_info[i].task, current);
-		for_each_cgroup_storage_type(stype)
-			this_cpu_write(bpf_cgroup_storage_info[i].storage[stype],
-				       storage[stype]);
-		goto out;
-	}
-	err = -EBUSY;
-	WARN_ON_ONCE(1);
-
-out:
-	preempt_enable();
-	return err;
-}
-
-static inline void bpf_cgroup_storage_unset(void)
-{
-	int i;
-
-	for (i = BPF_CGROUP_STORAGE_NEST_MAX - 1; i >= 0; i--) {
-		if (likely(this_cpu_read(bpf_cgroup_storage_info[i].task) != current))
-			continue;
-
-		this_cpu_write(bpf_cgroup_storage_info[i].task, NULL);
-		return;
-	}
-}
-
-=======
->>>>>>> linux-next/akpm-base
 struct bpf_cgroup_storage *
 cgroup_storage_lookup(struct bpf_cgroup_storage_map *map,
 		      void *key, bool locked);

@@ -235,11 +235,7 @@ static struct mlx5_irq *irq_request(struct mlx5_irq_pool *pool, int i)
 		goto err_cpumask;
 	}
 	irq->pool = pool;
-<<<<<<< HEAD
-	kref_init(&irq->kref);
-=======
 	irq->refcount = 1;
->>>>>>> linux-next/akpm-base
 	irq->index = i;
 	err = xa_err(xa_store(&pool->irqs, irq->index, irq, GFP_KERNEL));
 	if (err) {

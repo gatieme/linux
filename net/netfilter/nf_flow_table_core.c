@@ -183,13 +183,6 @@ static void flow_offload_fixup_ct_timeout(struct nf_conn *ct)
 	struct net *net = nf_ct_net(ct);
 	int l4num = nf_ct_protonum(ct);
 	s32 timeout;
-<<<<<<< HEAD
-
-	l4proto = nf_ct_l4proto_find(l4num);
-	if (!l4proto)
-		return;
-=======
->>>>>>> linux-next/akpm-base
 
 	if (l4num == IPPROTO_TCP) {
 		struct nf_tcp_net *tn = nf_tcp_pernet(net);

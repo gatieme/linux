@@ -415,19 +415,9 @@ BPF_CALL_2(bpf_get_local_storage, struct bpf_map *, map, u64, flags)
 	struct bpf_cg_run_ctx *ctx;
 	void *ptr;
 
-<<<<<<< HEAD
-	for (i = BPF_CGROUP_STORAGE_NEST_MAX - 1; i >= 0; i--) {
-		if (likely(this_cpu_read(bpf_cgroup_storage_info[i].task) != current))
-			continue;
-
-		storage = this_cpu_read(bpf_cgroup_storage_info[i].storage[stype]);
-		break;
-	}
-=======
 	/* get current cgroup storage from BPF run context */
 	ctx = container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
 	storage = ctx->prog_item->cgroup_storage[stype];
->>>>>>> linux-next/akpm-base
 
 	if (stype == BPF_CGROUP_STORAGE_SHARED)
 		ptr = &READ_ONCE(storage->buf)->data[0];

@@ -21,8 +21,6 @@
 #define BNXT_PTP_QTS_TX_ENABLES	(PORT_TS_QUERY_REQ_ENABLES_PTP_SEQ_ID |	\
 				 PORT_TS_QUERY_REQ_ENABLES_TS_REQ_TIMEOUT | \
 				 PORT_TS_QUERY_REQ_ENABLES_PTP_HDR_OFFSET)
-<<<<<<< HEAD
-=======
 
 struct pps_pin {
 	u8 event;
@@ -73,7 +71,6 @@ struct bnxt_pps {
 #define BNXT_MAX_TSIO_PINS	4
 	struct pps_pin pins[BNXT_MAX_TSIO_PINS];
 };
->>>>>>> linux-next/akpm-base
 
 struct bnxt_ptp_cfg {
 	struct ptp_clock_info	ptp_info;
@@ -131,11 +128,8 @@ do {						\
 #endif
 
 int bnxt_ptp_parse(struct sk_buff *skb, u16 *seq_id, u16 *hdr_off);
-<<<<<<< HEAD
-=======
 void bnxt_ptp_pps_event(struct bnxt *bp, u32 data1, u32 data2);
 void bnxt_ptp_reapply_pps(struct bnxt *bp);
->>>>>>> linux-next/akpm-base
 int bnxt_hwtstamp_set(struct net_device *dev, struct ifreq *ifr);
 int bnxt_hwtstamp_get(struct net_device *dev, struct ifreq *ifr);
 int bnxt_get_tx_ts_p5(struct bnxt *bp, struct sk_buff *skb);
