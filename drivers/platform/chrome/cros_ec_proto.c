@@ -279,6 +279,15 @@ static int cros_ec_host_command_proto_query(struct cros_ec_device *ec_dev,
 	msg->insize = sizeof(struct ec_response_get_protocol_info);
 
 	ret = send_command(ec_dev, msg);
+	/*
+	 * Send command once again when timeout occurred.
+	 * Fingerprint MCU (FPMCU) is restarted during system boot which
+	 * introduces small window in which FPMCU won't respond for any
+	 * messages sent by kernel. There is no need to wait before next
+	 * attempt because we waited at least EC_MSG_DEADLINE_MS.
+	 */
+	if (ret == -ETIMEDOUT)
+		ret = send_command(ec_dev, msg);
 
 	if (ret < 0) {
 		dev_dbg(ec_dev->dev,
@@ -804,6 +813,7 @@ EXPORT_SYMBOL(cros_ec_get_host_event);
 int cros_ec_check_features(struct cros_ec_dev *ec, int feature)
 {
 	struct cros_ec_command *msg;
+	u32 mask;
 	int ret;
 
 	if (ec->features[0] == -1U && ec->features[1] == -1U) {
@@ -830,7 +840,12 @@ int cros_ec_check_features(struct cros_ec_dev *ec, int feature)
 		kfree(msg);
 	}
 
-	return ec->features[feature / 32] & EC_FEATURE_MASK_0(feature);
+	if (feature >= 32)
+		mask = EC_FEATURE_MASK_1(feature);
+	else
+		mask = EC_FEATURE_MASK_0(feature);
+
+	return ec->features[feature / 32] & mask;
 }
 EXPORT_SYMBOL_GPL(cros_ec_check_features);
 
