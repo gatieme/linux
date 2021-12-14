@@ -749,6 +749,7 @@ void __noreturn do_exit(long code)
 
 	io_uring_files_cancel();
 	exit_signals(tsk);  /* sets PF_EXITING */
+	umcg_handle_exit();
 
 	/* sync mm's RSS info before statistics gathering */
 	if (tsk->mm)
@@ -871,6 +872,10 @@ void __noreturn make_task_dead(int signr)
 			preempt_count());
 		preempt_count_set(PREEMPT_ENABLED);
 	}
+
+	/* Turn off UMCG sched hooks. */
+	if (unlikely(tsk->flags & PF_UMCG_WORKER))
+		tsk->flags &= ~PF_UMCG_WORKER;
 
 	/*
 	 * We're taking recursive faults here in make_task_dead. Safest is to just

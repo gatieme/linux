@@ -23,6 +23,10 @@
 # define _TIF_UPROBE			(0)
 #endif
 
+#ifndef _TIF_UMCG
+# define _TIF_UMCG			(0)
+#endif
+
 /*
  * SYSCALL_WORK flags handled in syscall_enter_from_user_mode()
  */
@@ -43,11 +47,13 @@
 				 SYSCALL_WORK_SYSCALL_EMU |		\
 				 SYSCALL_WORK_SYSCALL_AUDIT |		\
 				 SYSCALL_WORK_SYSCALL_USER_DISPATCH |	\
+				 SYSCALL_WORK_SYSCALL_UMCG |		\
 				 ARCH_SYSCALL_WORK_ENTER)
 #define SYSCALL_WORK_EXIT	(SYSCALL_WORK_SYSCALL_TRACEPOINT |	\
 				 SYSCALL_WORK_SYSCALL_TRACE |		\
 				 SYSCALL_WORK_SYSCALL_AUDIT |		\
 				 SYSCALL_WORK_SYSCALL_USER_DISPATCH |	\
+				 SYSCALL_WORK_SYSCALL_UMCG |		\
 				 SYSCALL_WORK_SYSCALL_EXIT_TRAP	|	\
 				 ARCH_SYSCALL_WORK_EXIT)
 
@@ -201,8 +207,11 @@ static inline void local_irq_disable_exit_to_user(void)
  */
 static inline void irqentry_irq_enable(struct pt_regs *regs)
 {
-	if (!regs_irqs_disabled(regs))
+	if (!regs_irqs_disabled(regs)) {
 		local_irq_enable();
+		if (user_mode(regs) && (current->flags & PF_UMCG_WORKER))
+			umcg_sys_enter(regs, -1);
+	}
 }
 
 /**
@@ -212,8 +221,11 @@ static inline void irqentry_irq_enable(struct pt_regs *regs)
  */
 static inline void irqentry_irq_disable(struct pt_regs *regs)
 {
-	if (!regs_irqs_disabled(regs))
+	if (!regs_irqs_disabled(regs)) {
+		if (user_mode(regs) && (current->flags & PF_UMCG_WORKER))
+			umcg_sys_exit(regs);
 		local_irq_disable();
+	}
 }
 
 /**

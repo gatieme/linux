@@ -8,6 +8,7 @@
 #include <linux/livepatch.h>
 #include <linux/audit.h>
 #include <linux/tick.h>
+#include <linux/sched.h>
 
 #include "common.h"
 
@@ -77,6 +78,9 @@ static long syscall_trace_enter(struct pt_regs *regs, long syscall,
 
 	if (unlikely(work & SYSCALL_WORK_SYSCALL_TRACEPOINT))
 		trace_sys_enter(regs, syscall);
+
+	if (work & SYSCALL_WORK_SYSCALL_UMCG)
+		umcg_sys_enter(regs, syscall);
 
 	syscall_enter_audit(regs, syscall);
 
@@ -149,8 +153,7 @@ static unsigned long exit_to_user_mode_loop(struct pt_regs *regs,
 	 * Before returning to user space ensure that all pending work
 	 * items have been completed.
 	 */
-	while (ti_work & EXIT_TO_USER_MODE_WORK) {
-
+	do {
 		local_irq_enable_exit_to_user(ti_work);
 
 		if (ti_work & _TIF_NEED_RESCHED)
@@ -161,6 +164,10 @@ static unsigned long exit_to_user_mode_loop(struct pt_regs *regs,
 
 		if (ti_work & _TIF_PATCH_PENDING)
 			klp_update_patch_state(current);
+
+		/* must be before handle_signal_work(); terminates on sigpending */
+		if (ti_work & _TIF_UMCG)
+			umcg_notify_resume(regs);
 
 		if (ti_work & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
 			arch_do_signal_or_restart(regs);
@@ -182,7 +189,7 @@ static unsigned long exit_to_user_mode_loop(struct pt_regs *regs,
 		tick_nohz_user_enter_prepare();
 
 		ti_work = read_thread_flags();
-	}
+	} while (ti_work & EXIT_TO_USER_MODE_WORK);
 
 	/* Return the latest work state for arch_exit_to_user_mode() */
 	return ti_work;
@@ -197,7 +204,7 @@ static void exit_to_user_mode_prepare(struct pt_regs *regs)
 	/* Flush pending rcuog wakeup before the last need_resched() check */
 	tick_nohz_user_enter_prepare();
 
-	if (unlikely(ti_work & EXIT_TO_USER_MODE_WORK))
+	if (unlikely(ti_work & (EXIT_TO_USER_MODE_WORK | _TIF_UMCG)))
 		ti_work = exit_to_user_mode_loop(regs, ti_work);
 
 	arch_exit_to_user_mode_prepare(regs, ti_work);
@@ -247,6 +254,9 @@ static void syscall_exit_work(struct pt_regs *regs, unsigned long work)
 	step = report_single_step(work);
 	if (step || work & SYSCALL_WORK_SYSCALL_TRACE)
 		ptrace_report_syscall_exit(regs, step);
+
+	if (work & SYSCALL_WORK_SYSCALL_UMCG)
+		umcg_sys_exit(regs);
 }
 
 /*
