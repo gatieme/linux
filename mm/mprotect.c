@@ -112,6 +112,12 @@ static unsigned long change_pte_range(struct mmu_gather *tlb,
 					continue;
 
 				/*
+				 * Can't migrate pinned pages, avoid touching them.
+				 */
+				if (page_maybe_dma_pinned(page))
+					continue;
+
+				/*
 				 * Don't mess with PTEs if page is already on the node
 				 * a single-threaded process is running on.
 				 */
