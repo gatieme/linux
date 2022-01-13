@@ -278,6 +278,80 @@ static int umcg_wake_server(struct task_struct *tsk)
 	return ret;
 }
 
+static inline u64 __user *umcg_worker_list(struct umcg_task __user *self, bool blocked)
+{
+	if (blocked)
+		return &self->blocked_workers_ptr;
+
+	return &self->runnable_workers_ptr;
+}
+
+static int umcg_enqueue(struct task_struct *tsk, bool blocked)
+{
+	struct umcg_task __user *server = tsk->umcg_server_task;
+	struct umcg_task __user *self = tsk->umcg_task;
+	u64 first_ptr, self_ptr = (unsigned long)self;
+	u64 __user *head, __user *next;
+
+	next = umcg_worker_list(self, blocked);
+	head = umcg_worker_list(server, blocked);
+
+	/*
+	 * umcg_pin_pages() did access_ok() on both pointers, use self here
+	 * only because __user_access_begin() isn't available in generic code.
+	 */
+	if (!user_access_begin(self, sizeof(*self)))
+		return -EFAULT;
+
+	unsafe_get_user(first_ptr, head, Efault);
+	do {
+		unsafe_put_user(first_ptr, next, Efault);
+	} while (!unsafe_try_cmpxchg_user(head, &first_ptr, self_ptr, Efault));
+
+	user_access_end();
+	return 0;
+
+Efault:
+	user_access_end();
+	return -EFAULT;
+}
+
+/*
+ * Enqueue @tsk on it's server's runnable list
+ *
+ * Must be called in umcg_pin_pages() context, relies on tsk->umcg_server.
+ *
+ * cmpxchg based single linked list add such that list integrity is never
+ * violated.  Userspace *MUST* remove it from the list before changing ->state.
+ * As such, we must change state to RUNNABLE before enqueue.
+ *
+ * Returns:
+ *   0: success
+ *   -EFAULT
+ */
+static inline int umcg_enqueue_runnable(struct task_struct *tsk)
+{
+	return umcg_enqueue(tsk, false /* runnable */);
+}
+
+/*
+ * Enqueue @tsk on it's server's blocked list
+ *
+ * Must be called in umcg_pin_pages() context, relies on tsk->umcg_server.
+ *
+ * cmpxchg based single linked list add such that list integrity is never
+ * violated.  Userspace *MUST* remove it from the list before changing ->state.
+ * As such, we must change state to BLOCKED before enqueue.
+ *
+ * Returns:
+ *   0: success
+ *   -EFAULT
+ */
+static inline int umcg_enqueue_blocked(struct task_struct *tsk)
+{
+	return umcg_enqueue(tsk, true /* blocked */);
+}
+
 /* pre-schedule() */
 void umcg_wq_worker_sleeping(struct task_struct *tsk)
 {
@@ -314,6 +388,9 @@ void umcg_wq_worker_sleeping(struct task_struct *tsk)
 	if (ret)
 		UMCG_DIE_PF("state");
 
+	if (umcg_enqueue_blocked(tsk))
+		UMCG_DIE_PF("enqueue");
+
 	if (umcg_wake_server(tsk))
 		UMCG_DIE_PF("wake");
 
@@ -330,46 +407,6 @@ void umcg_wq_worker_sleeping(struct task_struct *tsk)
 void umcg_wq_worker_running(struct task_struct *tsk)
 {
 	/* nothing here, see umcg_sys_exit() */
-}
-
-/*
- * Enqueue @tsk on it's server's runnable list
- *
- * Must be called in umcg_pin_pages() context, relies on tsk->umcg_server.
- *
- * cmpxchg based single linked list add such that list integrity is never
- * violated.  Userspace *MUST* remove it from the list before changing ->state.
- * As such, we must change state to RUNNABLE before enqueue.
- *
- * Returns:
- *   0: success
- *   -EFAULT
- */
-static int umcg_enqueue_runnable(struct task_struct *tsk)
-{
-	struct umcg_task __user *server = tsk->umcg_server_task;
-	struct umcg_task __user *self = tsk->umcg_task;
-	u64 first_ptr, *head = &server->runnable_workers_ptr;
-	u64 self_ptr = (unsigned long)self;
-
-	/*
-	 * umcg_pin_pages() did access_ok() on both pointers, use self here
-	 * only because __user_access_begin() isn't available in generic code.
-	 */
-	if (!user_access_begin(self, sizeof(*self)))
-		return -EFAULT;
-
-	unsafe_get_user(first_ptr, head, Efault);
-	do {
-		unsafe_put_user(first_ptr, &self->runnable_workers_ptr, Efault);
-	} while (!unsafe_try_cmpxchg_user(head, &first_ptr, self_ptr, Efault));
-
-	user_access_end();
-	return 0;
-
-Efault:
-	user_access_end();
-	return -EFAULT;
 }
 
 static int umcg_enqueue_and_wake(struct task_struct *tsk)
@@ -887,7 +924,7 @@ static int umcg_register(struct umcg_task __user *self, u32 flags, clockid_t whi
 	if (copy_from_user(&ut, self, sizeof(ut)))
 		return -EFAULT;
 
-	if (ut.next_tid || ut.__hole[0] || ut.__zero[0] || ut.__zero[1] || ut.__zero[2])
+	if (ut.next_tid || ut.__hole[0] || ut.__zero[0] || ut.__zero[1])
 		return -EINVAL;
 
 	rcu_read_lock();

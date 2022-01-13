@@ -115,6 +115,14 @@ struct umcg_task {
 	__u64   runnable_ts;			/*   w */
 
 	/**
+	 * @blocked_workers_ptr: a single-linked list of blocked workers.
+	 *
+	 * Readable/writable by both the kernel and the userspace: the
+	 * kernel adds items to the list, userspace removes them.
+	 */
+	__u64	blocked_workers_ptr;		/* r/w */
+
+	/**
 	 * @runnable_workers_ptr: a single-linked list of runnable workers.
 	 *
 	 * Readable/writable by both the kernel and the userspace: the
@@ -122,7 +130,7 @@ struct umcg_task {
 	 */
 	__u64	runnable_workers_ptr;		/* r/w */
 
-	__u64	__zero[3];
+	__u64	__zero[2];
 
 } __attribute__((packed, aligned(UMCG_TASK_ALIGN)));
 
