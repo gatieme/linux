@@ -1209,6 +1209,12 @@ do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 NOKPROBE_SYMBOL(do_kern_addr_fault);
 
 /*
+ * EFLAGS[3] is unused and ABI defined to be 0, use it to store IRQ state,
+ * because do_user_addr_fault() is too convoluted to track things.
+ */
+#define X86_EFLAGS_MISC		(1UL << 3)
+
+/*
  * Handle faults in the user portion of the address space.  Nothing in here
  * should check X86_PF_USER without a specific justification: for almost
  * all purposes, we should treat a normal kernel access to user memory
@@ -1290,13 +1296,11 @@ void do_user_addr_fault(struct pt_regs *regs,
 	 * User-mode registers count as a user access even for any
 	 * potential system fault or CPU buglet:
 	 */
-	if (user_mode(regs)) {
-		local_irq_enable();
+	if (user_mode(regs))
 		flags |= FAULT_FLAG_USER;
-	} else {
-		if (regs->flags & X86_EFLAGS_IF)
-			local_irq_enable();
-	}
+
+	irqentry_irq_enable(regs);
+	regs->flags |= X86_EFLAGS_MISC;
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
 
@@ -1482,14 +1486,10 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 		do_kern_addr_fault(regs, error_code, address);
 	} else {
 		do_user_addr_fault(regs, error_code, address);
-		/*
-		 * User address page fault handling might have reenabled
-		 * interrupts. Fixing up all potential exit points of
-		 * do_user_addr_fault() and its leaf functions is just not
-		 * doable w/o creating an unholy mess or turning the code
-		 * upside down.
-		 */
-		local_irq_disable();
+		if (regs->flags & X86_EFLAGS_MISC) {
+			regs->flags &= ~X86_EFLAGS_MISC;
+			irqentry_irq_disable(regs);
+		}
 	}
 }
 

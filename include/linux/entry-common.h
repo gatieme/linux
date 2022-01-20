@@ -7,6 +7,7 @@
 #include <linux/syscalls.h>
 #include <linux/seccomp.h>
 #include <linux/sched.h>
+#include <asm/ptrace.h>
 
 #include <asm/entry-common.h>
 
@@ -191,6 +192,29 @@ static inline void local_irq_disable_exit_to_user(void)
 	local_irq_disable();
 }
 #endif
+
+/**
+ * irqentry_irq_enable - Conditionally enable IRQs from exceptions
+ *
+ * Common code for exceptions to (re)enable IRQs, typically done to allow
+ * from-user exceptions to schedule (since they run on the task stack).
+ */
+static inline void irqentry_irq_enable(struct pt_regs *regs)
+{
+	if (!regs_irqs_disabled(regs))
+		local_irq_enable();
+}
+
+/**
+ * irqentry_irq_disable - Conditionally disable IRQs from exceptions
+ *
+ * Counterpart of irqentry_irq_enable().
+ */
+static inline void irqentry_irq_disable(struct pt_regs *regs)
+{
+	if (!regs_irqs_disabled(regs))
+		local_irq_disable();
+}
 
 /**
  * arch_exit_to_user_mode_work - Architecture specific TIF work for exit
