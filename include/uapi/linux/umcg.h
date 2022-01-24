@@ -127,6 +127,14 @@ struct umcg_task {
 } __attribute__((packed, aligned(UMCG_TASK_ALIGN)));
 
 /**
+ * enum umcg_wait_flag - flags to pass to sys_umcg_wait
+ * @UMCG_WAIT_ENQUEUE:	Enqueue the task on runnable_workers_ptr before waiting
+ */
+enum umcg_wait_flag {
+	UMCG_WAIT_ENQUEUE	= 0x0001,
+};
+
+/**
  * enum umcg_ctl_flag - flags to pass to sys_umcg_ctl
  * @UMCG_CTL_REGISTER:   register the current task as a UMCG task
  * @UMCG_CTL_UNREGISTER: unregister the current task as a UMCG task

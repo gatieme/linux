@@ -231,7 +231,6 @@ Efault:
 
 #define UMCG_DIE(reason)	__UMCG_DIE(,reason)
 #define UMCG_DIE_PF(reason)	__UMCG_DIE(pagefault_enable(), reason)
-#define UMCG_DIE_UNPIN(reason)	__UMCG_DIE(umcg_unpin_pages(), reason)
 
 /* Called from syscall enter path and exceptions that can schedule */
 void umcg_sys_enter(struct pt_regs *regs, long syscall)
@@ -375,12 +374,20 @@ Efault:
 
 static int umcg_enqueue_and_wake(struct task_struct *tsk)
 {
-	int ret;
-
-	ret = umcg_enqueue_runnable(tsk);
+	int ret = umcg_enqueue_runnable(tsk);
 	if (!ret)
 		ret = umcg_wake_server(tsk);
 
+	return ret;
+}
+
+static int umcg_pin_enqueue_and_wake(struct task_struct *tsk)
+{
+	int ret = umcg_pin_pages();
+	if (!ret) {
+		ret = umcg_enqueue_and_wake(tsk);
+		umcg_unpin_pages();
+	}
 	return ret;
 }
 
@@ -473,16 +480,11 @@ static void umcg_unblock(void)
 	/* avoid recursion vs schedule() */
 	tsk->flags &= ~PF_UMCG_WORKER;
 
-	if (umcg_pin_pages())
-		UMCG_DIE("pin");
-
 	if (umcg_update_state(tsk, self, UMCG_TASK_BLOCKED, UMCG_TASK_RUNNABLE))
-		UMCG_DIE_UNPIN("state");
+		UMCG_DIE("state");
 
-	if (umcg_enqueue_and_wake(tsk))
-		UMCG_DIE_UNPIN("enqueue-wake");
-
-	umcg_unpin_pages();
+	if (umcg_pin_enqueue_and_wake(tsk))
+		UMCG_DIE("pin-enqueue-wake");
 
 	/* notify-resume will wait */
 
@@ -578,18 +580,13 @@ void umcg_notify_resume(struct pt_regs *regs)
 	 * have it wait.
 	 */
 	if (state & UMCG_TF_PREEMPT) {
-		if (umcg_pin_pages())
-			UMCG_DIE("pin");
-
 		if (umcg_update_state(tsk, self,
 				      UMCG_TASK_RUNNING,
 				      UMCG_TASK_RUNNABLE))
-			UMCG_DIE_UNPIN("state");
+			UMCG_DIE("state");
 
-		if (umcg_enqueue_and_wake(tsk))
-			UMCG_DIE_UNPIN("enqueue-wake");
-
-		umcg_unpin_pages();
+		if (umcg_pin_enqueue_and_wake(tsk))
+			UMCG_DIE("pin-enqueue-wake-preempt");
 	}
 
 resume:
@@ -603,8 +600,22 @@ resume:
 
 	case -ETIMEDOUT:
 		/* must be __NR_umcg_wait */
-		umcg_update_state(tsk, self, UMCG_TASK_RUNNABLE, UMCG_TASK_RUNNING);
 		regs_set_return_value(regs, ret);
+
+		if (worker) {
+			/*
+			 * Given sys_umcg_wait() does a umcg_pin_pages() sanity
+			 * check, there is no reason for this to fail other than
+			 * userspace working at it.
+			 */
+			if (umcg_pin_enqueue_and_wake(tsk))
+				UMCG_DIE("pin-enqueue-wake-timo");
+
+			tsk->umcg_timeout = 0;
+			goto resume;
+		}
+
+		umcg_update_state(tsk, self, UMCG_TASK_RUNNABLE, UMCG_TASK_RUNNING);
 		break;
 
 	default:
@@ -771,7 +782,6 @@ put_next:
  * Returns:
  * 0		- OK;
  * -ETIMEDOUT	- the timeout expired;
- * -ERANGE	- the timeout is out of range (worker);
  * -EAGAIN	- ::state wasn't RUNNABLE, concurrent wakeup;
  * -EFAULT	- failed accessing struct umcg_task __user of the current
  *		  task, the server or next;
@@ -785,21 +795,25 @@ SYSCALL_DEFINE2(umcg_wait, u32, flags, s64, timo)
 	struct task_struct *tsk = current;
 	struct umcg_task __user *self = READ_ONCE(tsk->umcg_task);
 	bool worker = tsk->flags & PF_UMCG_WORKER;
-	int ret;
+	int ret = -EINVAL;
 
-	if (!self || flags)
-		return -EINVAL;
+	if (!self || (flags & ~(UMCG_WAIT_ENQUEUE)))
+		goto unblock;
 
+	if ((flags & UMCG_WAIT_ENQUEUE) && (timo || !worker))
+		goto unblock;
+
+	ret = -EOPNOTSUPP;
 	if (tsk->umcg_stack_pointer)
-		return -EOPNOTSUPP;
+		goto unblock;
 
-	if (worker) {
+	if (worker)
 		tsk->flags &= ~PF_UMCG_WORKER;
-		if (timo)
-			return -ERANGE;
-	}
 
-	/* see umcg_sys_{enter,exit}() syscall exceptions */
+	/*
+	 * Sanity check; we can still easily fail the syscall at this point.
+	 * Also see umcg_sys_{enter,exit}() syscall exceptions.
+	 */
 	ret = umcg_pin_pages();
 	if (ret)
 		goto unblock;
@@ -815,15 +829,18 @@ SYSCALL_DEFINE2(umcg_wait, u32, flags, s64, timo)
 	if (ret)
 		goto unpin;
 
-	if (worker) {
+	if (flags & UMCG_WAIT_ENQUEUE) {
 		/*
 		 * If this fails it is possible ::next_tid is already running
 		 * while this task is not going to block. This violates our
 		 * constraints.
 		 *
-		 * That said, pretty much the only way to make this fail is by
-		 * force munmap()'ing things. In which case one is most welcome
-		 * to the pieces.
+		 * Userspace can detect this case by looking at: ::next_tid &
+		 * TID_RUNNING.
+		 *
+		 * Given we passed the sanity check above; the only way for
+		 * this to actually fail is if userspace actively works at it,
+		 * in which case it is most welcome to the pieces.
 		 */
 		ret = umcg_enqueue_and_wake(tsk);
 		if (ret)
