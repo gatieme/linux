@@ -1311,6 +1311,10 @@ struct task_struct {
 	struct task_struct	*umcg_server;
 	struct umcg_task __user *umcg_server_task;
 	struct page		*umcg_server_page;
+
+	/* umcg_notify_resume() */
+	s64			umcg_timeout;
+	unsigned long		umcg_stack_pointer;
 #endif
 
 	struct tlbflush_unmap_batch	tlb_ubc;

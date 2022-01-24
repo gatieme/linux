@@ -133,16 +133,20 @@ static void umcg_clear_task(struct task_struct *tsk)
 	 */
 	if (tsk->umcg_task) {
 		WRITE_ONCE(tsk->umcg_task, NULL);
-		tsk->umcg_page = NULL;
-
-		tsk->umcg_server = NULL;
-		tsk->umcg_server_page = NULL;
-		tsk->umcg_server_task = NULL;
 
 		tsk->flags &= ~PF_UMCG_WORKER;
 		clear_task_syscall_work(tsk, SYSCALL_UMCG);
 		clear_tsk_thread_flag(tsk, TIF_UMCG);
 	}
+
+	tsk->umcg_page = NULL;
+
+	tsk->umcg_server = NULL;
+	tsk->umcg_server_page = NULL;
+	tsk->umcg_server_task = NULL;
+
+	tsk->umcg_timeout = 0;
+	tsk->umcg_stack_pointer = 0;
 }
 
 /* Called for a forked or execve-ed child. */
@@ -283,7 +287,9 @@ void umcg_wq_worker_sleeping(struct task_struct *tsk)
 
 	if (!tsk->umcg_server) {
 		/*
-		 * Already blocked before, the pages are unpinned.
+		 * Either this task blocked before, or SYSCALL_UMCG is
+		 * (temporarily) disabled (see umcg_notify_resume()). Either
+		 * way the pages are unpinned and there's nothing to do.
 		 */
 		return;
 	}
@@ -388,7 +394,7 @@ static int umcg_enqueue_and_wake(struct task_struct *tsk)
  * -ETIMEDOUT
  * -EFAULT
  */
-static int umcg_wait(u64 timo)
+static int umcg_wait(s64 timo)
 {
 	struct task_struct *tsk = current;
 	struct umcg_task __user *self = tsk->umcg_task;
@@ -459,7 +465,7 @@ static int umcg_wait(u64 timo)
 /*
  * Blocked case for umcg_sys_exit(), shared with sys_umcg_ctl().
  */
-static void umcg_unblock_and_wait(void)
+static void umcg_unblock(void)
 {
 	struct task_struct *tsk = current;
 	struct umcg_task __user *self = READ_ONCE(tsk->umcg_task);
@@ -478,15 +484,7 @@ static void umcg_unblock_and_wait(void)
 
 	umcg_unpin_pages();
 
-	switch (umcg_wait(0)) {
-	case 0:
-	case -EINTR:
-		/* notify_resume will continue the wait after the signal */
-		break;
-
-	default:
-		UMCG_DIE("wait");
-	}
+	/* notify-resume will wait */
 
 	tsk->flags |= PF_UMCG_WORKER;
 }
@@ -509,7 +507,7 @@ void umcg_sys_exit(struct pt_regs *regs)
 		return;
 	}
 
-	umcg_unblock_and_wait();
+	umcg_unblock();
 }
 
 /* return-to-user path */
@@ -519,26 +517,66 @@ void umcg_notify_resume(struct pt_regs *regs)
 	struct umcg_task __user *self = tsk->umcg_task;
 	bool worker = tsk->flags & PF_UMCG_WORKER;
 	u32 state;
+	int ret;
 
 	/* avoid recursion vs schedule() */
 	if (worker)
-		current->flags &= ~PF_UMCG_WORKER;
+		tsk->flags &= ~PF_UMCG_WORKER;
+
+	/*
+	 * Unix signals are horrible, but we have to handle them somehow.
+	 *
+	 * - simply discarding a signal breaks userspace so is not an option.
+	 *
+	 * - returning -EINTR and have userspace deal with it is not an option
+	 *   since we can be blocked here due to !syscall reasons (page-faults
+	 *   for example). But it's also not permissible to have random
+	 *   syscalls return -EINTR that didn't before.
+	 *
+	 * - subjecting signal handlers to UMCG would render existing signal
+	 *   handler code subject to the whims and latencies of UMCG; given that
+	 *   most signal hander code is short and time sensitive, this seems
+	 *   undesirable (consider ^C not working because it got delivered to a
+	 *   blocked task).
+	 *
+	 * Therefore the chosen path is to exclude signal context from UMCG
+	 * entirely and treat it as unmanaged time. This requires that every
+	 * path through this function check signal_pending() and pass through
+	 * Eintr if so.
+	 */
+	if (tsk->umcg_stack_pointer) {
+		if (tsk->umcg_stack_pointer != user_stack_pointer(regs))
+			goto out;
+
+		tsk->umcg_stack_pointer = 0;
+
+		if (worker)
+			set_syscall_work(SYSCALL_UMCG);
+
+		goto resume;
+	}
 
 	if (get_user(state, &self->state))
 		UMCG_DIE("get-state");
 
 	state &= UMCG_TASK_MASK | UMCG_TF_MASK;
-	if (state == UMCG_TASK_RUNNING)
-		goto done;
 
 	/*
 	 * See comment at UMCG_TF_COND_WAIT; TL;DR: user *will* call
 	 * sys_umcg_wait() and signals/interrupts shouldn't block
 	 * return-to-user.
 	 */
-	if (state == (UMCG_TASK_RUNNABLE | UMCG_TF_COND_WAIT))
+	if (state == (UMCG_TASK_RUNNABLE | UMCG_TF_COND_WAIT)) {
+		if (signal_pending(tsk))
+			goto Eintr;
 		goto done;
+	}
 
+	/*
+	 * See comment at UMCG_TF_PREEMPT; TL;DR user requested this
+	 * task to be preempted. Place it on the runnable list and
+	 * have it wait.
+	 */
 	if (state & UMCG_TF_PREEMPT) {
 		if (umcg_pin_pages())
 			UMCG_DIE("pin");
@@ -554,10 +592,19 @@ void umcg_notify_resume(struct pt_regs *regs)
 		umcg_unpin_pages();
 	}
 
-	switch (umcg_wait(0)) {
+resume:
+	ret = umcg_wait(tsk->umcg_timeout);
+	switch (ret) {
 	case 0:
+		break;
+
 	case -EINTR:
-		/* we will resume the wait after the signal */
+		goto Eintr;
+
+	case -ETIMEDOUT:
+		/* must be __NR_umcg_wait */
+		umcg_update_state(tsk, self, UMCG_TASK_RUNNABLE, UMCG_TASK_RUNNING);
+		regs_set_return_value(regs, ret);
 		break;
 
 	default:
@@ -565,8 +612,24 @@ void umcg_notify_resume(struct pt_regs *regs)
 	}
 
 done:
+	tsk->umcg_timeout = 0;
+out:
 	if (worker)
-		current->flags |= PF_UMCG_WORKER;
+		tsk->flags |= PF_UMCG_WORKER;
+	return;
+
+Eintr:
+	WARN_ON_ONCE(tsk->umcg_stack_pointer);
+	tsk->umcg_stack_pointer = user_stack_pointer(regs);
+	if (worker) {
+		/*
+		 * Suspend UMCG by disabling the umcg_sys_{entry,exit}() hooks,
+		 * this makes the scheduler hook(s) a no-op and PF_UMCG_WORKER
+		 * is preserved to identify workers.
+		 */
+		clear_task_syscall_work(tsk, SYSCALL_UMCG);
+	}
+	goto out;
 }
 
 /**
@@ -576,10 +639,14 @@ done:
  * 0		- Ok;
  * -ESRCH	- not a related UMCG task
  * -EINVAL	- another error happened (unknown flags, etc..)
+ * -EOPNOTSUPP	- UMCG not available in signal context
  */
 SYSCALL_DEFINE2(umcg_kick, u32, flags, pid_t, tid)
 {
 	struct task_struct *task;
+
+	if (current->umcg_stack_pointer)
+		return -EOPNOTSUPP;
 
 	if (flags)
 		return -EINVAL;
@@ -711,8 +778,9 @@ put_next:
  * -ESRCH	- the task to wake not found or not a UMCG task;
  * -EINVAL	- another error happened (e.g. the current task is not a
  *		  UMCG task, etc.)
+ * -EOPNOTSUPP	- UMCG not available in signal context
  */
-SYSCALL_DEFINE2(umcg_wait, u32, flags, u64, timo)
+SYSCALL_DEFINE2(umcg_wait, u32, flags, s64, timo)
 {
 	struct task_struct *tsk = current;
 	struct umcg_task __user *self = READ_ONCE(tsk->umcg_task);
@@ -721,6 +789,9 @@ SYSCALL_DEFINE2(umcg_wait, u32, flags, u64, timo)
 
 	if (!self || flags)
 		return -EINVAL;
+
+	if (tsk->umcg_stack_pointer)
+		return -EOPNOTSUPP;
 
 	if (worker) {
 		tsk->flags &= ~PF_UMCG_WORKER;
@@ -761,16 +832,9 @@ SYSCALL_DEFINE2(umcg_wait, u32, flags, u64, timo)
 
 	umcg_unpin_pages();
 
-	ret = umcg_wait(timo);
-	switch (ret) {
-	case 0:		/* all done */
-	case -EINTR:	/* umcg_notify_resume() will continue the wait */
-		ret = 0;
-		break;
+	tsk->umcg_timeout = timo;
 
-	default:
-		goto unblock;
-	}
+	/* notify-resume will wait */
 out:
 	if (worker)
 		tsk->flags |= PF_UMCG_WORKER;
@@ -837,7 +901,7 @@ static int umcg_register(struct umcg_task __user *self, u32 flags, clockid_t whi
 		set_syscall_work(SYSCALL_UMCG);		/* hook syscall */
 		set_thread_flag(TIF_UMCG);		/* hook return-to-user */
 
-		umcg_unblock_and_wait();
+		umcg_unblock();
 
 	} else {
 		if ((ut.state & (UMCG_TASK_MASK | UMCG_TF_MASK)) != UMCG_TASK_RUNNING)
@@ -936,6 +1000,7 @@ static int umcg_unregister(struct umcg_task __user *self, u32 flags)
  * -EFAULT	- failed to read @self
  * -EINVAL	- some other error occurred
  * -ESRCH	- no such server_tid
+ * -EOPNOTSUPP	- UMCG not available in signal context
  */
 SYSCALL_DEFINE3(umcg_ctl, u32, flags, struct umcg_task __user *, self, clockid_t, which_clock)
 {
@@ -943,6 +1008,9 @@ SYSCALL_DEFINE3(umcg_ctl, u32, flags, struct umcg_task __user *, self, clockid_t
 
 	if ((unsigned long)self % UMCG_TASK_ALIGN)
 		return -EINVAL;
+
+	if (current->umcg_stack_pointer)
+		return -EOPNOTSUPP;
 
 	flags &= ~UMCG_CTL_CMD;
 
