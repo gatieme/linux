@@ -38,8 +38,10 @@
  *
  * Must only be set on UMCG_TASK_RUNNING; once set, any subsequent
  * return-to-user (eg sys_umcg_kick()) will perform the equivalent of
- * sys_umcg_wait() on it. That is, it will wake next_tid/server_tid, transfer
- * to RUNNABLE and enqueue on the server's runnable list.
+ * sys_umcg_wait() on it. That is, transfer to RUNNABLE and enqueue on the
+ * server's runnable list and wake the server.
+ *
+ * Specifically, UMCG_TF_PREEMPT does *not* consider self->next_tid.
  */
 #define UMCG_TF_PREEMPT			0x0100U
 /*
@@ -150,12 +152,14 @@ enum umcg_wait_flag {
  * @UMCG_CTL_UNREGISTER: unregister the current task as a UMCG task
  * @UMCG_CTL_WORKER:     register the current task as a UMCG worker
  * @UMCG_CTL_MULTI:	 allow 1:n worker relations, enables blocked_workers_ptr
+ * @UMCG_CTL_COOP:	 co-operative server (as opposed to preemptive)
  */
 enum umcg_ctl_flag {
 	UMCG_CTL_REGISTER	= 0x00001,
 	UMCG_CTL_UNREGISTER	= 0x00002,
 	UMCG_CTL_WORKER		= 0x10000,
 	UMCG_CTL_MULTI		= 0x20000,
+	UMCG_CTL_COOP		= 0x40000,
 };
 
 #endif /* _UAPI_LINUX_UMCG_H */

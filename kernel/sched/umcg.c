@@ -451,20 +451,33 @@ void umcg_wq_worker_running(struct task_struct *tsk)
 	/* nothing here, see umcg_sys_exit() */
 }
 
-static int umcg_enqueue_and_wake(struct task_struct *tsk)
+static int umcg_enqueue_and_wake(struct task_struct *tsk, bool force)
 {
-	int ret = umcg_enqueue_runnable(tsk);
-	if (!ret)
-		ret = umcg_wake_server(tsk);
+	u32 next_tid;
+	int ret;
+
+	ret = umcg_enqueue_runnable(tsk);
+	if (!ret) {
+		/*
+		 * Wake the server when:
+		 *  - !COOP (preemptive)
+		 *  - forced
+		 *  - server->next_tid == 0 (idle)
+		 */
+		if (!(tsk->umcg_server->umcg_flags & UMCG_CTL_COOP) || force ||
+		    (!(ret = get_user(next_tid, &tsk->umcg_server_task->next_tid)) &&
+		     !next_tid))
+			ret = umcg_wake_server(tsk);
+	}
 
 	return ret;
 }
 
-static int umcg_pin_enqueue_and_wake(struct task_struct *tsk)
+static int umcg_pin_enqueue_and_wake(struct task_struct *tsk, bool force)
 {
 	int ret = umcg_pin_pages();
 	if (!ret) {
-		ret = umcg_enqueue_and_wake(tsk);
+		ret = umcg_enqueue_and_wake(tsk, force);
 		umcg_unpin_pages();
 	}
 	return ret;
@@ -562,7 +575,7 @@ static void umcg_unblock(void)
 	if (umcg_update_state(tsk, self, UMCG_TASK_BLOCKED, UMCG_TASK_RUNNABLE))
 		UMCG_DIE("state");
 
-	if (umcg_pin_enqueue_and_wake(tsk))
+	if (umcg_pin_enqueue_and_wake(tsk, false))
 		UMCG_DIE("pin-enqueue-wake");
 
 	/* notify-resume will wait */
@@ -664,7 +677,7 @@ void umcg_notify_resume(struct pt_regs *regs)
 				      UMCG_TASK_RUNNABLE))
 			UMCG_DIE("state");
 
-		if (umcg_pin_enqueue_and_wake(tsk))
+		if (umcg_pin_enqueue_and_wake(tsk, true))
 			UMCG_DIE("pin-enqueue-wake-preempt");
 	}
 
@@ -687,7 +700,7 @@ resume:
 			 * check, there is no reason for this to fail other than
 			 * userspace working at it.
 			 */
-			if (umcg_pin_enqueue_and_wake(tsk))
+			if (umcg_pin_enqueue_and_wake(tsk, false))
 				UMCG_DIE("pin-enqueue-wake-timo");
 
 			tsk->umcg_timeout = 0;
@@ -921,7 +934,7 @@ SYSCALL_DEFINE2(umcg_wait, u32, flags, s64, timo)
 		 * this to actually fail is if userspace actively works at it,
 		 * in which case it is most welcome to the pieces.
 		 */
-		ret = umcg_enqueue_and_wake(tsk);
+		ret = umcg_enqueue_and_wake(tsk, false);
 		if (ret)
 			goto unpin;
 	}
@@ -1112,7 +1125,7 @@ SYSCALL_DEFINE3(umcg_ctl, u32, flags, struct umcg_task __user *, self, clockid_t
 
 	flags &= ~UMCG_CTL_CMD;
 
-	if (flags & ~(UMCG_CTL_WORKER|UMCG_CTL_MULTI))
+	if (flags & ~(UMCG_CTL_WORKER|UMCG_CTL_MULTI|UMCG_CTL_COOP))
 		return -EINVAL;
 
 	switch (cmd) {
