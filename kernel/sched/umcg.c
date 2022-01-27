@@ -575,16 +575,22 @@ done:
  */
 SYSCALL_DEFINE2(umcg_kick, u32, flags, pid_t, tid)
 {
-	struct task_struct *task = umcg_get_task(tid);
-	if (!task)
-		return -ESRCH;
+	struct task_struct *task;
 
 	if (flags)
 		return -EINVAL;
 
+	task = umcg_get_task(tid);
+	if (!task)
+		return -ESRCH;
+
+	if (!try_to_wake_up(task, TASK_NORMAL, WF_CURRENT_CPU)) {
 #ifdef CONFIG_SMP
-	smp_send_reschedule(task_cpu(task));
+		smp_send_reschedule(task_cpu(task));
 #endif
+	}
+
+	put_task_struct(task);
 
 	return 0;
 }
