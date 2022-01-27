@@ -335,13 +335,49 @@ static inline int umcg_enqueue_runnable(struct task_struct *tsk)
 }
 
 /*
+ * Validate the BLOCK'ing task is the currently RUNNING task.
+ *
+ * Only appropriate for !UMCG_CTL_MULTI
+ *
+ * Returns:
+ *   0:		success
+ *   -ESRCH:	server::next_tid is not a valid UMCG task
+ *   -EINVAL:	server::next_tid doesn't match @tsk
+ *   -EFAULT
+ */
+static int umcg_validate_running(struct task_struct *tsk)
+{
+	struct task_struct *next;
+	u32 next_tid;
+	int ret;
+
+	if (tsk->umcg_server->umcg_flags & UMCG_CTL_MULTI)
+		return 0;
+
+	/*
+	 * When !MULTI, ensure this worker is the current worker,
+	 * ensuring the 1:1 relation.
+	 */
+	if (get_user(next_tid, &tsk->umcg_server_task->next_tid))
+		return -EFAULT;
+
+	next = umcg_get_task(next_tid);
+	if (!next)
+		return -ESRCH;
+
+	ret = (next == tsk) ? 0 : -EINVAL;
+
+	put_task_struct(next);
+
+	return ret;
+}
+
+/*
  * Enqueue @tsk on it's server's blocked list
  *
  * Must be called in umcg_pin_pages() context, relies on tsk->umcg_server.
  *
- * cmpxchg based single linked list add such that list integrity is never
- * violated.  Userspace *MUST* remove it from the list before changing ->state.
- * As such, we must change state to BLOCKED before enqueue.
+ * Only done for UMCG_CTL_MULTI.
  *
  * Returns:
  *   0: success
@@ -349,7 +385,10 @@ static inline int umcg_enqueue_runnable(struct task_struct *tsk)
  */
 static inline int umcg_enqueue_blocked(struct task_struct *tsk)
 {
-	return umcg_enqueue(tsk, true /* blocked */);
+	if (tsk->umcg_server->umcg_flags & UMCG_CTL_MULTI)
+		return umcg_enqueue(tsk, true /* blocked */);
+
+	return 0;
 }
 
 /* pre-schedule() */
@@ -369,6 +408,9 @@ void umcg_wq_worker_sleeping(struct task_struct *tsk)
 
 	/* Must not fault, mmap_sem might be held. */
 	pagefault_disable();
+
+	if (umcg_validate_running(tsk))
+		UMCG_DIE_PF("validate-running");
 
 	ret = umcg_update_state(tsk, self, UMCG_TASK_RUNNING, UMCG_TASK_BLOCKED);
 	if (ret == -EAGAIN) {
@@ -918,6 +960,8 @@ static int umcg_register(struct umcg_task __user *self, u32 flags, clockid_t whi
 		return -EINVAL;
 	}
 
+	current->umcg_flags = flags;
+
 	if (current->umcg_task || !self)
 		return -EINVAL;
 
@@ -1068,7 +1112,7 @@ SYSCALL_DEFINE3(umcg_ctl, u32, flags, struct umcg_task __user *, self, clockid_t
 
 	flags &= ~UMCG_CTL_CMD;
 
-	if (flags & ~(UMCG_CTL_WORKER))
+	if (flags & ~(UMCG_CTL_WORKER|UMCG_CTL_MULTI))
 		return -EINVAL;
 
 	switch (cmd) {

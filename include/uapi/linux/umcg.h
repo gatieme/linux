@@ -119,6 +119,8 @@ struct umcg_task {
 	 *
 	 * Readable/writable by both the kernel and the userspace: the
 	 * kernel adds items to the list, userspace removes them.
+	 *
+	 * Only used with UMCG_CTL_MULTI.
 	 */
 	__u64	blocked_workers_ptr;		/* r/w */
 
@@ -147,11 +149,13 @@ enum umcg_wait_flag {
  * @UMCG_CTL_REGISTER:   register the current task as a UMCG task
  * @UMCG_CTL_UNREGISTER: unregister the current task as a UMCG task
  * @UMCG_CTL_WORKER:     register the current task as a UMCG worker
+ * @UMCG_CTL_MULTI:	 allow 1:n worker relations, enables blocked_workers_ptr
  */
 enum umcg_ctl_flag {
 	UMCG_CTL_REGISTER	= 0x00001,
 	UMCG_CTL_UNREGISTER	= 0x00002,
 	UMCG_CTL_WORKER		= 0x10000,
+	UMCG_CTL_MULTI		= 0x20000,
 };
 
 #endif /* _UAPI_LINUX_UMCG_H */

@@ -1302,6 +1302,7 @@ struct task_struct {
 
 #ifdef CONFIG_UMCG
 	/* setup by sys_umcg_ctrl() */
+	u32			umcg_flags;
 	clockid_t		umcg_clock;
 	struct umcg_task __user	*umcg_task;
 
