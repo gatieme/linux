@@ -11,6 +11,7 @@
 
 static const int ten_thousand = 10000;
 
+<<<<<<< HEAD
 static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
 				void *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -20,6 +21,8 @@ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
 	return proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 }
 
+=======
+>>>>>>> linux-next/akpm-base
 static struct ctl_table printk_sysctls[] = {
 	{
 		.procname	= "printk",

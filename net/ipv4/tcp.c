@@ -894,8 +894,7 @@ static unsigned int tcp_xmit_size_goal(struct sock *sk, u32 mss_now,
 		return mss_now;
 
 	/* Note : tcp_tso_autosize() will eventually split this later */
-	new_size_goal = sk->sk_gso_max_size - 1 - MAX_TCP_HEADER;
-	new_size_goal = tcp_bound_to_half_wnd(tp, new_size_goal);
+	new_size_goal = tcp_bound_to_half_wnd(tp, sk->sk_gso_max_size);
 
 	/* We try hard to avoid divides here */
 	size_goal = tp->gso_segs * mss_now;
@@ -1322,10 +1321,13 @@ new_segment:
 
 			/* skb changing from pure zc to mixed, must charge zc */
 			if (unlikely(skb_zcopy_pure(skb))) {
-				if (!sk_wmem_schedule(sk, skb->data_len))
+				u32 extra = skb->truesize -
+					    SKB_TRUESIZE(skb_end_offset(skb));
+
+				if (!sk_wmem_schedule(sk, extra))
 					goto wait_for_space;
 
-				sk_mem_charge(sk, skb->data_len);
+				sk_mem_charge(sk, extra);
 				skb_shinfo(skb)->flags &= ~SKBFL_PURE_ZEROCOPY;
 			}
 
