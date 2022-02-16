@@ -60,6 +60,9 @@
 #include <asm/cpu_device_id.h>
 #include <asm/intel-family.h>
 #include <asm/irq_regs.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 unsigned int num_processors;
 
@@ -464,6 +467,11 @@ EXPORT_SYMBOL_GPL(setup_APIC_eilvt);
 static int lapic_next_event(unsigned long delta,
 			    struct clock_event_device *evt)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (evt->features & CLOCK_EVT_FEAT_DEVIRT)
+		return 0;
+#endif
+
 	apic_write(APIC_TMICT, delta);
 	return 0;
 }
@@ -472,6 +480,11 @@ static int lapic_next_deadline(unsigned long delta,
 			       struct clock_event_device *evt)
 {
 	u64 tsc;
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (evt->features & CLOCK_EVT_FEAT_DEVIRT)
+		return 0;
+#endif
 
 	/* This MSR is special and need a special fence: */
 	weak_wrmsr_fence();
@@ -643,6 +656,11 @@ static __init bool apic_validate_deadline_timer(void)
 	return false;
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+bool devirt_arat_disable;
+EXPORT_SYMBOL(devirt_arat_disable);
+#endif
+
 /*
  * Setup the local APIC timer for this CPU. Copy the initialized values
  * of the boot CPU and register the clock event in the framework.
@@ -650,6 +668,17 @@ static __init bool apic_validate_deadline_timer(void)
 static void setup_APIC_timer(void)
 {
 	struct clock_event_device *levt = this_cpu_ptr(&lapic_events);
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	/* The switch to broadcast mode for kata BM is not capatiple with the
+	 * original broadcast mode switch when the CPU has no X86_FEATURE_ARAT
+	 * feature. So we put a warning here and set the devirt support disabled.
+	 */
+	if (!this_cpu_has(X86_FEATURE_ARAT)) {
+		pr_info("katabm: the cpu has no X86_FEATURE_ARAT, disable devirt\n");
+		devirt_arat_disable = true;
+	}
+#endif
 
 	if (this_cpu_has(X86_FEATURE_ARAT)) {
 		lapic_clockevent.features &= ~CLOCK_EVT_FEAT_C3STOP;

@@ -14,6 +14,9 @@
 #include <linux/percpu.h>
 #include <linux/profile.h>
 #include <linux/sched.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "tick-internal.h"
 
@@ -40,6 +43,11 @@ int tick_program_event(ktime_t expires, int force)
 		 */
 		clockevents_switch_state(dev, CLOCK_EVT_STATE_ONESHOT);
 	}
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (dev->features & CLOCK_EVT_FEAT_DEVIRT)
+		devirt_tick_broadcast_set_event(expires);
+#endif
 
 	return clockevents_program_event(dev, expires, force);
 }

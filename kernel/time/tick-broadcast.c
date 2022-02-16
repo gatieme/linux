@@ -16,6 +16,9 @@
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/module.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "tick-internal.h"
 
@@ -368,7 +371,12 @@ void tick_broadcast_control(enum tick_broadcast_mode mode)
 	/*
 	 * Is the device not affected by the powerstate ?
 	 */
-	if (!dev || !(dev->features & CLOCK_EVT_FEAT_C3STOP))
+	if (!dev || (!(dev->features & CLOCK_EVT_FEAT_C3STOP)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		&& !(mode == TICK_BROADCAST_ON_DEVIRT
+		 || mode == TICK_BROADCAST_OFF_DEVIRT)
+#endif
+		))
 		goto out;
 
 	if (!tick_device_is_functional(dev))
@@ -383,6 +391,9 @@ void tick_broadcast_control(enum tick_broadcast_mode mode)
 		tick_broadcast_forced = 1;
 		/* fall through */
 	case TICK_BROADCAST_ON:
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	case TICK_BROADCAST_ON_DEVIRT:
+#endif
 		cpumask_set_cpu(cpu, tick_broadcast_on);
 		if (!cpumask_test_and_set_cpu(cpu, tick_broadcast_mask)) {
 			/*
@@ -400,6 +411,9 @@ void tick_broadcast_control(enum tick_broadcast_mode mode)
 		break;
 
 	case TICK_BROADCAST_OFF:
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	case TICK_BROADCAST_OFF_DEVIRT:
+#endif
 		if (tick_broadcast_forced)
 			break;
 		cpumask_clear_cpu(cpu, tick_broadcast_on);
@@ -572,6 +586,33 @@ static void tick_broadcast_set_event(struct clock_event_device *bc, int cpu,
 	tick_broadcast_set_affinity(bc, cpumask_of(cpu));
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+struct cpumask cpu_devirt_mask = {0};
+
+void devirt_tick_broadcast_set_event(ktime_t expires)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&tick_broadcast_lock, flags);
+	if (cpumask_test_cpu(smp_processor_id(), &cpu_devirt_mask)) {
+		/* If the cpu is in devirt mode, we set local tick device (lapic)
+		 * as DUMMY device and rely on broadcaset device to provide the
+		 * tick. So here we should set next event in broadcaset device if
+		 * necessary.
+		 */
+		struct clock_event_device *bc = tick_broadcast_device.evtdev;
+
+		if (expires < bc->next_event) {
+			struct cpumask tmpmsk;
+
+			cpumask_andnot(&tmpmsk, cpu_online_mask, &cpu_devirt_mask);
+			tick_broadcast_set_event(bc, cpumask_first(&tmpmsk), expires);
+		}
+	}
+	raw_spin_unlock_irqrestore(&tick_broadcast_lock, flags);
+}
+#endif
+
 static void tick_resume_broadcast_oneshot(struct clock_event_device *bc)
 {
 	clockevents_switch_state(bc, CLOCK_EVT_STATE_ONESHOT);
@@ -583,6 +624,11 @@ static void tick_resume_broadcast_oneshot(struct clock_event_device *bc)
  */
 void tick_check_oneshot_broadcast_this_cpu(void)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (cpumask_test_cpu(smp_processor_id(), &cpu_devirt_mask))
+		return;
+#endif
+
 	if (cpumask_test_cpu(smp_processor_id(), tick_broadcast_oneshot_mask)) {
 		struct tick_device *td = this_cpu_ptr(&tick_cpu_device);
 
@@ -783,7 +829,7 @@ int __tick_broadcast_oneshot_control(enum tick_broadcast_state state)
 				}
 			}
 		}
-	} else {
+	} else if (state == TICK_BROADCAST_EXIT) {
 		if (cpumask_test_and_clear_cpu(cpu, tick_broadcast_oneshot_mask)) {
 			clockevents_switch_state(dev, CLOCK_EVT_STATE_ONESHOT);
 			/*
@@ -848,6 +894,50 @@ int __tick_broadcast_oneshot_control(enum tick_broadcast_state state)
 			tick_program_event(dev->next_event, 1);
 		}
 	}
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	else if (state == TICK_BROADCAST_ENTER_DEVIRT) {
+		/*
+		 * If the current CPU owns the hrtimer broadcast
+		 * mechanism, we return -EBUSY and the caller should
+		 * call this function again.
+		 */
+		ret = broadcast_needs_cpu(bc, cpu);
+		if (ret)
+			goto out;
+
+		/* We hold tick_broadcast_lock, so it is safe to update cpu_devirt_mask */
+		cpumask_set_cpu(cpu, &cpu_devirt_mask);
+
+		if (!cpumask_test_and_set_cpu(cpu, tick_broadcast_oneshot_mask)) {
+			/* We shutdown the state at only the lapic timer level, and then
+			 * set the lapic timer as dummy device
+			 */
+			dev->set_state_shutdown(dev);
+			dev->features |= (CLOCK_EVT_FEAT_DUMMY | CLOCK_EVT_FEAT_DEVIRT);
+
+			if (dev->next_event < bc->next_event) {
+				int next_cpu;
+				struct cpumask tmpmsk;
+
+				cpumask_andnot(&tmpmsk, cpu_online_mask, &cpu_devirt_mask);
+
+				next_cpu = cpumask_first(&tmpmsk);
+				tick_broadcast_set_event(bc, next_cpu, dev->next_event);
+			}
+		}
+	} else if (state == TICK_BROADCAST_EXIT_DEVIRT) {
+		/* We hold tick_broadcast_lock, so it is safe to update cpu_devirt_mask */
+		cpumask_clear_cpu(cpu, &cpu_devirt_mask);
+
+		if (cpumask_test_and_clear_cpu(cpu, tick_broadcast_oneshot_mask)) {
+			dev->features &= ~(CLOCK_EVT_FEAT_DUMMY | CLOCK_EVT_FEAT_DEVIRT);
+			dev->set_state_oneshot(dev);
+			if (dev->next_event == KTIME_MAX)
+				goto out;
+			tick_program_event(dev->next_event, 1);
+		}
+	}
+#endif
 out:
 	raw_spin_unlock(&tick_broadcast_lock);
 	return ret;
