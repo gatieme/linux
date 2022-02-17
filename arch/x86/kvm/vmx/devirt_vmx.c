@@ -11,6 +11,7 @@
  */
 #include <asm/vmx.h>
 #include <asm/devirt.h>
+#include <asm/tlbflush.h>
 
 #include "ops.h"
 #include "vmx.h"
@@ -75,6 +76,7 @@ static DEFINE_PER_CPU(int, devirt_in_guest);
 int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 {
 	u32 injected_vector;
+	u8 *state = this_cpu_ptr(&devirt_state);
 
 	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
 		apic->send_IPI_self(injected_vector);
@@ -85,11 +87,25 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 	 */
 	smp_wmb();
 
+	WARN_ON(*state != 0);
+	*state = DEVERT_IN_GUEST;
+
 	return devirt_host_system_interrupt_pending();
 }
 
 void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)
 {
+	u8 *state = this_cpu_ptr(&devirt_state);
+	u8 state_val;
+
+	state_val = xchg(state, 0);
+	if (state_val & DEVIRT_FLUSH_TLB_ALL)
+		__flush_tlb_all();
+	else if (state_val & DEVIRT_FLUSH_TLB_LOCAL)
+		devirt_flush_tlb();
+	if (state_val & DEVIRT_SYNC_CORE)
+		sync_core();
+
 	*this_cpu_ptr(&devirt_in_guest) = 0;
 }
 

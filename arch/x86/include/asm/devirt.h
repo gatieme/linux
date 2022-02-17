@@ -14,6 +14,11 @@
 #include <linux/tick.h>
 #include <asm/devirt_types.h>
 
+#define DEVERT_IN_GUEST           (1 << 0)
+#define DEVIRT_FLUSH_TLB_LOCAL          (1 << 1)
+#define DEVIRT_FLUSH_TLB_ALL          (1 << 2)
+#define DEVIRT_SYNC_CORE          (1 << 3)
+
 #define DEVIRT_HOST_SERVER_INTEL 1
 #define DEVIRT_HOST_SERVER_AMD 2
 
@@ -178,9 +183,11 @@ extern unsigned int kvm_devirt_enable;
 extern int devirt_host_server_type;
 extern struct devirt_nmi_operations *devirt_nmi_ops;
 extern struct devirt_kvm_operations *devirt_kvm_ops;
+DECLARE_PER_CPU(u8, devirt_state);
 DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 
 extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
+extern void devirt_flush_tlb(void);
 
 /* Notify the virtio backend with ioeventfd */
 extern int devirt_virtio_notify(struct kvm *kvm,

@@ -25,6 +25,9 @@
 #include <asm/tlbflush.h>
 #include <asm/io.h>
 #include <asm/fixmap.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 int __read_mostly alternatives_patched;
 
@@ -1048,7 +1051,11 @@ void text_poke_bp_batch(struct text_poke_loc *tp, unsigned int nr_entries)
 	for (i = 0; i < nr_entries; i++)
 		text_poke(tp[i].addr, &int3, sizeof(int3));
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	on_each_cpu_check_devirt(do_sync_core, NULL, 1, DEVIRT_SYNC_CORE);
+#else
 	on_each_cpu(do_sync_core, NULL, 1);
+#endif
 
 	/*
 	 * Second step: update all but the first byte of the patched range.
@@ -1068,7 +1075,11 @@ void text_poke_bp_batch(struct text_poke_loc *tp, unsigned int nr_entries)
 		 * not necessary and we'd be safe even without it. But
 		 * better safe than sorry (plus there's not only Intel).
 		 */
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		on_each_cpu_check_devirt(do_sync_core, NULL, 1, DEVIRT_SYNC_CORE);
+#else
 		on_each_cpu(do_sync_core, NULL, 1);
+#endif
 	}
 
 	/*
@@ -1078,7 +1089,11 @@ void text_poke_bp_batch(struct text_poke_loc *tp, unsigned int nr_entries)
 	for (i = 0; i < nr_entries; i++)
 		text_poke(tp[i].addr, tp[i].opcode, sizeof(int3));
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	on_each_cpu_check_devirt(do_sync_core, NULL, 1, DEVIRT_SYNC_CORE);
+#else
 	on_each_cpu(do_sync_core, NULL, 1);
+#endif
 	/*
 	 * sync_core() implies an smp_mb() and orders this store against
 	 * the writing of the new instruction.

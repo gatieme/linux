@@ -20,6 +20,9 @@
 #include <linux/sched.h>
 #include <linux/sched/idle.h>
 #include <linux/hypervisor.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "smpboot.h"
 
@@ -722,6 +725,81 @@ void on_each_cpu_cond(bool (*cond_func)(int cpu, void *info),
 				cpu_online_mask);
 }
 EXPORT_SYMBOL(on_each_cpu_cond);
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+DEFINE_PER_CPU(u8, devirt_state) = 0;
+EXPORT_PER_CPU_SYMBOL(devirt_state);
+/* wait should not be 0 */
+void smp_call_function_many_check_devirt(const struct cpumask *mask,
+				smp_call_func_t func, void *info, bool wait, int devirt_flag)
+{
+	struct cpumask mask2 = {0};
+	int cpu;
+	u8 *state, state_val;
+	bool cont = false;
+
+	WARN_ON(wait == 0);
+	cpumask_copy(&mask2, mask);
+
+	for_each_cpu(cpu, mask) {
+		state = &per_cpu(devirt_state, cpu);
+		do {
+			state_val = READ_ONCE(*state);
+			if (state_val & DEVERT_IN_GUEST) {
+				cont = try_cmpxchg(state, &state_val, state_val | devirt_flag);
+				if (cont)
+					__cpumask_clear_cpu(cpu, &mask2);
+			} else
+				cont = true;
+		} while (!cont);
+	}
+
+	smp_call_function_many(&mask2, func, info, wait);
+}
+
+/* wait should not be 0 */
+void on_each_cpu_check_devirt(void (*func) (void *info),
+							  void *info, int wait,
+							  int devirt_flag)
+{
+	unsigned long flags;
+
+	preempt_disable();
+	smp_call_function_many_check_devirt(cpu_online_mask, func, info, wait, devirt_flag);
+	local_irq_save(flags);
+	func(info);
+	local_irq_restore(flags);
+	preempt_enable();
+}
+
+void on_each_cpu_cond_mask_check_devirt(bool (*cond_func)(int cpu, void *info),
+			smp_call_func_t func, void *info, bool wait,
+			gfp_t gfp_flags, const struct cpumask *mask, int devirt_flag)
+{
+	struct cpumask mask2 = {0};
+	int cpu;
+	u8 *state, state_val;
+	bool cont = false;
+
+	WARN_ON(wait == 0);
+	cpumask_copy(&mask2, mask);
+
+	for_each_cpu(cpu, mask) {
+		state = &per_cpu(devirt_state, cpu);
+		do {
+			state_val = READ_ONCE(*state);
+			if (state_val & DEVERT_IN_GUEST) {
+				cont = try_cmpxchg(state, &state_val, state_val | devirt_flag);
+				if (cont)
+					__cpumask_clear_cpu(cpu, &mask2);
+			} else
+				cont = true;
+		} while (!cont);
+	}
+
+	on_each_cpu_cond_mask(cond_func, func, info, wait, gfp_flags, &mask2);
+}
+#endif
 
 static void do_nothing(void *unused)
 {
