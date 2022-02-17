@@ -24,6 +24,9 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/sed-opal.h>
 #include <linux/pci-p2pdma.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "trace.h"
 #include "nvme.h"
@@ -2144,7 +2147,13 @@ static void nvme_disable_io_queues(struct nvme_dev *dev)
 
 static unsigned int nvme_max_io_queues(struct nvme_dev *dev)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	return devirt_num_cpus_for_device() + dev->nr_write_queues +
+	       dev->nr_poll_queues;
+#else
 	return num_possible_cpus() + dev->nr_write_queues + dev->nr_poll_queues;
+#endif
+
 }
 
 static int nvme_setup_io_queues(struct nvme_dev *dev)
