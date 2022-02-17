@@ -14,6 +14,9 @@
 #include <linux/sched.h> /* for spin_unlock_irq() using preempt_count() m68k */
 #include <linux/tick.h>
 #include <linux/kthread.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "tick-internal.h"
 #include "timekeeping_internal.h"
@@ -230,6 +233,9 @@ static void clocksource_watchdog(struct timer_list *unused)
 	int next_cpu, reset_pending;
 	int64_t wd_nsec, cs_nsec;
 	struct clocksource *cs;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	struct cpumask tmp;
+#endif
 
 	spin_lock(&watchdog_lock);
 	if (!watchdog_running)
@@ -327,6 +333,14 @@ static void clocksource_watchdog(struct timer_list *unused)
 	if (reset_pending)
 		atomic_dec(&watchdog_reset_pending);
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	/* Do not add watchdog timer on devirt cpu */
+	cpumask_copy(&tmp, &cpu_devirt_mask);
+	cpumask_andnot(&tmp, cpu_online_mask, &tmp);
+	next_cpu = cpumask_next(raw_smp_processor_id(), &tmp);
+	if (next_cpu >= nr_cpu_ids)
+		next_cpu = cpumask_first(&tmp);
+#else
 	/*
 	 * Cycle through CPUs to check if the CPUs stay synchronized
 	 * to each other.
@@ -334,6 +348,7 @@ static void clocksource_watchdog(struct timer_list *unused)
 	next_cpu = cpumask_next(raw_smp_processor_id(), cpu_online_mask);
 	if (next_cpu >= nr_cpu_ids)
 		next_cpu = cpumask_first(cpu_online_mask);
+#endif
 
 	/*
 	 * Arm timer if not already pending: could race with concurrent
