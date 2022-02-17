@@ -45,7 +45,12 @@
 #define KVM_MAX_VCPU_ID 1023
 #define KVM_USER_MEM_SLOTS 509
 /* memory slots that are not exposed to userspace */
+#ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 #define KVM_PRIVATE_MEM_SLOTS 3
+#else
+#define KVM_PRIVATE_MEM_SLOTS 5
+#define DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT        (KVM_USER_MEM_SLOTS + 4)
+#endif
 #define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
 
 #define KVM_HALT_POLL_NS_DEFAULT 200000

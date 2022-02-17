@@ -107,3 +107,14 @@ void __init init_hypervisor_platform(void)
 	x86_hyper_type = h->type;
 	x86_init.hyper.init_platform();
 }
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+bool devirt_enable_at_startup;
+EXPORT_SYMBOL(devirt_enable_at_startup);
+static int __init set_devirt_enable(char *arg)
+{
+	devirt_enable_at_startup = true;
+	return 0;
+}
+early_param("devirt_enable", set_devirt_enable);
+#endif

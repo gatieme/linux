@@ -22,6 +22,39 @@
 
 #define DEVIRT_CPU_SET(pid, vcpuid) ((pid << 2) + vcpuid)
 
+/* Store physical apicid maps for kata bm */
+#define DEVIRT_APIC_MAPS_PHYS_BASE       0xfefa0000
+#define DEVIRT_APIC_MAPS_UPDATING        1
+/* fix me if the core num is greater than 256 */
+#define DEVIRT_APIC_MAPS_ENTRY_MAX       256
+
+struct apic_maps_entry {
+	u16 papic_id;
+	u16 pcpu_id;
+	/*
+	 * 0: cpu offline
+	 * 1: cpu online
+	 */
+	int status;
+	unsigned long tsc_offset;
+};
+
+struct apic_maps {
+	struct apic_maps_entry entries[DEVIRT_APIC_MAPS_ENTRY_MAX];
+};
+
+struct apic_maps_msr {
+	union {
+		struct {
+			/* Expose apic maps to guest gfn */
+			u64 apic_maps_gfn    : 50;
+			/* Enable/disable to expose physical apicid*/
+			u64 apic_maps_enable : 1;
+		};
+		u64 val;
+	};
+} __aligned(8);
+
 struct devirt_nmi_operations {
 	int (*devirt_in_guest_mode)(void);
 	void (*devirt_tigger_failed_vm_entry)(struct kvm_vcpu *vcpu);
@@ -82,6 +115,7 @@ static inline void tick_broadcast_exit_devirt(void)
 
 extern bool devirt_arat_disable;
 
+extern bool devirt_enable_at_startup;
 extern unsigned int kvm_devirt_enable;
 extern int devirt_host_server_type;
 extern struct devirt_nmi_operations *devirt_nmi_ops;

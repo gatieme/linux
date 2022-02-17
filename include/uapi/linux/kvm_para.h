@@ -30,6 +30,9 @@
 #define KVM_HC_SEND_IPI		10
 #define KVM_HC_SCHED_YIELD		11
 
+#define KVM_HC_DEVIRT_ICR_WRITE		33
+#define KVM_HC_DEVIRT_GLOBAL_RIP	34
+
 /*
  * hypercalls use architecture specific
  */

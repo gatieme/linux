@@ -16,9 +16,14 @@ struct devirt_vcpu_arch {
 
 	/* Used for tpr switch */
 	unsigned int devirt_host_tpr;
+	/* Check all vcpu not in migration */
+	int devirt_apic_maps_update_status;
 };
 
 struct devirt_kvm_arch {
+	/* Used for apic maps */
+	u64 apic_maps_msr_val;
+	struct apic_maps *apic_maps;
 };
 
 #endif /* _ASM_X86_DEVIRT_TYPES_H */

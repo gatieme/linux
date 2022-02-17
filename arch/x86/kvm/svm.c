@@ -5093,6 +5093,14 @@ static int handle_exit(struct kvm_vcpu *vcpu)
 	struct kvm_run *kvm_run = vcpu->run;
 	u32 exit_code = svm->vmcb->control.exit_code;
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (svm->vmcb->save.cr0 & DEVIRT_VMENTRY_FAILED_FLAG) {
+		svm->vmcb->save.cr0 &= ~DEVIRT_VMENTRY_FAILED_FLAG;
+		mark_dirty(svm->vmcb, VMCB_CR);
+		return 1;
+	}
+#endif
+
 	trace_kvm_exit(exit_code, vcpu, KVM_ISA_SVM);
 
 	if (!is_cr_intercept(svm, INTERCEPT_CR0_WRITE))
@@ -5870,6 +5878,11 @@ static bool svm_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
 
 static void svm_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
 {
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	svm = to_svm(vcpu);
+	svm->vmcb->save.cr0 |= DEVIRT_VMENTRY_FAILED_FLAG;
+	mark_dirty(svm->vmcb, VMCB_CR);
 }
 
 void devirt_svm_set_msr_interception(struct kvm_vcpu *vcpu)
