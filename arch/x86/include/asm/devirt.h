@@ -179,7 +179,6 @@ static inline void tick_broadcast_exit_devirt(void)
 extern bool devirt_arat_disable;
 
 extern bool devirt_enable_at_startup;
-extern unsigned int kvm_devirt_enable;
 extern int devirt_host_server_type;
 extern struct devirt_nmi_operations *devirt_nmi_ops;
 extern struct devirt_kvm_operations *devirt_kvm_ops;
