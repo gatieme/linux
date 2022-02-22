@@ -3,6 +3,10 @@
 #define _ASM_X86_IRQ_VECTORS_H
 
 #include <linux/threads.h>
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt_irq_vectors.h>
+#else /* CONFIG_BYTEDANCE_KVM_DEVIRT */
 /*
  * Linux IRQ vector layout.
  *
@@ -114,6 +118,7 @@
 #define FIRST_SYSTEM_VECTOR		NR_VECTORS
 #endif
 
+#endif /* CONFIG_BYTEDANCE_KVM_DEVIRT */
 /*
  * Size the maximum number of interrupts.
  *
