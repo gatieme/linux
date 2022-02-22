@@ -96,4 +96,10 @@ config KVM_MMU_AUDIT
 	 This option adds a R/W kVM module parameter 'mmu_audit', which allows
 	 auditing of KVM MMU events at runtime.
 
+config BYTEDANCE_KVM_DEVIRT
+	bool "Kata BM support"
+	depends on KVM_INTEL || KVM_AMD
+	help
+	 Provide de-virtualization features to run Kata BM.
+
 endif # VIRTUALIZATION
