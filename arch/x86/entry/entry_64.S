@@ -375,6 +375,34 @@ ENTRY(irq_entries_start)
     .endr
 END(irq_entries_start)
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+/* Guest external irq entries for kata BM */
+	.align 8
+ENTRY(guest1_irq_entries_start)
+    vector=GUEST1_FIRST_EXTERNAl_VECTOR
+    .rept (GUEST1_END_EXTERNAl_VECTOR - GUEST1_FIRST_EXTERNAl_VECTOR)
+	UNWIND_HINT_IRET_REGS
+	pushq	$(~vector+0x80)			/* Note: always in signed byte range */
+	jmp	common_guest_irq
+	.align	8
+	vector=vector+1
+    .endr
+END(guest1_irq_entries_start)
+
+/* Guest external irq entries for the second kata BM */
+	.align 8
+ENTRY(guest2_irq_entries_start)
+    vector=GUEST2_FIRST_EXTERNAl_VECTOR
+    .rept (GUEST2_END_EXTERNAl_VECTOR - GUEST2_FIRST_EXTERNAl_VECTOR)
+	UNWIND_HINT_IRET_REGS
+	pushq	$(~vector+0x80)			/* Note: always in signed byte range */
+	jmp	common_guest_irq
+	.align	8
+	vector=vector+1
+    .endr
+END(guest1_irq_entries_start)
+#endif
+
 	.align 8
 ENTRY(spurious_entries_start)
     vector=FIRST_SYSTEM_VECTOR
@@ -597,6 +625,17 @@ common_spurious:
 	jmp	ret_from_intr
 END(common_spurious)
 _ASM_NOKPROBE(common_spurious)
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+common_guest_irq:
+	addq	$-0x80, (%rsp)			/* Adjust vector to [-256, -1] range */
+	call	interrupt_entry
+	UNWIND_HINT_REGS indirect=1
+	call	smp_guest_device_interrupt		/* rdi points to pt_regs */
+	jmp	ret_from_intr
+END(common_guest_irq)
+_ASM_NOKPROBE(common_guest_irq)
+#endif
 
 /* common_interrupt is a hotpath. Align it */
 	.p2align CONFIG_X86_L1_CACHE_SHIFT
@@ -860,6 +899,53 @@ apicinterrupt SPURIOUS_APIC_VECTOR		spurious_interrupt		smp_spurious_interrupt
 
 #ifdef CONFIG_IRQ_WORK
 apicinterrupt IRQ_WORK_VECTOR			irq_work_interrupt		smp_irq_work_interrupt
+#endif
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+apicinterrupt DEVIRT_VIRTIO_NOTIFY_VECTOR \
+devirt_virtio_notify_interrupt smp_devirt_virtio_notify_ipi
+apicinterrupt GUEST1_IRQ_MOVE_CLEANUP_VECTOR \
+guest1_irq_move_cleanup_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_LOCAL_TIMER_VECTOR \
+guest1_apic_timer_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_HYPERV_STIMER0_VECTOR \
+guest1_hyperv_stimer0_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_HYPERV_REENLIGHTENMENT_VECTOR \
+guest1_hyperv_reenlightenment_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_MANAGED_IRQ_SHUTDOWN_VECTOR \
+guest1_managed_irq_shutdown_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_POSTED_INTR_NESTED_VECTOR \
+guest1_posted_intr_nested_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_POSTED_INTR_WAKEUP_VECTOR \
+guest1_posed_intr_wakeup_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_POSTED_INTR_VECTOR \
+guest1_posted_intr_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_HYPERVISOR_CALLBACK_VECTOR \
+guest1_hypervisor_callback_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_DEFERRED_ERROR_VECTOR \
+guest1_deferred_error_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_UV_BAU_MESSAGE \
+guest1_uv_bau_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_IRQ_WORK_VECTOR \
+guest1_irq_work_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_X86_PLATFORM_IPI_VECTOR \
+guest1_x86_platform_ipi_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_REBOOT_VECTOR \
+guest1_reboot_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_THRESHOLD_APIC_VECTOR \
+guest1_threshold_apic_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_THERMAL_APIC_VECTOR \
+guest1_thermal_apic_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_CALL_FUNCTION_SINGLE_VECTOR \
+guest1_call_function_single_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_CALL_FUNCTION_VECTOR \
+guest1_call_function_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_RESCHEDULE_VECTOR \
+guest1_reschedule_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_ERROR_APIC_VECTOR \
+guest1_error_apic_interrupt smp_guest_ipi_interrupt
+apicinterrupt GUEST1_SPURIOUS_APIC_VECTOR \
+guest1_spurious_apic_interrupt smp_guest_ipi_interrupt
 #endif
 
 /*

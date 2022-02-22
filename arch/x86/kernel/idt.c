@@ -145,6 +145,30 @@ static const __initconst struct idt_data apic_idts[] = {
 	INTG(SPURIOUS_APIC_VECTOR,	spurious_interrupt),
 	INTG(ERROR_APIC_VECTOR,		error_interrupt),
 #endif
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	INTG(DEVIRT_VIRTIO_NOTIFY_VECTOR,   devirt_virtio_notify_interrupt),
+	INTG(GUEST1_IRQ_MOVE_CLEANUP_VECTOR,  guest1_irq_move_cleanup_interrupt),
+	INTG(GUEST1_LOCAL_TIMER_VECTOR, guest1_apic_timer_interrupt),
+	INTG(GUEST1_HYPERV_STIMER0_VECTOR,      guest1_hyperv_stimer0_interrupt),
+	INTG(GUEST1_HYPERV_REENLIGHTENMENT_VECTOR,      guest1_hyperv_reenlightenment_interrupt),
+	INTG(GUEST1_MANAGED_IRQ_SHUTDOWN_VECTOR,        guest1_managed_irq_shutdown_interrupt),
+	INTG(GUEST1_POSTED_INTR_NESTED_VECTOR,  guest1_posted_intr_nested_interrupt),
+	INTG(GUEST1_POSTED_INTR_WAKEUP_VECTOR,  guest1_posed_intr_wakeup_interrupt),
+	INTG(GUEST1_POSTED_INTR_VECTOR, guest1_posted_intr_interrupt),
+	INTG(GUEST1_HYPERVISOR_CALLBACK_VECTOR, guest1_hypervisor_callback_interrupt),
+	INTG(GUEST1_DEFERRED_ERROR_VECTOR,      guest1_deferred_error_interrupt),
+	INTG(GUEST1_UV_BAU_MESSAGE,     guest1_uv_bau_interrupt),
+	INTG(GUEST1_IRQ_WORK_VECTOR,    guest1_irq_work_interrupt),
+	INTG(GUEST1_X86_PLATFORM_IPI_VECTOR,    guest1_x86_platform_ipi_interrupt),
+	INTG(GUEST1_REBOOT_VECTOR,      guest1_reboot_interrupt),
+	INTG(GUEST1_THRESHOLD_APIC_VECTOR,      guest1_threshold_apic_interrupt),
+	INTG(GUEST1_THERMAL_APIC_VECTOR,        guest1_thermal_apic_interrupt),
+	INTG(GUEST1_CALL_FUNCTION_SINGLE_VECTOR,        guest1_call_function_single_interrupt),
+	INTG(GUEST1_CALL_FUNCTION_VECTOR,       guest1_call_function_interrupt),
+	INTG(GUEST1_RESCHEDULE_VECTOR,  guest1_reschedule_interrupt),
+	INTG(GUEST1_ERROR_APIC_VECTOR,  guest1_error_apic_interrupt),
+	INTG(GUEST1_SPURIOUS_APIC_VECTOR,       guest1_spurious_apic_interrupt),
+#endif
 };
 
 #ifdef CONFIG_X86_64
@@ -326,6 +350,14 @@ void __init idt_setup_apic_and_irq_gates(void)
 		entry = spurious_entries_start + 8 * (i - FIRST_SYSTEM_VECTOR);
 		set_intr_gate(i, entry);
 	}
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	/* Install guest external irq entries for Kata BM */
+	for (i = GUEST1_FIRST_EXTERNAl_VECTOR; i < GUEST1_END_EXTERNAl_VECTOR; i++) {
+		entry = guest1_irq_entries_start + 8 * (i - GUEST1_FIRST_EXTERNAl_VECTOR);
+		set_intr_gate(i, entry);
+	}
+#endif
 #endif
 }
 

@@ -343,6 +343,20 @@ __visible void smp_kvm_posted_intr_nested_ipi(struct pt_regs *regs)
 }
 #endif
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+/*
+ * Handler for DEVIRT_VIRTIO_NOTIFY_VECTOR
+ */
+__visible void __irq_entry smp_devirt_virtio_notify_ipi(struct pt_regs *regs)
+{
+	struct pt_regs *old_regs = set_irq_regs(regs);
+
+	entering_ack_irq();
+	exiting_irq();
+
+	set_irq_regs(old_regs);
+}
+#endif
 
 #ifdef CONFIG_HOTPLUG_CPU
 /* A cpu has been removed from cpu_online_mask.  Reset irq affinities. */

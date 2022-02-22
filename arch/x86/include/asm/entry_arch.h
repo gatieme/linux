@@ -22,6 +22,9 @@ BUILD_INTERRUPT(reboot_interrupt, REBOOT_VECTOR)
 BUILD_INTERRUPT(kvm_posted_intr_ipi, POSTED_INTR_VECTOR)
 BUILD_INTERRUPT(kvm_posted_intr_wakeup_ipi, POSTED_INTR_WAKEUP_VECTOR)
 BUILD_INTERRUPT(kvm_posted_intr_nested_ipi, POSTED_INTR_NESTED_VECTOR)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+BUILD_INTERRUPT(devirt_virtio_notify_interrupt, DEVIRT_VIRTIO_NOTIFY_VECTOR)
+#endif
 #endif
 
 /*
