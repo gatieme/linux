@@ -1182,24 +1182,30 @@ __visible void __irq_entry smp_apic_timer_interrupt(struct pt_regs *regs)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-__visible void __irq_entry smp_guest_ipi_interrupt(struct pt_regs *regs)
+static void dummy_handler(u8 vector) {}
+void (*guest_interrupt_handler)(u8 vector) = dummy_handler;
+EXPORT_SYMBOL_GPL(guest_interrupt_handler);
+
+static inline void guest_interrupt_common(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
+	u8 vector = ~regs->orig_ax;
 
 	entering_ack_irq();
+	guest_interrupt_handler(vector);
 	exiting_irq();
 
 	set_irq_regs(old_regs);
 }
 
+__visible void __irq_entry smp_guest_ipi_interrupt(struct pt_regs *regs)
+{
+	guest_interrupt_common(regs);
+}
+
 __visible void __irq_entry smp_guest_device_interrupt(struct pt_regs *regs)
 {
-	struct pt_regs *old_regs = set_irq_regs(regs);
-
-	entering_ack_irq();
-	exiting_irq();
-
-	set_irq_regs(old_regs);
+	guest_interrupt_common(regs);
 }
 #endif
 

@@ -4203,7 +4203,12 @@ static void vmx_vcpu_setup(struct vcpu_vmx *vmx)
 	vmcs_write64(VMCS_LINK_POINTER, -1ull); /* 22.3.1.5 */
 
 	/* Control */
-	pin_controls_set(vmx, vmx_pin_based_exec_ctrl(vmx));
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (devirt_enable(vmx->vcpu.kvm))
+		pin_controls_set(vmx, vmx_pin_based_exec_ctrl(vmx) & ~PIN_BASED_EXT_INTR_MASK);
+	else
+#endif
+		pin_controls_set(vmx, vmx_pin_based_exec_ctrl(vmx));
 	vmx->hv_deadline_tsc = -1;
 
 	exec_controls_set(vmx, vmx_exec_control(vmx));

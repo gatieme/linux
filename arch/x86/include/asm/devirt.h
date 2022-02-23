@@ -30,6 +30,10 @@ struct devirt_kvm_operations {
 	void (*devirt_tigger_failed_vm_entry)(struct kvm_vcpu *vcpu);
 };
 
+struct devirt_guest_irq_pending {
+	DECLARE_BITMAP(pending_map, 256);
+};
+
 struct devirt_cpu_unset_info {
 	int new_cpu;
 };
@@ -80,6 +84,15 @@ extern unsigned int kvm_devirt_enable;
 extern int devirt_host_server_type;
 extern struct devirt_nmi_operations *devirt_nmi_ops;
 extern struct devirt_kvm_operations *devirt_kvm_ops;
+DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
+
+extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
+
+extern void (*guest_interrupt_handler)(u8 vector);
+
+extern bool devirt_has_guest_interrupt(struct kvm_vcpu *vcpu);
+extern int devirt_pre_block(struct kvm_vcpu *vcpu);
+extern void devirt_post_block(struct kvm_vcpu *vcpu);
 
 extern struct devirt_nmi_operations devirt_vmx_nmi_ops;
 extern struct devirt_nmi_operations devirt_svm_nmi_ops;
@@ -87,6 +100,7 @@ extern struct devirt_kvm_operations devirt_vmx_kvm_ops;
 extern struct devirt_kvm_operations devirt_svm_kvm_ops;
 
 extern void devirt_tick_broadcast_set_event(ktime_t expires);
+extern bool devirt_host_system_interrupt_pending(void);
 
 extern void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu);
