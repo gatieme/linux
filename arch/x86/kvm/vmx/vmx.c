@@ -44,6 +44,9 @@
 #include <asm/spec-ctrl.h>
 #include <asm/virtext.h>
 #include <asm/vmx.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "capabilities.h"
 #include "cpuid.h"
@@ -5945,6 +5948,11 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 	}
 
 	if (unlikely(vmx->fail)) {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		if (vmx->fail == DEVIRT_VM_RUN_FAILED)
+			return 1;
+#endif
+
 		dump_vmcs();
 		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
 		vcpu->run->fail_entry.hardware_entry_failure_reason
@@ -6620,7 +6628,18 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.cr2 != read_cr2())
 		write_cr2(vcpu->arch.cr2);
 
-	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (devirt_enable(vcpu->kvm)) {
+		if (devirt_vmx_enter_guest(vcpu)) {
+			vmx->fail = DEVIRT_VM_RUN_FAILED;
+		} else
+			vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
+				   vmx->loaded_vmcs->launched);
+
+		devirt_vmx_exit_guest(vcpu);
+	} else
+#endif
+		vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
 				   vmx->loaded_vmcs->launched);
 
 	vcpu->arch.cr2 = read_cr2();
@@ -7676,6 +7695,12 @@ static __init int hardware_setup(void)
 	unsigned long host_bndcfgs;
 	struct desc_ptr dt;
 	int r, i;
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	devirt_host_server_type = DEVIRT_HOST_SERVER_INTEL;
+	devirt_nmi_ops = &devirt_vmx_nmi_ops;
+	devirt_kvm_ops = &devirt_vmx_kvm_ops;
+#endif
 
 	rdmsrl_safe(MSR_EFER, &host_efer);
 

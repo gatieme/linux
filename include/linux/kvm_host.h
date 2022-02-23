@@ -502,6 +502,11 @@ struct kvm {
 	struct srcu_struct srcu;
 	struct srcu_struct irq_srcu;
 	pid_t userspace_pid;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	bool devirt_enable;
+	bool devirt_enable_intel;
+	bool devirt_enable_amd;
+#endif
 };
 
 #define kvm_err(fmt, ...) \

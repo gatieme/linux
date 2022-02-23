@@ -18,6 +18,9 @@
 #include <asm/processor.h>
 #include <asm/user.h>
 #include <asm/fpu/xstate.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 #include "cpuid.h"
 #include "lapic.h"
 #include "mmu.h"
@@ -1055,6 +1058,12 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
 			}
 		}
 	}
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (function == KVM_CPUID_FEATURES && devirt_enable(vcpu->kvm))
+		*eax |= (1 << KVM_FEATURE_PV_DEVIRT);
+#endif
+
 	trace_kvm_cpuid(function, *eax, *ebx, *ecx, *edx, found);
 	return found;
 }
