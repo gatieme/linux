@@ -18,6 +18,8 @@
 #define DEVIRT_HOST_SERVER_AMD 2
 
 #define DEVIRT_VM_RUN_FAILED 2
+#define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
+
 #define DEVIRT_CPU_SET(pid, vcpuid) ((pid << 2) + vcpuid)
 
 struct devirt_nmi_operations {
@@ -93,6 +95,11 @@ extern void (*guest_interrupt_handler)(u8 vector);
 extern bool devirt_has_guest_interrupt(struct kvm_vcpu *vcpu);
 extern int devirt_pre_block(struct kvm_vcpu *vcpu);
 extern void devirt_post_block(struct kvm_vcpu *vcpu);
+
+extern void devirt_vmx_disable_intercept_for_msr(unsigned long *msr_bitmap,
+						 u32 msr, int type);
+extern void devirt_vmx_enable_intercept_for_msr(unsigned long *msr_bitmap,
+						u32 msr, int type);
 
 extern struct devirt_nmi_operations devirt_vmx_nmi_ops;
 extern struct devirt_nmi_operations devirt_svm_nmi_ops;

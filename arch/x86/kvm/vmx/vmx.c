@@ -1443,7 +1443,11 @@ static void vmx_vcpu_pi_put(struct kvm_vcpu *vcpu)
 
 	if (!kvm_arch_has_assigned_device(vcpu->kvm) ||
 		!irq_remapping_cap(IRQ_POSTING_CAP)  ||
-		!kvm_vcpu_apicv_active(vcpu))
+		!kvm_vcpu_apicv_active(vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 || devirt_enable(vcpu->kvm)
+#endif
+		 )
 		return;
 
 	/* Set SN when the vCPU is preempted */
@@ -1482,6 +1486,16 @@ unsigned long vmx_get_rflags(struct kvm_vcpu *vcpu)
 	return to_vmx(vcpu)->rflags;
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+static unsigned long vmx_reserve_vmentry_failed_flag(unsigned long rflags)
+{
+	if (vmcs_readl(GUEST_RFLAGS) & DEVIRT_VMENTRY_FAILED_FLAG)
+		return rflags | DEVIRT_VMENTRY_FAILED_FLAG;
+
+	return rflags;
+}
+#endif
+
 void vmx_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 {
 	unsigned long old_rflags = vmx_get_rflags(vcpu);
@@ -1492,6 +1506,11 @@ void vmx_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 		to_vmx(vcpu)->rmode.save_rflags = rflags;
 		rflags |= X86_EFLAGS_IOPL | X86_EFLAGS_VM;
 	}
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	rflags = vmx_reserve_vmentry_failed_flag(rflags);
+#endif
+
 	vmcs_writel(GUEST_RFLAGS, rflags);
 
 	if ((old_rflags ^ to_vmx(vcpu)->rflags) & X86_EFLAGS_VM)
@@ -2714,6 +2733,11 @@ static void enter_pmode(struct kvm_vcpu *vcpu)
 	flags = vmcs_readl(GUEST_RFLAGS);
 	flags &= RMODE_GUEST_OWNED_EFLAGS_BITS;
 	flags |= vmx->rmode.save_rflags & ~RMODE_GUEST_OWNED_EFLAGS_BITS;
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	flags = vmx_reserve_vmentry_failed_flag(flags);
+#endif
+
 	vmcs_writel(GUEST_RFLAGS, flags);
 
 	vmcs_writel(GUEST_CR4, (vmcs_readl(GUEST_CR4) & ~X86_CR4_VME) |
@@ -2796,6 +2820,10 @@ static void enter_rmode(struct kvm_vcpu *vcpu)
 	vmx->rmode.save_rflags = flags;
 
 	flags |= X86_EFLAGS_IOPL | X86_EFLAGS_VM;
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	flags = vmx_reserve_vmentry_failed_flag(flags);
+#endif
 
 	vmcs_writel(GUEST_RFLAGS, flags);
 	vmcs_writel(GUEST_CR4, vmcs_readl(GUEST_CR4) | X86_CR4_VME);
@@ -3694,6 +3722,20 @@ static __always_inline void vmx_enable_intercept_for_msr(unsigned long *msr_bitm
 	}
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+void devirt_vmx_disable_intercept_for_msr(unsigned long *msr_bitmap,
+							  u32 msr, int type)
+{
+	vmx_disable_intercept_for_msr(msr_bitmap, msr, type);
+}
+
+void devirt_vmx_enable_intercept_for_msr(unsigned long *msr_bitmap,
+							  u32 msr, int type)
+{
+	vmx_enable_intercept_for_msr(msr_bitmap, msr, type);
+}
+#endif
+
 static __always_inline void vmx_set_intercept_for_msr(unsigned long *msr_bitmap,
 			     			      u32 msr, int type, bool value)
 {
@@ -3709,7 +3751,11 @@ static u8 vmx_msr_bitmap_mode(struct kvm_vcpu *vcpu)
 
 	if (cpu_has_secondary_exec_ctrls() &&
 	    (secondary_exec_controls_get(to_vmx(vcpu)) &
-	     SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE)) {
+	     SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 && !devirt_enable(vcpu->kvm)
+#endif
+		 ) {
 		mode |= MSR_BITMAP_MODE_X2APIC;
 		if (enable_apicv && kvm_vcpu_apicv_active(vcpu))
 			mode |= MSR_BITMAP_MODE_X2APIC_APICV;
@@ -3972,13 +4018,21 @@ u32 vmx_pin_based_exec_ctrl(struct vcpu_vmx *vmx)
 {
 	u32 pin_based_exec_ctrl = vmcs_config.pin_based_exec_ctrl;
 
-	if (!kvm_vcpu_apicv_active(&vmx->vcpu))
+	if (!kvm_vcpu_apicv_active(&vmx->vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vmx->vcpu.kvm)
+#endif
+	 )
 		pin_based_exec_ctrl &= ~PIN_BASED_POSTED_INTR;
 
 	if (!enable_vnmi)
 		pin_based_exec_ctrl &= ~PIN_BASED_VIRTUAL_NMIS;
 
-	if (!enable_preemption_timer)
+	if (!enable_preemption_timer
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vmx->vcpu.kvm)
+#endif
+	 )
 		pin_based_exec_ctrl &= ~PIN_BASED_VMX_PREEMPTION_TIMER;
 
 	return pin_based_exec_ctrl;
@@ -3990,7 +4044,11 @@ static void vmx_refresh_apicv_exec_ctrl(struct kvm_vcpu *vcpu)
 
 	pin_controls_set(vmx, vmx_pin_based_exec_ctrl(vmx));
 	if (cpu_has_secondary_exec_ctrls()) {
-		if (kvm_vcpu_apicv_active(vcpu))
+		if (kvm_vcpu_apicv_active(vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 && !devirt_enable(vcpu->kvm)
+#endif
+		 )
 			secondary_exec_controls_setbit(vmx,
 				      SECONDARY_EXEC_APIC_REGISTER_VIRT |
 				      SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY);
@@ -4011,7 +4069,11 @@ u32 vmx_exec_control(struct vcpu_vmx *vmx)
 	if (vmx->vcpu.arch.switch_db_regs & KVM_DEBUGREG_WONT_EXIT)
 		exec_control &= ~CPU_BASED_MOV_DR_EXITING;
 
-	if (!cpu_need_tpr_shadow(&vmx->vcpu)) {
+	if (!cpu_need_tpr_shadow(&vmx->vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vmx->vcpu.kvm)
+#endif
+	 ) {
 		exec_control &= ~CPU_BASED_TPR_SHADOW;
 #ifdef CONFIG_X86_64
 		exec_control |= CPU_BASED_CR8_STORE_EXITING |
@@ -4039,7 +4101,11 @@ static void vmx_compute_secondary_exec_control(struct vcpu_vmx *vmx)
 
 	if (pt_mode == PT_MODE_SYSTEM)
 		exec_control &= ~(SECONDARY_EXEC_PT_USE_GPA | SECONDARY_EXEC_PT_CONCEAL_VMX);
-	if (!cpu_need_virtualize_apic_accesses(vcpu))
+	if (!cpu_need_virtualize_apic_accesses(vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vcpu->kvm)
+#endif
+	 )
 		exec_control &= ~SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES;
 	if (vmx->vpid == 0)
 		exec_control &= ~SECONDARY_EXEC_ENABLE_VPID;
@@ -4051,7 +4117,11 @@ static void vmx_compute_secondary_exec_control(struct vcpu_vmx *vmx)
 		exec_control &= ~SECONDARY_EXEC_UNRESTRICTED_GUEST;
 	if (kvm_pause_in_guest(vmx->vcpu.kvm))
 		exec_control &= ~SECONDARY_EXEC_PAUSE_LOOP_EXITING;
-	if (!kvm_vcpu_apicv_active(vcpu))
+	if (!kvm_vcpu_apicv_active(vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vcpu->kvm)
+#endif
+	 )
 		exec_control &= ~(SECONDARY_EXEC_APIC_REGISTER_VIRT |
 				  SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY);
 	exec_control &= ~SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE;
@@ -4375,7 +4445,11 @@ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 
 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, 0);  /* 22.2.1 */
 
-	if (cpu_has_vmx_tpr_shadow() && !init_event) {
+	if (cpu_has_vmx_tpr_shadow() && !init_event
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vcpu->kvm)
+#endif
+	 ) {
 		vmcs_write64(VIRTUAL_APIC_PAGE_ADDR, 0);
 		if (cpu_need_tpr_shadow(vcpu))
 			vmcs_write64(VIRTUAL_APIC_PAGE_ADDR,
@@ -5924,6 +5998,15 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	u32 exit_reason = vmx->exit_reason;
 	u32 vectoring_info = vmx->idt_vectoring_info;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	u64 guest_rflags = vmcs_readl(GUEST_RFLAGS);
+
+	/* check if the VM entry failed is due to host interrupt pending */
+	if (guest_rflags & DEVIRT_VMENTRY_FAILED_FLAG) {
+		vmcs_writel(GUEST_RFLAGS, guest_rflags & ~DEVIRT_VMENTRY_FAILED_FLAG);
+		return 1;
+	}
+#endif
 
 	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
 
@@ -6141,14 +6224,22 @@ void vmx_set_virtual_apic_mode(struct kvm_vcpu *vcpu)
 	case LAPIC_MODE_DISABLED:
 		break;
 	case LAPIC_MODE_XAPIC:
-		if (flexpriority_enabled) {
+		if (flexpriority_enabled
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 && !devirt_enable(vcpu->kvm)
+#endif
+		 ) {
 			sec_exec_control |=
 				SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES;
 			vmx_flush_tlb(vcpu, true);
 		}
 		break;
 	case LAPIC_MODE_X2APIC:
-		if (cpu_has_vmx_virtualize_x2apic_mode())
+		if (cpu_has_vmx_virtualize_x2apic_mode()
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 && !devirt_enable(vcpu->kvm)
+#endif
+		 )
 			sec_exec_control |=
 				SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE;
 		break;
@@ -6604,7 +6695,11 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
 
 	atomic_switch_perf_msrs(vmx);
 
-	if (enable_preemption_timer)
+	if (enable_preemption_timer
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vcpu->kvm)
+#endif
+	 )
 		vmx_update_hv_timer(vcpu);
 
 	if (lapic_in_kernel(vcpu) &&
@@ -6842,7 +6937,11 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	vmx_vcpu_setup(vmx);
 	vmx_vcpu_put(&vmx->vcpu);
 	put_cpu();
-	if (cpu_need_virtualize_apic_accesses(&vmx->vcpu)) {
+	if (cpu_need_virtualize_apic_accesses(&vmx->vcpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vmx->vcpu.kvm)
+#endif
+	 ) {
 		err = alloc_apic_access_page(kvm);
 		if (err)
 			goto free_vmcs;
@@ -7453,6 +7552,11 @@ static int pi_pre_block(struct kvm_vcpu *vcpu)
 	struct pi_desc old, new;
 	struct pi_desc *pi_desc = vcpu_to_pi_desc(vcpu);
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (devirt_enable(vcpu->kvm))
+		return 0;
+#endif
+
 	if (!kvm_arch_has_assigned_device(vcpu->kvm) ||
 		!irq_remapping_cap(IRQ_POSTING_CAP)  ||
 		!kvm_vcpu_apicv_active(vcpu))
@@ -7517,6 +7621,11 @@ static int vmx_pre_block(struct kvm_vcpu *vcpu)
 
 static void pi_post_block(struct kvm_vcpu *vcpu)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (devirt_enable(vcpu->kvm))
+		return;
+#endif
+
 	if (vcpu->pre_pcpu == -1)
 		return;
 
@@ -7528,7 +7637,11 @@ static void pi_post_block(struct kvm_vcpu *vcpu)
 
 static void vmx_post_block(struct kvm_vcpu *vcpu)
 {
-	if (kvm_x86_ops->set_hv_timer)
+	if (kvm_x86_ops->set_hv_timer
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vcpu->kvm)
+#endif
+	 )
 		kvm_lapic_switch_to_hv_timer(vcpu);
 
 	pi_post_block(vcpu);
@@ -7555,7 +7668,11 @@ static int vmx_update_pi_irte(struct kvm *kvm, unsigned int host_irq,
 
 	if (!kvm_arch_has_assigned_device(kvm) ||
 		!irq_remapping_cap(IRQ_POSTING_CAP) ||
-		!kvm_vcpu_apicv_active(kvm->vcpus[0]))
+		!kvm_vcpu_apicv_active(kvm->vcpus[0])
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 || devirt_enable(kvm)
+#endif
+		 )
 		return 0;
 
 	idx = srcu_read_lock(&kvm->irq_srcu);

@@ -13,6 +13,9 @@
 struct devirt_vcpu_arch {
 	/* Used to record the id of pcpu where devirt vcpu runs */
 	int devirt_cpu;
+
+	/* Used for tpr switch */
+	unsigned int devirt_host_tpr;
 };
 
 struct devirt_kvm_arch {

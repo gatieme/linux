@@ -293,6 +293,18 @@ static const struct svm_direct_access_msrs {
 	{ .index = MSR_IA32_LASTBRANCHTOIP,		.always = false },
 	{ .index = MSR_IA32_LASTINTFROMIP,		.always = false },
 	{ .index = MSR_IA32_LASTINTTOIP,		.always = false },
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	{ .index = X2APIC_MSR(APIC_EOI),		.always = false },
+	{ .index = X2APIC_MSR(APIC_IRR),		.always = false },
+	{ .index = X2APIC_MSR(APIC_TDCR),		.always = false },
+	{ .index = X2APIC_MSR(APIC_TMCCT),		.always = false },
+	{ .index = X2APIC_MSR(APIC_LVTT),		.always = false },
+	{ .index = X2APIC_MSR(APIC_TMICT),		.always = false },
+	{ .index = X2APIC_MSR(APIC_ICR),		.always = false },
+	{ .index = X2APIC_MSR(APIC_ICR2),		.always = false },
+#endif
+
 	{ .index = MSR_INVALID,				.always = false },
 };
 
@@ -1668,7 +1680,11 @@ static void init_vmcb(struct vcpu_svm *svm)
 	svm->nested.vmcb = 0;
 	svm->vcpu.arch.hflags = 0;
 
-	if (pause_filter_count) {
+	if (pause_filter_count
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable_amd(svm->vcpu.kvm)
+#endif
+	 ) {
 		control->pause_filter_count = pause_filter_count;
 		if (pause_filter_thresh)
 			control->pause_filter_thresh = pause_filter_thresh;
@@ -5802,6 +5818,38 @@ static void svm_cancel_injection(struct kvm_vcpu *vcpu)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+static void svm_disable_apic_irq(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+	u32 *msrpm = svm->msrpm;
+
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_EOI), 1, 1);
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_IRR), 1, 1);
+	mark_dirty(svm->vmcb, VMCB_PERM_MAP);
+}
+
+static void svm_disable_apic_tmr(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+	u32 *msrpm = svm->msrpm;
+
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_TDCR), 1, 1);
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_TMCCT), 1, 1);
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_LVTT), 1, 1);
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_TMICT), 1, 1);
+	mark_dirty(svm->vmcb, VMCB_PERM_MAP);
+}
+
+static void svm_disalbe_apic_icr(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+	u32 *msrpm = svm->msrpm;
+
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_ICR), 1, 1);
+	set_msr_interception(msrpm, X2APIC_MSR(APIC_ICR2), 1, 1);
+	mark_dirty(svm->vmcb, VMCB_PERM_MAP);
+}
+
 static bool svm_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
@@ -5826,6 +5874,9 @@ static void svm_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
 
 void devirt_svm_set_msr_interception(struct kvm_vcpu *vcpu)
 {
+	svm_disable_apic_irq(vcpu);
+	svm_disable_apic_tmr(vcpu);
+	svm_disalbe_apic_icr(vcpu);
 }
 
 struct devirt_kvm_operations devirt_svm_kvm_ops = {

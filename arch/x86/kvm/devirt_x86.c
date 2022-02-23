@@ -104,6 +104,21 @@ void devirt_unset_devirt_cpu_on(int cpu, struct devirt_cpu_unset_info *info)
 	smp_call_function_single(cpu, devirt_unset_devirt_cpu, info, 1);
 }
 
+static void devirt_load_guest_tpr(struct kvm_vcpu *vcpu)
+{
+	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
+
+	devirt->devirt_host_tpr = apic_read(APIC_TASKPRI);
+	apic_write(APIC_TASKPRI, GUEST1_IRQ_PRI_THREHOLD);
+}
+
+static void devirt_save_guest_tpr(struct kvm_vcpu *vcpu)
+{
+	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
+
+	apic_write(APIC_TASKPRI, devirt->devirt_host_tpr);
+}
+
 static void devirt_set_guest_irq(void)
 {
 	unsigned long *bitmap;
@@ -172,6 +187,22 @@ void devirt_set_guest_interrupt_handler(void (*handler)(u8 vector))
 {
 	if (handler)
 		guest_interrupt_handler = handler;
+}
+
+static inline bool kvm_can_mwait_in_guest(void)
+{
+	return boot_cpu_has(X86_FEATURE_MWAIT) &&
+		!boot_cpu_has_bug(X86_BUG_MONITOR) &&
+		boot_cpu_has(X86_FEATURE_ARAT);
+}
+
+static void devirt_disable_hlt(struct kvm *kvm)
+{
+	if (kvm_can_mwait_in_guest())
+		kvm->arch.mwait_in_guest = true;
+	kvm->arch.hlt_in_guest = true;
+	kvm->arch.pause_in_guest = true;
+	kvm->arch.cstate_in_guest = true;
 }
 
 bool devirt_host_system_interrupt_pending(void)
@@ -272,11 +303,13 @@ void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu)
 	 * devirt_unset_devirt_cpu_on
 	 */
 	devirt_check_devirt_cpu(vcpu);
+	devirt_load_guest_tpr(vcpu);
 	devirt_set_guest_irq();
 }
 
 void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu)
 {
+	devirt_save_guest_tpr(vcpu);
 	devirt_check_eoi();
 }
 
@@ -286,6 +319,7 @@ void devirt_enter_guest(struct kvm_vcpu *vcpu)
 
 void devirt_vcpu_create(struct kvm_vcpu *vcpu)
 {
+	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
 }
 
 void devirt_vcpu_free(struct kvm_vcpu *vcpu)
@@ -301,6 +335,7 @@ void devirt_vcpu_init(struct kvm_vcpu *vcpu)
 
 void devirt_init_vm(struct kvm *kvm)
 {
+	devirt_disable_hlt(kvm);
 }
 
 void devirt_destroy_vm(struct kvm *kvm)

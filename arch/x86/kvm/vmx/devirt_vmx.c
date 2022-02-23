@@ -15,6 +15,47 @@
 #include "ops.h"
 #include "vmx.h"
 
+static void vmx_disalbe_apic_tscdeadline(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	unsigned long *msr_bitmap;
+
+	msr_bitmap = vmx->vmcs01.msr_bitmap;
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_TSC_DEADLINE, MSR_TYPE_RW);
+}
+
+static void vmx_disable_apic_irq(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	unsigned long *msr_bitmap;
+
+	msr_bitmap = vmx->vmcs01.msr_bitmap;
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_EOI), MSR_TYPE_RW);
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_IRR), MSR_TYPE_RW);
+}
+
+static void vmx_disable_apic_tmr(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	unsigned long *msr_bitmap;
+
+	msr_bitmap = vmx->vmcs01.msr_bitmap;
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_TDCR), MSR_TYPE_RW);
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_TMCCT), MSR_TYPE_RW);
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_LVTT), MSR_TYPE_RW);
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_TMICT), MSR_TYPE_RW);
+}
+
+static void vmx_disable_apic_icr(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	unsigned long *msr_bitmap;
+
+	msr_bitmap = vmx->vmcs01.msr_bitmap;
+
+	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_ICR), MSR_TYPE_RW);
+}
+
 bool vmx_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
 {
 	u32 intr_info = vmcs_read32(VM_ENTRY_INTR_INFO_FIELD);
@@ -38,24 +79,39 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
 		apic->send_IPI_self(injected_vector);
 
+	*this_cpu_ptr(&devirt_in_guest) = 1;
+	/* Make sure the write is comleted before the execution of
+	 * devirt_host_system_interrupt_pending
+	 */
+	smp_wmb();
+
 	return devirt_host_system_interrupt_pending();
 }
 
 void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)
 {
+	*this_cpu_ptr(&devirt_in_guest) = 0;
 }
 
 int devirt_vmx_in_guest_mode(void)
 {
-	return 0;
+	return *this_cpu_ptr(&devirt_in_guest);
 }
 
 void devirt_vmx_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
 {
+	u64 guest_rflags = vmcs_readl(GUEST_RFLAGS);
+
+	/* use the invalid bit in GUEST_RFLAGS to trigger VM entry failed */
+	vmcs_writel(GUEST_RFLAGS, guest_rflags | DEVIRT_VMENTRY_FAILED_FLAG);
 }
 
 void devirt_vmx_set_msr_interception(struct kvm_vcpu *vcpu)
 {
+	vmx_disable_apic_irq(vcpu);
+	vmx_disalbe_apic_tscdeadline(vcpu);
+	vmx_disable_apic_tmr(vcpu);
+	vmx_disable_apic_icr(vcpu);
 }
 
 struct devirt_nmi_operations devirt_vmx_nmi_ops = {
