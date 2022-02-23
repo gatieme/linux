@@ -306,6 +306,46 @@ NOKPROBE_SYMBOL(unknown_nmi_error);
 static DEFINE_PER_CPU(bool, swallow_nmi);
 static DEFINE_PER_CPU(unsigned long, last_nmi_rip);
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+DECLARE_PER_CPU(atomic64_t, devirt_ipi_pending);
+
+static int devirt_handle_nmi_IPI(struct pt_regs *regs)
+{
+	unsigned long pending = atomic64_xchg(this_cpu_ptr(&devirt_ipi_pending), 0);
+
+	if (pending != 0) {
+		int bit;
+
+		for_each_set_bit(bit, &pending, 64) {
+			int vector;
+
+			if (bit == 63)
+				vector = IRQ_MOVE_CLEANUP_VECTOR;
+			else
+				vector = bit + FIRST_SYSTEM_VECTOR;
+			apic->send_IPI_self(vector);
+		}
+		return NMI_HANDLED;
+	}
+	return 0;
+}
+
+struct cpumask nmi_ipi_mask;
+static int __init nmi_ipi_cpus_setup(char *str)
+{
+	int err;
+
+	err = cpulist_parse(str, &nmi_ipi_mask);
+	if (err < 0 || cpumask_last(&nmi_ipi_mask) >= nr_cpu_ids) {
+		pr_warn("devirtcpus= incorrect CPU range\n");
+		return 0;
+	}
+
+	return 1;
+}
+__setup("nmi_ipi_cpus=", nmi_ipi_cpus_setup);
+#endif
+
 static void default_do_nmi(struct pt_regs *regs)
 {
 	unsigned char reason = 0;
@@ -413,8 +453,10 @@ static void default_do_nmi(struct pt_regs *regs)
 	 */
 	if (b2b && __this_cpu_read(swallow_nmi))
 		__this_cpu_add(nmi_stats.swallow, 1);
+#ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 	else
 		unknown_nmi_error(reason, regs);
+#endif
 }
 NOKPROBE_SYMBOL(default_do_nmi);
 
@@ -509,6 +551,10 @@ NOKPROBE_SYMBOL(is_debug_stack);
 dotraplinkage notrace void
 do_nmi(struct pt_regs *regs, long error_code)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	devirt_handle_nmi_IPI(regs);
+#endif
+
 	if (IS_ENABLED(CONFIG_SMP) && cpu_is_offline(smp_processor_id()))
 		return;
 
