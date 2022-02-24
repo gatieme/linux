@@ -20,7 +20,14 @@
 #include <linux/tick.h>
 #include <linux/pm_qos.h>
 #include <linux/sched/isolation.h>
-
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+#include <linux/sched/topology.h>
+#include <linux/stop_machine.h>
+#include <linux/cpuset.h>
+#include <linux/nmi.h>
+#include <linux/interrupt.h>
+#include <linux/tick.h>
+#endif
 #include "base.h"
 
 static DEFINE_PER_CPU(struct device *, cpu_sys_devices);
@@ -326,6 +333,178 @@ static ssize_t print_cpus_offline(struct device *dev,
 }
 static DEVICE_ATTR(offline, 0444, print_cpus_offline, NULL);
 
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+static struct cpumask dyn_isolcpus_mask;
+static DEFINE_MUTEX(dyn_isolated_mutex);
+
+static void dynisolcpus_update_active_cpus(struct work_struct *work);
+static DECLARE_WORK(dynisolcpus_update_active_cpus_work, dynisolcpus_update_active_cpus);
+
+bool dynisolcpus_rebuild_sched_domains_allowed(void)
+{
+	if (cpumask_empty(&dyn_isolcpus_mask) ||
+	    mutex_is_locked(&dyn_isolated_mutex))
+		return true;
+
+	schedule_work(&dynisolcpus_update_active_cpus_work);
+
+	return false;
+}
+
+static void dynisolcpus_update_active_cpus(struct work_struct *work)
+{
+	cpumask_var_t *doms;
+	struct sched_domain_attr *dattr;
+	unsigned int ndoms = 1;
+	struct cpumask *domain_mask;
+
+	mutex_lock(&dyn_isolated_mutex);
+	if (cpumask_empty(&dyn_isolcpus_mask))
+		goto err_unlock;
+
+	domain_mask = kzalloc_node(cpumask_size(), GFP_KERNEL, NUMA_NO_NODE);
+	if (!domain_mask)
+		goto err_unlock;
+
+	cpumask_andnot(domain_mask, cpu_present_mask, &dyn_isolcpus_mask);
+	if (cpumask_empty(&dyn_isolcpus_mask)) {
+		doms = NULL;
+		dattr = NULL;
+	} else {
+		doms = alloc_sched_domains(ndoms);
+		if (!doms)
+			goto err_out;
+
+		dattr = kmalloc_array(ndoms, sizeof(struct sched_domain_attr),
+				      GFP_KERNEL);
+		if (!doms) {
+			free_sched_domains(doms, ndoms);
+			goto err_out;
+		}
+
+		*dattr = SD_ATTR_INIT;
+		cpumask_copy(doms[0], domain_mask);
+	}
+
+	partition_sched_domains(ndoms, doms, dattr);
+
+err_out:
+	kfree(domain_mask);
+err_unlock:
+	mutex_unlock(&dyn_isolated_mutex);
+}
+
+bool dynisolcpus_cpu_allowed(struct task_struct *p, int cpu)
+{
+	if (!cpumask_test_cpu(cpu, &dyn_isolcpus_mask) ||
+	    cpumask_subset(p->cpus_ptr, &dyn_isolcpus_mask))
+		return true;
+
+	return false;
+}
+
+static ssize_t dynisolcpus_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf,
+				 size_t count)
+{
+	cpumask_var_t *doms;
+	struct sched_domain_attr *dattr;
+	unsigned int ndoms = 1;
+	struct cpumask *domain_mask;
+	struct cpumask *isolcpus_mask;
+	struct cpumask *tmp_mask;
+	int ret;
+
+	mutex_lock(&dyn_isolated_mutex);
+	domain_mask = kzalloc_node(cpumask_size(), GFP_KERNEL, NUMA_NO_NODE);
+	if (!domain_mask) {
+		ret = -ENOMEM;
+		goto err_domain_mask;
+	}
+
+	tmp_mask = kzalloc_node(cpumask_size(), GFP_KERNEL, NUMA_NO_NODE);
+	if (!tmp_mask) {
+		ret = -ENOMEM;
+		goto err_tmp_mask;
+	}
+
+	isolcpus_mask = kzalloc_node(cpumask_size(), GFP_KERNEL, NUMA_NO_NODE);
+	if (!isolcpus_mask) {
+		ret = -ENOMEM;
+		goto err_isolcpus_mask;
+	}
+
+	ret = cpulist_parse(buf, isolcpus_mask);
+	if (ret < 0)
+		goto err_out;
+
+	if (!cpumask_subset(isolcpus_mask, cpu_present_mask)) {
+		ret = -EINVAL;
+		goto err_out;
+	}
+
+	cpumask_andnot(tmp_mask, cpu_present_mask, isolcpus_mask);
+	if (cpumask_empty(tmp_mask)) {
+		ret = -EINVAL;
+		pr_warn("Dynisolcpus: must include one present CPU\n");
+		goto err_out;
+	}
+
+	cpumask_andnot(tmp_mask, isolcpus_mask, &dyn_isolcpus_mask);
+	cpumask_andnot(domain_mask, cpu_present_mask, isolcpus_mask);
+	if (cpumask_empty(isolcpus_mask)) {
+		doms = NULL;
+		dattr = NULL;
+	} else {
+		doms = alloc_sched_domains(ndoms);
+		if (!doms) {
+			ret = -ENOMEM;
+			goto err_out;
+		}
+
+		dattr = kmalloc(sizeof(struct sched_domain_attr), GFP_KERNEL);
+		if (!dattr) {
+			free_sched_domains(doms, ndoms);
+			ret = -ENOMEM;
+			goto err_out;
+		}
+
+		*dattr = SD_ATTR_INIT;
+		cpumask_copy(doms[0], domain_mask);
+	}
+
+	partition_sched_domains(ndoms, doms, dattr);
+
+	cpu_hotplug_disable();
+	cpumask_copy(&dyn_isolcpus_mask, isolcpus_mask);
+	cpu_hotplug_enable();
+err_out:
+	kfree(isolcpus_mask);
+err_isolcpus_mask:
+	kfree(tmp_mask);
+err_tmp_mask:
+	kfree(domain_mask);
+err_domain_mask:
+	mutex_unlock(&dyn_isolated_mutex);
+
+	return ret < 0 ? ret : count;
+}
+
+static ssize_t dynisolcpus_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	int n = 0, len = PAGE_SIZE-2;
+
+	mutex_lock(&dyn_isolated_mutex);
+	n = scnprintf(buf, len, "%*pbl\n", cpumask_pr_args(&dyn_isolcpus_mask));
+	mutex_unlock(&dyn_isolated_mutex);
+
+	return n;
+}
+static DEVICE_ATTR_RW(dynisolcpus);
+#endif
+
 static ssize_t print_cpus_isolated(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
@@ -537,6 +716,9 @@ static struct attribute *cpu_root_attrs[] = {
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	&dev_attr_dyn_nmi_ipi.attr,
 #endif
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+	&dev_attr_dynisolcpus.attr,
+#endif
 	NULL
 };
 
@@ -683,4 +865,8 @@ void __init cpu_dev_init(void)
 
 	cpu_dev_register_generic();
 	cpu_register_vulnerabilities();
+
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+	cpumask_clear(&dyn_isolcpus_mask);
+#endif
 }

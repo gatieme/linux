@@ -194,6 +194,20 @@ extern void set_sched_topology(struct sched_domain_topology_level *tl);
 # define SD_INIT_NAME(type)
 #endif
 
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+extern bool dynisolcpus_cpu_allowed(struct task_struct *p, int cpu);
+extern bool dynisolcpus_rebuild_sched_domains_allowed(void);
+#else
+static inline bool dynisolcpus_cpu_allowed(struct task_struct *p, int cpu)
+{
+	return true;
+}
+
+static inline bool dynisolcpus_rebuild_sched_domains_allowed(void)
+{
+	return true;
+}
+#endif
 #else /* CONFIG_SMP */
 
 struct sched_domain_attr;

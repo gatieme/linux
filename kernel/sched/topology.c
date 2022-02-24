@@ -2222,6 +2222,12 @@ void partition_sched_domains_locked(int ndoms_new, cpumask_var_t doms_new[],
 	int i, j, n;
 	int new_topology;
 
+	if (!dynisolcpus_rebuild_sched_domains_allowed()) {
+		pr_warn("%s/%d: rebuild sched_domains is not allowed!\n",
+			current->comm, current->pid);
+		return;
+	}
+
 	lockdep_assert_held(&sched_domains_mutex);
 
 	/* Always unregister in case we don't destroy any domains: */
