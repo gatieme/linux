@@ -477,9 +477,25 @@ static ssize_t dynisolcpus_store(struct device *dev,
 	partition_sched_domains(ndoms, doms, dattr);
 
 	cpu_hotplug_disable();
+	dynisolcpus_watchdog_cpumask(domain_mask);
+
 	if (!cpumask_empty(tmp_mask))
 		stop_machine_cpuslocked(dynisolcpus_migrate_tasks,
 					(void *)isolcpus_mask, tmp_mask);
+
+	cpumask_andnot(irq_default_affinity, irq_default_affinity, tmp_mask);
+	if (cpumask_empty(irq_default_affinity))
+		cpumask_copy(irq_default_affinity, domain_mask);
+
+	if (!cpumask_empty(&dyn_isolcpus_mask)) {
+		cpumask_and(tmp_mask, &dyn_isolcpus_mask, domain_mask);
+		cpumask_or(irq_default_affinity,
+			   irq_default_affinity, tmp_mask);
+	} else
+		cpumask_copy(tmp_mask, domain_mask);
+
+	dynisolcpus_irq_migrate(tmp_mask);
+
 	cpumask_copy(&dyn_isolcpus_mask, isolcpus_mask);
 	cpu_hotplug_enable();
 err_out:

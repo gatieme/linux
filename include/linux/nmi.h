@@ -212,6 +212,9 @@ extern int proc_watchdog_thresh(struct ctl_table *, int ,
 				void __user *, size_t *, loff_t *);
 extern int proc_watchdog_cpumask(struct ctl_table *, int,
 				 void __user *, size_t *, loff_t *);
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+extern void dynisolcpus_watchdog_cpumask(struct cpumask *wd_cpumask);
+#endif
 
 #ifdef CONFIG_HAVE_ACPI_APEI_NMI
 #include <asm/nmi.h>

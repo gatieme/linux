@@ -747,7 +747,9 @@ int arch_show_interrupts(struct seq_file *p, int prec);
 extern int early_irq_init(void);
 extern int arch_probe_nr_irqs(void);
 extern int arch_early_irq_init(void);
-
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+extern void dynisolcpus_irq_migrate(struct cpumask *tmp_mask);
+#endif
 /*
  * We want to know which function is an entrypoint of a hardirq or a softirq.
  */

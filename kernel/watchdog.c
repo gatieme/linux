@@ -775,6 +775,19 @@ int proc_watchdog_cpumask(struct ctl_table *table, int write,
 	mutex_unlock(&watchdog_mutex);
 	return err;
 }
+
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+void dynisolcpus_watchdog_cpumask(struct cpumask *wd_cpumask)
+{
+	if (cpumask_empty(wd_cpumask))
+		return;
+
+	mutex_lock(&watchdog_mutex);
+	cpumask_copy(&watchdog_cpumask, wd_cpumask);
+	proc_watchdog_update();
+	mutex_unlock(&watchdog_mutex);
+}
+#endif
 #endif /* CONFIG_SYSCTL */
 
 void __init lockup_detector_init(void)
