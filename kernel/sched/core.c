@@ -2145,6 +2145,8 @@ static int select_fallback_rq(int cpu, struct task_struct *p)
 		for_each_cpu(dest_cpu, nodemask) {
 			if (!cpu_active(dest_cpu))
 				continue;
+			if (!dynisolcpus_cpu_allowed(p, dest_cpu))
+				continue;
 			if (cpumask_test_cpu(dest_cpu, p->cpus_ptr))
 				return dest_cpu;
 		}
@@ -2153,6 +2155,8 @@ static int select_fallback_rq(int cpu, struct task_struct *p)
 	for (;;) {
 		/* Any allowed, online CPU? */
 		for_each_cpu(dest_cpu, p->cpus_ptr) {
+			if (!dynisolcpus_cpu_allowed(p, dest_cpu))
+				continue;
 			if (!is_cpu_allowed(p, dest_cpu))
 				continue;
 
@@ -2218,7 +2222,7 @@ int select_task_rq(struct task_struct *p, int cpu, int sd_flags, int wake_flags)
 	 * [ this allows ->select_task() to simply return task_cpu(p) and
 	 *   not worry about this generic constraint ]
 	 */
-	if (unlikely(!is_cpu_allowed(p, cpu)))
+	if (unlikely(!is_cpu_allowed(p, cpu) || !dynisolcpus_cpu_allowed(p, cpu)))
 		cpu = select_fallback_rq(task_cpu(p), p);
 
 	return cpu;
@@ -6648,6 +6652,156 @@ int sched_cpu_dying(unsigned int cpu)
 	update_max_interval();
 	nohz_balance_exit_idle(rq);
 	hrtick_clear(rq);
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
+static int dynisolcpus_select_rq(int cpu, struct task_struct *p,
+				 struct cpumask *isolcpus_mask)
+{
+	int nid = cpu_to_node(cpu);
+	const struct cpumask *nodemask = NULL;
+	int dest_cpu;
+
+	/*
+	 * If the node that the CPU is on has been offlined, cpu_to_node()
+	 * will return -1. There is no CPU on the node, and we should
+	 * select the CPU on the other node.
+	 */
+	if (nid != -1) {
+		nodemask = cpumask_of_node(nid);
+
+		/* Look for allowed, online CPU in same node. */
+		for_each_cpu(dest_cpu, nodemask) {
+			if (!cpu_active(dest_cpu))
+				continue;
+			if (cpumask_test_cpu(dest_cpu, isolcpus_mask))
+				continue;
+			if (cpumask_test_cpu(dest_cpu, p->cpus_ptr))
+				return dest_cpu;
+		}
+	}
+
+	/* Any allowed, online CPU? */
+	for_each_cpu(dest_cpu, p->cpus_ptr) {
+		if (cpumask_test_cpu(dest_cpu, isolcpus_mask))
+			continue;
+		if (!is_cpu_allowed(p, dest_cpu))
+			continue;
+
+		goto out;
+	}
+
+	if (p->mm && printk_ratelimit()) {
+		printk_deferred("Failed to migrate process %d (%s) on cpu %d\n",
+				task_pid_nr(p), p->comm, cpu);
+	}
+
+	dest_cpu = -1;
+out:
+	return dest_cpu;
+}
+
+static void __dynisolcpus_migrate_tasks(struct rq *isolating_rq,
+					struct rq_flags *rf,
+					struct cpumask *isolcpus_mask)
+{
+	struct rq *rq = isolating_rq;
+	struct task_struct *next, *stop = rq->stop;
+	struct rq_flags orf = *rf;
+	unsigned long migrate_timeout = jiffies + 2;
+	int dest_cpu;
+	int pinned_tasks = 1;
+
+	/*
+	 * Fudge the rq selection such that the below task selection loop
+	 * doesn't get stuck on the currently eligible stop task.
+	 *
+	 * We're currently inside stop_machine() and the rq is either stuck
+	 * in the stop_machine_cpu_stop() loop, or we're executing this code,
+	 * either way we should never end up calling schedule() until we're
+	 * done here.
+	 */
+	rq->stop = NULL;
+
+	/*
+	 * put_prev_task() and pick_next_task() sched
+	 * class method both need to have an up-to-date
+	 * value of rq->clock[_task]
+	 */
+	update_rq_clock(rq);
+	for (;;) {
+		/*
+		 * There's this thread running, bail when that's the only
+		 * remaining thread:
+		 */
+		if (rq->nr_running <= pinned_tasks)
+			break;
+
+		if (time_after(jiffies, migrate_timeout))
+			break;
+
+		next = __pick_migrate_task(rq);
+
+		/*
+		 * Rules for changing task_struct::cpus_mask are holding
+		 * both pi_lock and rq->lock, such that holding either
+		 * stabilizes the mask.
+		 *
+		 * Drop rq->lock is not quite as disastrous as it usually is
+		 * because !cpu_active at this point, which means load-balance
+		 * will not interfere. Also, stop-machine.
+		 */
+		rq_unlock(rq, rf);
+		raw_spin_lock(&next->pi_lock);
+		rq_relock(rq, rf);
+
+		/*
+		 * Since we're inside stop-machine, _nothing_ should have
+		 * changed the task, WARN if weird stuff happened, because in
+		 * that case the above rq->lock drop is a fail too.
+		 */
+		if (WARN_ON(task_rq(next) != rq || !task_on_rq_queued(next))) {
+			raw_spin_unlock(&next->pi_lock);
+			continue;
+		}
+
+		/* Find suitable destination for @next, with force if needed. */
+		dest_cpu = dynisolcpus_select_rq(isolating_rq->cpu,
+						 next, isolcpus_mask);
+		if (dest_cpu < 0) {
+			pinned_tasks++;
+			raw_spin_unlock(&next->pi_lock);
+			continue;
+		}
+
+		rq = __migrate_task(rq, rf, next, dest_cpu);
+		if (rq != isolating_rq) {
+			rq_unlock(rq, rf);
+			rq = isolating_rq;
+			*rf = orf;
+			rq_relock(rq, rf);
+		}
+		raw_spin_unlock(&next->pi_lock);
+	}
+
+	rq->stop = stop;
+}
+
+int dynisolcpus_migrate_tasks(void *_param)
+{
+	struct rq *rq = this_rq();
+	struct rq_flags rf;
+	struct cpumask *isolcpus_mask = (struct cpumask *)_param;
+
+	sched_ttwu_pending();
+	rq_lock_irqsave(rq, &rf);
+	__dynisolcpus_migrate_tasks(rq, &rf, isolcpus_mask);
+	if (rq->nr_running != 1)
+		pr_debug("Dynisolcpus: some tasks failed to migration\n");
+	rq_unlock_irqrestore(rq, &rf);
+
 	return 0;
 }
 #endif

@@ -477,6 +477,9 @@ static ssize_t dynisolcpus_store(struct device *dev,
 	partition_sched_domains(ndoms, doms, dattr);
 
 	cpu_hotplug_disable();
+	if (!cpumask_empty(tmp_mask))
+		stop_machine_cpuslocked(dynisolcpus_migrate_tasks,
+					(void *)isolcpus_mask, tmp_mask);
 	cpumask_copy(&dyn_isolcpus_mask, isolcpus_mask);
 	cpu_hotplug_enable();
 err_out:
