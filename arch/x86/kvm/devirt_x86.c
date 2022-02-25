@@ -338,6 +338,87 @@ out:
 	return r;
 }
 
+static int devirt_virtio_notify_alloc_pages(struct kvm *kvm)
+{
+	int r = 0;
+	struct dvn_msr val;
+
+	mutex_lock(&kvm->slots_lock);
+	if (kvm->arch.devirt.dvn_msr_val)
+		goto out;
+
+	r = __x86_set_memory_region(kvm, DEVIRT_VIRTIO_NOTIFY_MEMOSLOT,
+				    DEVIRT_VIRTIO_NOTIFY_PHYS_BASE,
+				    PAGE_SIZE);
+	if (r)
+		goto out;
+
+	val.dvn_gfn = DEVIRT_VIRTIO_NOTIFY_PHYS_BASE >> PAGE_SHIFT;
+	val.dvn_enable = 1;
+	kvm->arch.devirt.dvn_msr_val = val.val;
+	kvm->arch.devirt.dvn_desc = NULL;
+out:
+	mutex_unlock(&kvm->slots_lock);
+	return r;
+}
+
+/*
+ * devirt_get_dvn_cpu() - Return the target cpu for devirt virtio-exitless
+ *                        notification.
+ */
+extern struct cpumask devirt_virtio_notify_mask;
+static unsigned int devirt_get_virtio_notify_cpu(void)
+{
+	int cpu = smp_processor_id();
+	int node = cpu_to_node(cpu);
+
+	if (cpumask_empty(&devirt_virtio_notify_mask))
+		return 0;
+
+
+	/* Select the first managed cpu in the same NUMA node. */
+	for_each_cpu_and(cpu, cpumask_of_node(node), &devirt_virtio_notify_mask)
+		return cpu;
+
+	cpu = cpumask_next(cpu, &devirt_virtio_notify_mask);
+	if (cpu >= nr_cpu_ids)
+		cpu = cpumask_first(&devirt_virtio_notify_mask);
+	return cpu;
+}
+
+static int devirt_virtio_notify_setup_desc(struct kvm_vcpu *vcpu,
+					   struct kvm *kvm)
+{
+	struct dvn_desc *desc;
+	struct dvn_msr val;
+	struct page *page;
+	int dest_cpu, r = 0;
+
+	mutex_lock(&kvm->slots_lock);
+	if (kvm->arch.devirt.dvn_desc || !kvm->arch.devirt.dvn_msr_val)
+		goto out;
+
+	val.val = kvm->arch.devirt.dvn_msr_val;
+	page = kvm_vcpu_gfn_to_page(vcpu, val.dvn_gfn);
+	if (is_error_page(page)) {
+		pr_warn("cannot get page from gfn: 0x%llx\n", val.val);
+		r = -EFAULT;
+		goto out;
+	}
+
+	desc = (struct dvn_desc *)(page_address(page));
+	memset(desc, 0x00, sizeof(struct dvn_desc));
+
+	dest_cpu = devirt_get_virtio_notify_cpu();
+	desc->cpu = dest_cpu;
+	desc->dest_apicid = per_cpu(x86_cpu_to_apicid, dest_cpu);
+	kvm->arch.devirt.dvn_desc = desc;
+	kvm->arch.devirt.dvn_desc->kvm_id = kvm->userspace_pid;
+out:
+	mutex_unlock(&kvm->slots_lock);
+	return r;
+}
+
 DEFINE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending) = {0};
 
 bool devirt_has_guest_interrupt(struct kvm_vcpu *vcpu)
@@ -513,6 +594,8 @@ void devirt_vcpu_create(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
 
+	devirt_virtio_notify_alloc_pages(kvm);
+	devirt_virtio_notify_setup_desc(vcpu, kvm);
 	devirt_apic_maps_alloc_page(kvm);
 	devirt_apic_maps_setup(vcpu, kvm);
 	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
