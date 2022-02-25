@@ -173,6 +173,14 @@ DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 
 extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
 
+/* Notify the virtio backend with ioeventfd */
+extern int devirt_virtio_notify(struct kvm *kvm,
+				gpa_t addr,
+				int len,
+				unsigned long val);
+
+/* External functions used for guest interrupt handling*/
+extern void (*virtio_notify_handler)(void);
 extern void (*guest_interrupt_handler)(u8 vector);
 
 extern bool devirt_has_guest_interrupt(struct kvm_vcpu *vcpu);

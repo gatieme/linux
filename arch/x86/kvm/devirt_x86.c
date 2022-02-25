@@ -17,6 +17,8 @@
 
 static DEFINE_PER_CPU(u32, devirt_cpu_set);
 static DEFINE_RAW_SPINLOCK(devirt_vcpu_migration_lock);
+static DEFINE_PER_CPU(struct list_head, devirt_notify_vm_list);
+static DEFINE_PER_CPU(spinlock_t, devirt_notify_vm_list_lock);
 
 static void devirt_set_host_timer(void)
 {
@@ -408,10 +410,13 @@ static int devirt_virtio_notify_setup_desc(struct kvm_vcpu *vcpu,
 
 	desc = (struct dvn_desc *)(page_address(page));
 	memset(desc, 0x00, sizeof(struct dvn_desc));
-
 	dest_cpu = devirt_get_virtio_notify_cpu();
 	desc->cpu = dest_cpu;
 	desc->dest_apicid = per_cpu(x86_cpu_to_apicid, dest_cpu);
+	spin_lock(&per_cpu(devirt_notify_vm_list_lock, dest_cpu));
+	list_add(&kvm->devirt_notify_vm_list,
+		 &per_cpu(devirt_notify_vm_list, dest_cpu));
+	spin_unlock(&per_cpu(devirt_notify_vm_list_lock, dest_cpu));
 	kvm->arch.devirt.dvn_desc = desc;
 	kvm->arch.devirt.dvn_desc->kvm_id = kvm->userspace_pid;
 out:
@@ -457,6 +462,64 @@ void devirt_set_guest_interrupt_handler(void (*handler)(u8 vector))
 {
 	if (handler)
 		guest_interrupt_handler = handler;
+}
+
+int devirt_virtio_notify(struct kvm *kvm, gpa_t addr,
+			 int len,
+			 unsigned long val)
+{
+	int r = 0;
+
+	/* Scan KVM_FAST_MMIO_BUS */
+	r = kvm_io_bus_handler(kvm, KVM_FAST_MMIO_BUS, addr, len, &val);
+
+	/* Scan KVM_MMIO_BUS */
+	if (r != 0)
+		r = kvm_io_bus_handler(kvm, KVM_MMIO_BUS, addr, len, &val);
+
+	/* Scan KVM_PIO_BUS */
+	if (r != 0)
+		r = kvm_io_bus_handler(kvm, KVM_PIO_BUS, addr, len, &val);
+
+	return r;
+}
+
+/* Handler for DEVIRT_VIRTIO_NOTIFY_VECTOR */
+static void devirt_virtio_notify_handler(void)
+{
+	struct kvm *kvm;
+	struct dvn_desc *desc;
+	int nr, status;
+	struct kick_entry *entry;
+	struct list_head *head;
+	unsigned long flags;
+
+	head = this_cpu_ptr(&devirt_notify_vm_list);
+	spin_lock_irqsave(this_cpu_ptr(&devirt_notify_vm_list_lock), flags);
+	list_for_each_entry(kvm, head, devirt_notify_vm_list) {
+		if (!devirt_enable(kvm) || !kvm->arch.devirt.dvn_desc)
+			continue;
+
+		desc = kvm->arch.devirt.dvn_desc;
+		for (nr = 0; nr < DEVIRT_VIRTIO_NOTIFY_ENTRY_MAX; nr++) {
+			entry = &(desc->entries[nr]);
+			status = atomic_read_acquire(&(entry->status));
+			if (status == DEVIRT_VIRTIO_NOTIFY_ENTRY_USED) {
+				if (devirt_virtio_notify(kvm, entry->addr, entry->len, entry->val))
+					pr_warn("Not find device: 0x%llx\n", entry->addr);
+
+				atomic_set_release(&(entry->status),
+					DEVIRT_VIRTIO_NOTIFY_ENTRY_UNUSED);
+			}
+		}
+	}
+	spin_unlock_irqrestore(this_cpu_ptr(&devirt_notify_vm_list_lock), flags);
+}
+
+static void devirt_set_virtio_notify_handler(void (*handler)(void))
+{
+	if (handler)
+		virtio_notify_handler = handler;
 }
 
 static inline bool kvm_can_mwait_in_guest(void)
@@ -569,6 +632,20 @@ static void devirt_check_devirt_cpu(struct kvm_vcpu *vcpu)
 	vcpu_to_devirt(vcpu)->devirt_cpu = smp_processor_id();
 }
 
+static void devirt_del_notify_vm_list(struct kvm *kvm)
+{
+	int cpu;
+
+	if (!kvm->arch.devirt.dvn_desc)
+		return;
+
+	cpu = kvm->arch.devirt.dvn_desc->cpu;
+
+	spin_lock(&per_cpu(devirt_notify_vm_list_lock, cpu));
+	list_del(&kvm->devirt_notify_vm_list);
+	spin_unlock(&per_cpu(devirt_notify_vm_list_lock, cpu));
+}
+
 void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu)
 {
 	/* irq is disabled, so that it will not be interrupted when other core calls
@@ -635,6 +712,11 @@ void devirt_destroy_vm(struct kvm *kvm)
 		page = virt_to_page(kvm->arch.devirt.apic_maps);
 		put_page(page);
 	}
+	if (kvm->arch.devirt.dvn_desc) {
+		devirt_del_notify_vm_list(kvm);
+		page = virt_to_page(kvm->arch.devirt.dvn_desc);
+		put_page(page);
+	}
 }
 
 void devirt_init(void)
@@ -642,10 +724,13 @@ void devirt_init(void)
 	int cpu;
 
 	devirt_set_guest_interrupt_handler(devirt_guest_interrupt_handler);
+	devirt_set_virtio_notify_handler(devirt_virtio_notify_handler);
 
 	for_each_possible_cpu(cpu) {
 		INIT_LIST_HEAD(&per_cpu(devirt_blocked_vcpu_on_cpu, cpu));
 		spin_lock_init(&per_cpu(devirt_blocked_vcpu_on_cpu_lock, cpu));
+		INIT_LIST_HEAD(&per_cpu(devirt_notify_vm_list, cpu));
+		spin_lock_init(&per_cpu(devirt_notify_vm_list_lock, cpu));
 	}
 }
 

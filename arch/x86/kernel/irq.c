@@ -19,6 +19,9 @@
 #include <asm/mce.h>
 #include <asm/hw_irq.h>
 #include <asm/desc.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/irq_vectors.h>
@@ -344,6 +347,9 @@ __visible void smp_kvm_posted_intr_nested_ipi(struct pt_regs *regs)
 #endif
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+void (*virtio_notify_handler)(void) = dummy_handler;
+EXPORT_SYMBOL_GPL(virtio_notify_handler);
+
 /*
  * Handler for DEVIRT_VIRTIO_NOTIFY_VECTOR
  */
@@ -352,6 +358,7 @@ __visible void __irq_entry smp_devirt_virtio_notify_ipi(struct pt_regs *regs)
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
 	entering_ack_irq();
+	virtio_notify_handler();
 	exiting_irq();
 
 	set_irq_regs(old_regs);

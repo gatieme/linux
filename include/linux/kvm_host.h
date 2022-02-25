@@ -186,6 +186,10 @@ enum kvm_bus {
 
 int kvm_io_bus_write(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx, gpa_t addr,
 		     int len, const void *val);
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+int kvm_io_bus_handler(struct kvm *kvm, enum kvm_bus bus_idx,
+		       gpa_t addr, int len, const void *val);
+#endif
 int kvm_io_bus_write_cookie(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx,
 			    gpa_t addr, int len, const void *val, long cookie);
 int kvm_io_bus_read(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx, gpa_t addr,
@@ -511,6 +515,7 @@ struct kvm {
 	bool devirt_enable_amd;
 	unsigned long devirt_apic_rip_start;
 	unsigned long devirt_apic_rip_end;
+	struct list_head devirt_notify_vm_list;
 #endif
 };
 
