@@ -162,6 +162,30 @@ static int x2apic_phys_probe(void)
 	return apic == &apic_x2apic_phys;
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+void x2apic_send_IPI_mask_devirt(const struct cpumask *mask, int vector)
+{
+	unsigned long query_cpu;
+	unsigned long this_cpu;
+	unsigned long flags;
+	int apic_dest = APIC_DEST_ALLINC;
+
+	weak_wrmsr_fence();
+
+	local_irq_save(flags);
+
+	this_cpu = smp_processor_id();
+	for_each_cpu(query_cpu, mask) {
+		if (apic_dest == APIC_DEST_ALLBUT && this_cpu == query_cpu)
+			continue;
+		__x2apic_send_IPI_dest(per_cpu(x86_cpu_to_apicid, query_cpu),
+				       vector, APIC_DEST_PHYSICAL);
+	}
+	local_irq_restore(flags);
+}
+EXPORT_SYMBOL(x2apic_send_IPI_mask_devirt);
+#endif
+
 /* Common x2apic functions, also used by x2apic_cluster */
 int x2apic_apic_id_valid(u32 apicid)
 {

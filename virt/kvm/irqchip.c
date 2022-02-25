@@ -58,6 +58,9 @@ int kvm_send_userspace_msi(struct kvm *kvm, struct kvm_msi *msi)
 	route.msi.data = msi->data;
 	route.msi.flags = msi->flags;
 	route.msi.devid = msi->devid;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	route.msi.use_irqfd = 0;
+#endif
 
 	return kvm_set_msi(&route, kvm, KVM_USERSPACE_IRQ_SOURCE_ID, 1, false);
 }

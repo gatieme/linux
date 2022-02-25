@@ -393,6 +393,9 @@ struct kvm_kernel_irq_routing_entry {
 			u32 data;
 			u32 flags;
 			u32 devid;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+			u32 use_irqfd;
+#endif
 		} msi;
 		struct kvm_s390_adapter_int adapter;
 		struct kvm_hv_sint hv_sint;

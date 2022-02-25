@@ -17,6 +17,9 @@
 #include <trace/events/kvm.h>
 
 #include <asm/msidef.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "irq.h"
 
@@ -121,6 +124,10 @@ void kvm_set_msi_irq(struct kvm *kvm, struct kvm_kernel_irq_routing_entry *e,
 		& MSI_ADDR_REDIRECTION_LOWPRI) > 0);
 	irq->level = 1;
 	irq->shorthand = 0;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (e->msi.use_irqfd == DEVIRT_DELIVERY_MSI_USING_IPI_FLAG)
+		irq->delivery_mode |= DEVIRT_DELIVERY_MSI_USING_IPI_FLAG;
+#endif
 }
 EXPORT_SYMBOL_GPL(kvm_set_msi_irq);
 
@@ -305,6 +312,9 @@ int kvm_set_routing_entry(struct kvm *kvm,
 		e->msi.address_lo = ue->u.msi.address_lo;
 		e->msi.address_hi = ue->u.msi.address_hi;
 		e->msi.data = ue->u.msi.data;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		e->msi.use_irqfd = 0;
+#endif
 
 		if (kvm_msi_route_invalid(kvm, e))
 			return -EINVAL;
