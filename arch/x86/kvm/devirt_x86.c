@@ -593,6 +593,24 @@ void devirt_post_block(struct kvm_vcpu *vcpu)
 	local_irq_enable();
 }
 
+static void devirt_set_vfio_interrupt(struct kvm_vcpu *vcpu)
+{
+	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
+	struct devirt_vfio_irq_info *info;
+	unsigned long flags;
+	int dest_id;
+	int cpu = smp_processor_id();
+
+	/* use memory barrier to handle race condition */
+	smp_store_mb(devirt->devirt_vfio_cpu, cpu);
+	spin_lock_irqsave(&devirt->devirt_vfio_irq_lock, flags);
+	list_for_each_entry(info, &devirt->devirt_vfio_irq_list, node) {
+		dest_id = per_cpu(x86_cpu_to_apicid, cpu);
+		__irq_set_devirt_affinity(info->host_irq, dest_id, info->vector);
+	}
+	spin_unlock_irqrestore(&devirt->devirt_vfio_irq_lock, flags);
+}
+
 static void devirt_check_devirt_cpu_set(struct kvm_vcpu *vcpu)
 {
 	u32 *set = this_cpu_ptr(&devirt_cpu_set);
@@ -605,6 +623,10 @@ static void devirt_check_devirt_cpu_set(struct kvm_vcpu *vcpu)
 	if (!set_val) {
 		/* Set the host timer on devirt cpu */
 		devirt_set_host_timer();
+		/* Since a new vcpu is migrated to the current core, the vfio interrupts
+		 * that belong to the vcpu must also be migrated.
+		 */
+		devirt_set_vfio_interrupt(vcpu);
 		/* The guest apic maps must also be updated */
 		devirt_update_apic_maps(vcpu);
 		*set = new_val;
@@ -688,6 +710,8 @@ void devirt_vcpu_init(struct kvm_vcpu *vcpu)
 	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
 
 	devirt->devirt_cpu = -1;
+	INIT_LIST_HEAD(&devirt->devirt_vfio_irq_list);
+	spin_lock_init(&devirt->devirt_vfio_irq_lock);
 	devirt->devirt_vfio_cpu = -1;
 }
 
@@ -704,6 +728,8 @@ void devirt_destroy_vm(struct kvm *kvm)
 
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		devirt_unset_devirt_cpu_on(vcpu_to_devirt(vcpu)->devirt_cpu, NULL);
+		/* clear the vcpu's vfio info */
+		delete_devirt_vfio_irq_info_by_vcpu(vcpu);
 	}
 
 	/*

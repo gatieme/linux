@@ -209,6 +209,8 @@ extern struct devirt_kvm_operations devirt_svm_kvm_ops;
 extern void devirt_tick_broadcast_set_event(ktime_t expires);
 extern bool devirt_host_system_interrupt_pending(void);
 
+void delete_devirt_vfio_irq_info_by_vcpu(struct kvm_vcpu *vcpu);
+
 extern void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_enter_guest(struct kvm_vcpu *vcpu);
