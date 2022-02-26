@@ -1356,6 +1356,11 @@ void kvm_arch_irq_bypass_stop(struct irq_bypass_consumer *);
 void kvm_arch_irq_bypass_start(struct irq_bypass_consumer *);
 int kvm_arch_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 				  uint32_t guest_irq, bool set);
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+int devirt_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
+				uint32_t guest_irq, struct kvm_kernel_irq_routing_entry *e,
+				bool set);
+#endif
 #endif /* CONFIG_HAVE_KVM_IRQ_BYPASS */
 
 #ifdef CONFIG_HAVE_KVM_INVALID_WAKEUPS

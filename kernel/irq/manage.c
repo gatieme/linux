@@ -20,6 +20,9 @@
 #include <linux/sched/task.h>
 #include <uapi/linux/sched/types.h>
 #include <linux/task_work.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "internals.h"
 
@@ -346,6 +349,44 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 	return ret;
 }
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+int irq_do_set_devirt_affinity(struct irq_data *data, u32 dest_id, u32 vector)
+{
+	struct irq_chip *chip = irq_data_get_irq_chip(data);
+	int ret;
+	struct devirt_affinity_info info;
+
+	if (!chip || !chip->irq_set_vcpu_affinity)
+		return -EINVAL;
+
+	/* We use the type to notify intel_ir_set_devirt_affinity that this
+	 * is a devirt_affinity_info structure.
+	 */
+	info.type = DEVIRT_AFFINITY_INFO_TYPE;
+	info.dest_id = (u16)dest_id;
+	info.vector = (u16)vector;
+	ret = chip->irq_set_vcpu_affinity(data, &info);
+
+	return ret;
+}
+
+int __irq_set_devirt_affinity(unsigned int irq, u32 dest_id, u32 vector)
+{
+	struct irq_desc *desc = irq_to_desc(irq);
+	unsigned long flags;
+	int ret;
+
+	if (!desc)
+		return -EINVAL;
+
+	raw_spin_lock_irqsave(&desc->lock, flags);
+	ret = irq_do_set_devirt_affinity(irq_desc_get_irq_data(desc), dest_id, vector);
+	raw_spin_unlock_irqrestore(&desc->lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL(__irq_set_devirt_affinity);
+#endif
 
 int irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
 {
