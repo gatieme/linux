@@ -12,6 +12,7 @@
 #include <linux/kvm_host.h>
 #include <asm/devirt.h>
 #include <asm/apic.h>
+#include <asm/pgtable_types.h>
 
 #include "kvm_cache_regs.h"
 
@@ -19,6 +20,8 @@ static DEFINE_PER_CPU(u32, devirt_cpu_set);
 static DEFINE_RAW_SPINLOCK(devirt_vcpu_migration_lock);
 static DEFINE_PER_CPU(struct list_head, devirt_notify_vm_list);
 static DEFINE_PER_CPU(spinlock_t, devirt_notify_vm_list_lock);
+static struct page **devirt_mem_rmap_pages;
+static unsigned long devirt_mem_rmap_size;
 
 static void devirt_set_host_timer(void)
 {
@@ -298,7 +301,7 @@ static int devirt_apic_maps_alloc_page(struct kvm *kvm)
 
 	r = __x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT,
 				    DEVIRT_APIC_MAPS_PHYS_BASE,
-				    PAGE_SIZE);
+				    PAGE_SIZE, NULL);
 	if (r) {
 		pr_emerg("set memory region failed for DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT %d\n", r);
 		goto out;
@@ -340,6 +343,598 @@ out:
 	return r;
 }
 
+struct devirt_mem_map_head *devirt_gfn_to_head(struct kvm *kvm, gfn_t gfn)
+{
+	int i;
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	struct devirt_mem_map_head *head;
+
+	for (i = 0; i < devirt->used_heads; i++) {
+		head = (struct devirt_mem_map_head *)(devirt->map_head_kaddrs[i].kaddr);
+		if (!(head->flags & DEVIRT_MEM_MAP_FLAG_VALID))
+			continue;
+		if (gfn >= head->base_gfn && gfn < head->base_gfn + head->nr_pages)
+			return head;
+	}
+	return NULL;
+}
+
+void devirt_record_rmap(struct kvm *kvm, unsigned long pfn, unsigned long gfn)
+{
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	unsigned long *pos = devirt->rmap + pfn;
+
+	__put_user(gfn, pos);
+}
+
+int devirt_add_mapping_info(struct kvm *kvm,
+					 struct devirt_mem_map_head *head)
+{
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	unsigned long pfn, gfn, base_gfn = head->base_gfn;
+	unsigned int nr_pages = head->nr_pages;
+	unsigned long addr, map_addr = head->map_addr;
+
+	for (gfn = base_gfn, addr = map_addr; gfn < base_gfn + nr_pages;
+		 gfn++, addr += 8) {
+		pfn = gfn_to_pfn(kvm, gfn);
+		if (is_error_noslot_pfn(pfn)) {
+			pr_emerg("%s error pfn, gfn:%lx\n", __func__, gfn);
+			return -EFAULT;
+		}
+		/* No need to unpin the IO memory pages. */
+		if (!kvm_is_reserved_pfn(pfn))
+			devirt->pinned_pages[devirt->cur_pinned_nrpages++] = pfn_to_page(pfn);
+
+		if (__put_user(pfn, (unsigned long *)(void *)addr)) {
+			pr_emerg("%s error __put_user, addr:%lx\n", __func__, addr);
+			return -EFAULT;
+		}
+
+		/* init the rmap */
+		devirt_record_rmap(kvm, pfn, gfn);
+
+		cond_resched();
+	}
+	return 0;
+}
+
+int devirt_mem_mapping_init(struct kvm *kvm)
+{
+	int r = 0, i;
+	unsigned long head_gfn;
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	struct kvm_memory_slot *memslot;
+	struct page *pages[DEVIRT_MAP_HEAD_NPAGES];
+	struct page *page;
+	struct kvm_memslots *slots;
+	unsigned long total_slots_nrpages = 0, nr_pinned_pages;
+
+	mutex_lock(&kvm->slots_lock);
+
+	slots = __kvm_memslots(kvm, 0);
+	kvm_for_each_memslot(memslot, slots) {
+		total_slots_nrpages += memslot->npages;
+	}
+
+	nr_pinned_pages = DEVIRT_MAP_HEAD_NPAGES + (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT)
+		 + (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT) + total_slots_nrpages;
+	devirt->pinned_pages =
+		(struct page **)__vmalloc(sizeof(struct page *) * nr_pinned_pages,
+			 GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
+	if (!devirt->pinned_pages) {
+		r = -EFAULT;
+		goto error;
+	}
+
+	for (i = 0; i < DEVIRT_MAP_HEAD_NPAGES; i++) {
+		head_gfn = (DEVIRT_MEM_MAP_HEAD_PHYS_BASE >> PAGE_SHIFT) + i;
+		page = gfn_to_page(kvm, head_gfn);
+		if (is_error_page(page)) {
+			pr_emerg("katabm: cannot get page from gfn: 0x%lx\n", head_gfn);
+			r = -EFAULT;
+			goto error_free;
+		}
+		devirt->pinned_pages[devirt->cur_pinned_nrpages++] = pages[i] = page;
+	}
+	for (i = 0; i < KVM_MEM_SLOTS_NUM; i++) {
+		int off = i * sizeof(struct devirt_mem_map_head) / PAGE_SIZE;
+
+		page = pages[off];
+		devirt->map_head_kaddrs[i].kaddr = (unsigned long)page_address(page)
+			 + ((DEVIRT_MEM_MAP_HEAD_PHYS_BASE
+			 + i * sizeof(struct devirt_mem_map_head)) & (PAGE_SIZE - 1));
+	}
+
+	devirt->base_map_addr = gfn_to_hva(kvm, DEVIRT_MEM_MAP_PHYS_BASE >> 12);
+	devirt->cur_map_addr = devirt->base_map_addr;
+	devirt->used_heads = 0;
+	for (i = 0; i < (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT); i++) {
+		unsigned long gfn = (DEVIRT_MEM_MAP_PHYS_BASE >> PAGE_SHIFT) + i;
+
+		page = gfn_to_page(kvm, gfn);
+		if (is_error_page(page)) {
+			pr_emerg("katabm: cannot get page from gfn: 0x%lx\n", gfn);
+			r = -EFAULT;
+			goto error_free;
+		}
+		devirt->pinned_pages[devirt->cur_pinned_nrpages++] = page;
+	}
+	cond_resched();
+
+	devirt->rmap = (unsigned long *)gfn_to_hva(kvm, DEVIRT_MEM_RMAP_PHYS_BASE >> 12);
+
+	for (i = 0; i < (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT); i++) {
+		unsigned long gfn = (DEVIRT_MEM_PT_PHYS_BASE >> PAGE_SHIFT) + i;
+
+		page = gfn_to_page(kvm, gfn);
+		if (is_error_page(page)) {
+			pr_emerg("katabm: cannot get page from gfn: 0x%lx\n", gfn);
+			r = -EFAULT;
+			goto error_free;
+		}
+		devirt->pinned_pages[devirt->cur_pinned_nrpages++] = page;
+	}
+
+	slots = __kvm_memslots(kvm, 0);
+	kvm_for_each_memslot(memslot, slots) {
+		r = devirt_create_mapping_info(kvm, memslot, NULL, KVM_MR_CREATE);
+		if (r < 0)
+			goto error_free;
+	}
+
+	devirt->mem_mapping_init = true;
+
+	mutex_unlock(&kvm->slots_lock);
+	return 0;
+
+error_free:
+	for (i = 0; i < devirt->cur_pinned_nrpages; i++)
+		if (devirt->pinned_pages[i]) {
+			put_page(devirt->pinned_pages[i]);
+			devirt->pinned_pages[i] = NULL;
+		}
+	vfree(devirt->pinned_pages);
+	devirt->pinned_pages = NULL;
+error:
+	mutex_unlock(&kvm->slots_lock);
+	return r;
+}
+
+int devirt_create_mapping_info(struct kvm *kvm,
+			    struct kvm_memory_slot *new, struct kvm_memory_slot *old,
+			    enum kvm_mr_change change)
+{
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	struct devirt_mem_map_head *new_head, *old_head;
+	int r = 0;
+
+	if (change == KVM_MR_DELETE || change == KVM_MR_MOVE) {
+		old_head = devirt_gfn_to_head(kvm, old->base_gfn);
+		if (old_head)
+			old_head->flags &= ~DEVIRT_MEM_MAP_FLAG_VALID;
+	}
+
+	if (change == KVM_MR_CREATE || change == KVM_MR_MOVE) {
+		new_head = (struct devirt_mem_map_head *)
+					(devirt->map_head_kaddrs[devirt->used_heads++].kaddr);
+		new_head->map_addr = devirt->cur_map_addr;
+		new_head->map_guest_virt_addr = new_head->map_addr
+			 - devirt->base_map_addr + DEVIRT_MEM_MAP_VIRT;
+		new_head->base_gfn = new->base_gfn;
+		new_head->nr_pages = new->npages;
+		new_head->flags |= DEVIRT_MEM_MAP_FLAG_VALID;
+
+		/* One gfn consumes 8 bytes in the map */
+		devirt->cur_map_addr += (new->npages << 3);
+
+		r = devirt_add_mapping_info(kvm, new_head);
+	}
+
+	return r;
+}
+
+int devirt_pte_gfn_to_pfn(struct kvm *kvm, pte_t *pte_entry)
+{
+	pteval_t val = pte_entry->pte;
+
+	if (val & _PAGE_PRESENT) {
+		unsigned long gfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
+		pteval_t flags = val & PTE_FLAGS_MASK;
+		unsigned long pfn;
+
+		pfn = gfn_to_pfn(kvm, gfn);
+		if (is_error_noslot_pfn(pfn)) {
+			pr_emerg("is_error_noslot_pfn, gfn:%lx\n", gfn);
+			return -1;
+		}
+		put_page(pfn_to_page(pfn));
+		val = ((pteval_t)pfn << PAGE_SHIFT) | flags | _PAGE_SOFTW2;
+		pte_entry->pte = val;
+
+	}
+	return 0;
+}
+
+int devirt_convert_pte(struct kvm *kvm, pte_t *pte_entry)
+{
+	/* Check if the pte entry has been converted */
+	if (pte_entry->pte & _PAGE_SOFTW2)
+		return 0;
+	if (devirt_pte_gfn_to_pfn(kvm, pte_entry))
+		return -1;
+	return 0;
+}
+
+int devirt_convert_pte_gfn_pfn(struct kvm *kvm, pte_t *pte)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		if (devirt_convert_pte(kvm, &pte[i]))
+			return -1;
+	}
+	return 0;
+}
+
+int devirt_pmd_gfn_to_pfn(struct kvm *kvm, pmd_t *pmd_entry)
+{
+	pmdval_t val = pmd_entry->pmd;
+
+	if (val & _PAGE_PRESENT) {
+		unsigned long gfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
+		pteval_t flags = val & PTE_FLAGS_MASK;
+		unsigned long pfn;
+
+		pfn = gfn_to_pfn(kvm, gfn);
+		if (is_error_noslot_pfn(pfn))
+			return -1;
+		put_page(pfn_to_page(pfn));
+		val = ((pmdval_t)pfn << PAGE_SHIFT) | flags;
+		pmd_entry->pmd = val;
+
+		if (devirt_convert_pte_gfn_pfn(kvm, (pte_t *)page_address(pfn_to_page(pfn))))
+			return -1;
+		pmd_entry->pmd |= _PAGE_SOFTW2;
+	}
+	return 0;
+}
+
+/* return:
+ *    -1: error occurs
+ *     0: split completes
+ *     1: no need to split
+ */
+int devirt_split_pmd(struct kvm *kvm, pmd_t *pmd_entry)
+{
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	pmdval_t val = pmd_entry->pmd;
+	struct page *pte_page;
+	unsigned long pte_pfn, pte_gfn;
+
+	if (val & _PAGE_PRESENT && val & _PAGE_PSE) {
+		pte_t *pte;
+		unsigned long gfn_base = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
+		int i;
+
+		pte_gfn = (DEVIRT_MEM_PT_PHYS_BASE >> PAGE_SHIFT) + devirt->used_pt_pages++;
+		pte_pfn = gfn_to_pfn(kvm, pte_gfn);
+		if (is_error_noslot_pfn(pte_pfn)) {
+			pr_emerg("is_error_noslot_pfn, gfn:%lx\n", pte_gfn);
+			goto err;
+		}
+		put_page(pfn_to_page(pte_pfn));
+		pmd_entry->pmd = ((pmdval_t)pte_pfn << PAGE_SHIFT) | _KERNPG_TABLE_NOENC;
+		pte_page = pfn_to_page(pte_pfn);
+		pte = (pte_t *)page_address(pte_page);
+		for (i = 0; i < PTRS_PER_PTE; i++) {
+			unsigned long gfn, pfn;
+
+			gfn = gfn_base + i;
+			pfn = gfn_to_pfn(kvm, gfn);
+			if (is_error_noslot_pfn(pfn)) {
+				pr_emerg("is_error_noslot_pfn, gfn:%lx\n", gfn);
+				goto err;
+			}
+			put_page(pfn_to_page(pfn));
+			pte[i].pte = ((pteval_t)pfn << PAGE_SHIFT) | __PAGE_KERNEL_EXEC
+				 | _PAGE_SOFTW2;
+		}
+
+		pmd_entry->pmd |= _PAGE_SOFTW2;
+		return 0;
+	}
+	return 1;
+
+ err:
+	return -1;
+}
+
+int devirt_convert_pmd(struct kvm *kvm, pmd_t *pmd_entry)
+{
+	int r;
+
+	/* Check if the pmd entry has been converted */
+	if (pmd_entry->pmd & _PAGE_SOFTW2)
+		return 0;
+
+	/* If pmd_val points to a huge page, we split the page first */
+	r = devirt_split_pmd(kvm, pmd_entry);
+	if (r < 0)
+		return -1;
+	if (r == 0)
+		return 0;
+	if (devirt_pmd_gfn_to_pfn(kvm, pmd_entry))
+		return -1;
+	return 0;
+}
+
+int devirt_convert_pmd_gfn_pfn(struct kvm *kvm, pmd_t *pmd)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		if (devirt_convert_pmd(kvm, &pmd[i]))
+			return -1;
+	}
+	return 0;
+}
+
+int devirt_pud_gfn_to_pfn(struct kvm *kvm, pud_t *pud_entry)
+{
+	pudval_t val = pud_entry->pud;
+
+	if (val & _PAGE_PRESENT) {
+		unsigned long gfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
+		pteval_t flags = val & PTE_FLAGS_MASK;
+		unsigned long pfn;
+
+		pfn = gfn_to_pfn(kvm, gfn);
+		if (is_error_noslot_pfn(pfn))
+			return -1;
+		put_page(pfn_to_page(pfn));
+		pud_entry->pud = ((pudval_t)pfn << PAGE_SHIFT) | flags;
+
+		if (devirt_convert_pmd_gfn_pfn(kvm, (pmd_t *)page_address(pfn_to_page(pfn))))
+			return -1;
+		pud_entry->pud |= _PAGE_SOFTW2;
+
+	}
+	return 0;
+}
+
+int devirt_convert_pud(struct kvm *kvm, pud_t *pud_entry)
+{
+	/* Check if the pud entry has been converted */
+	if (pud_entry->pud & _PAGE_SOFTW2)
+		return 0;
+	if (devirt_pud_gfn_to_pfn(kvm, pud_entry))
+		return -1;
+	return 0;
+}
+
+int devirt_convert_pud_gfn_pfn(struct kvm *kvm, pud_t *pud)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		if (devirt_convert_pud(kvm, &pud[i]))
+			return -1;
+	}
+	return 0;
+}
+
+int devirt_pgd_gfn_to_pfn(struct kvm *kvm, pgd_t *pgd_entry)
+{
+	pgdval_t val = pgd_entry->pgd;
+
+	if (val & _PAGE_PRESENT) {
+		unsigned long gfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
+		pteval_t flags = val & PTE_FLAGS_MASK;
+		unsigned long pfn;
+
+		pfn = gfn_to_pfn(kvm, gfn);
+		if (is_error_noslot_pfn(pfn))
+			return -1;
+		put_page(pfn_to_page(pfn));
+		pgd_entry->pgd = ((pgdval_t)pfn << PAGE_SHIFT) | flags;
+
+		if (devirt_convert_pud_gfn_pfn(kvm, (pud_t *)page_address(pfn_to_page(pfn))))
+			return -1;
+		/* We use _PAGE_SOFTW2 to indicate the pgd and its lower level page tables
+		 * have already been converted.
+		 */
+		pgd_entry->pgd |= _PAGE_SOFTW2;
+	}
+	return 0;
+}
+
+int devirt_convert_pgd(struct kvm *kvm, pgd_t *pgd_entry)
+{
+	/* Check if the pgd entry has been converted */
+	if (pgd_entry->pgd & _PAGE_SOFTW2)
+		return 0;
+	if (devirt_pgd_gfn_to_pfn(kvm, pgd_entry))
+		return -1;
+	return 0;
+}
+
+int devirt_convert_pgd_gfn_pfn(struct kvm *kvm, pgd_t *pgd)
+{
+	int i;
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		if (devirt_convert_pgd(kvm, &pgd[i]))
+			return -1;
+	}
+	return 0;
+}
+
+bool devirt_gva_mmio_access(struct kvm_vcpu *vcpu, unsigned long gva)
+{
+	unsigned long cr3 = devirt_kvm_ops->devirt_guest_cr3(vcpu);
+	pgd_t *root = (pgd_t *)__va(cr3 & CR3_ADDR_MASK);
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *ptep, pte;
+
+	pgd = root + pgd_index(gva);
+	if (pgd_none(*pgd))
+		return false;
+	p4d = p4d_offset(pgd, gva);
+	if (p4d_none(*p4d))
+		return false;
+	pud = pud_offset(p4d, gva);
+	if (pud_none(*pud))
+		return false;
+	pmd = pmd_offset(pud, gva);
+	if (pmd_none(*pmd))
+		return false;
+	ptep = pte_offset_kernel(pmd, gva);
+	pte = *ptep;
+
+	if (pte.pte & _PAGE_SOFTW3)
+		return true;
+	return false;
+}
+EXPORT_SYMBOL(devirt_gva_mmio_access);
+
+int devirt_mem_start(struct kvm_vcpu *vcpu, unsigned long guest_cr3)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
+	unsigned long guest_cr3_gfn = guest_cr3 >> PAGE_SHIFT;
+	pgd_t *pgd;
+	struct page *page;
+	int r = -EFAULT;
+
+	if (vcpu->vcpu_id == 0) {
+		r = devirt_mem_mapping_init(kvm);
+		if (r < 0) {
+			pr_emerg("devirt_mem_mapping_init failed\n");
+			return r;
+		}
+	}
+
+	page = kvm_vcpu_gfn_to_page(vcpu, guest_cr3_gfn);
+	if (is_error_page(page)) {
+		pr_warn("cannot get page from gfn: 0x%lx\n", guest_cr3_gfn);
+		return r;
+	}
+	put_page(page);
+
+	devirt_kvm_ops->devirt_set_guest_cr3(vcpu, page_to_pfn(page) << 12);
+	kvm_x86_ops->tlb_flush(vcpu, true);
+
+	devirt_kvm_ops->devirt_set_mem_interception(vcpu);
+	devirt_memory_init_mmu_ops(vcpu);
+
+	if (vcpu->vcpu_id != 0) {
+		devirt->devirt_mem_start = true;
+		return 0;
+	}
+
+	pgd = (pgd_t *)page_address(page);
+	if (devirt_convert_pgd_gfn_pfn(kvm, pgd)) {
+		pr_warn("devirt memory start failed!!!!");
+		return r;
+	}
+
+	devirt->devirt_mem_start = true;
+
+	return 0;
+}
+
+int devirt_mem_convert(struct kvm_vcpu *vcpu, unsigned long guest_cr3)
+{
+	struct kvm *kvm = vcpu->kvm;
+	unsigned long guest_cr3_gfn = guest_cr3 >> PAGE_SHIFT;
+	pgd_t *pgd;
+	struct page *page;
+	int r = -EFAULT;
+
+	page = kvm_vcpu_gfn_to_page(vcpu, guest_cr3_gfn);
+	if (is_error_page(page)) {
+		pr_warn("cannot get page from gfn: 0x%lx\n", guest_cr3_gfn);
+		return r;
+	}
+	put_page(page);
+
+	pgd = (pgd_t *)page_address(page);
+	if (devirt_convert_pgd_gfn_pfn(kvm, pgd)) {
+		pr_emerg("devirt memory convert failed!!!!");
+		return r;
+	}
+
+	return 0;
+
+}
+
+static int devirt_mem_init(struct kvm *kvm)
+{
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+	int r = 0;
+	struct file *filp;
+
+	mutex_lock(&kvm->slots_lock);
+
+	if (devirt->devirt_mem_init)
+		goto out_unlock;
+
+	filp = filp_open("/dev/kvm", O_CREAT | O_RDWR, 0);
+	if (IS_ERR(filp)) {
+		pr_emerg("katabm: open kvm dev failed\n");
+		r = -1;
+		goto out_unlock;
+	}
+	devirt->mem_filp = filp;
+
+	devirt->map_total_size = DEVIRT_MEM_MAP_MAX_SIZE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE;
+	devirt->rmap_size = devirt_mem_rmap_size;
+	if (devirt->rmap_size > DEVIRT_MEM_RMAP_MAX_SIZE) {
+		pr_emerg("katabm: rmap size exceed max size\n");
+		r = -1;
+		goto out_unlock;
+	}
+
+	r = __x86_set_memory_region(kvm, DEVIRT_MEM_MAP_MEMSLOT,
+				    DEVIRT_MEM_MAP_PHYS_BASE,
+				    DEVIRT_MEM_MAP_MAX_SIZE, NULL);
+	if (r) {
+		pr_emerg("katabm: set DEVIRT_MEM_MAP_MEMSLOT failed, %d\n", r);
+		goto out_unlock;
+	}
+
+	r = __x86_set_memory_region(kvm, DEVIRT_MEM_MAP_HEAD_MEMSLOT,
+			 DEVIRT_MEM_MAP_HEAD_PHYS_BASE, DEVIRT_MEM_MAP_HEAD_MAX_SIZE, NULL);
+	if (r) {
+		pr_emerg("katabm: set DEVIRT_MEM_MAP_HEAD_MEMSLOT failed, %d\n", r);
+		goto out_unlock;
+	}
+
+	r = __x86_set_memory_region(kvm, DEVIRT_MEM_RMAP_MEMSLOT,
+				    DEVIRT_MEM_RMAP_PHYS_BASE, devirt->rmap_size, devirt->mem_filp);
+	if (r) {
+		pr_emerg("katabm: set DEVIRT_MEM_RMAP_MEMSLOT failed, %d\n", r);
+		goto out_unlock;
+	}
+
+	r = __x86_set_memory_region(kvm, DEVIRT_MEM_PT_MEMSLOT,
+				    DEVIRT_MEM_PT_PHYS_BASE, DEVIRT_MEM_PT_MAX_SIZE, NULL);
+	if (r) {
+		pr_emerg("katabm: set DEVIRT_MEM_RMAP_MEMSLOT failed, %d\n", r);
+		goto out_unlock;
+	}
+
+	devirt->devirt_mem_init = true;
+
+out_unlock:
+	mutex_unlock(&kvm->slots_lock);
+	return r;
+}
+
 static int devirt_virtio_notify_alloc_pages(struct kvm *kvm)
 {
 	int r = 0;
@@ -351,7 +946,7 @@ static int devirt_virtio_notify_alloc_pages(struct kvm *kvm)
 
 	r = __x86_set_memory_region(kvm, DEVIRT_VIRTIO_NOTIFY_MEMOSLOT,
 				    DEVIRT_VIRTIO_NOTIFY_PHYS_BASE,
-				    PAGE_SIZE);
+				    PAGE_SIZE, NULL);
 	if (r)
 		goto out;
 
@@ -684,6 +1279,25 @@ static void devirt_del_notify_vm_list(struct kvm *kvm)
 	spin_unlock(&per_cpu(devirt_notify_vm_list_lock, cpu));
 }
 
+static vm_fault_t devirt_mem_fault(struct vm_fault *vmf)
+{
+	struct page *page = devirt_mem_rmap_pages[vmf->pgoff];
+
+	get_page(page);
+	vmf->page = page;
+	return 0;
+}
+
+static const struct vm_operations_struct devirt_mem_vm_ops = {
+	.fault = devirt_mem_fault,
+};
+
+int devirt_mem_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	vma->vm_ops = &devirt_mem_vm_ops;
+	return 0;
+}
+
 void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu)
 {
 	/* irq is disabled, so that it will not be interrupted when other core calls
@@ -713,6 +1327,7 @@ void devirt_vcpu_create(struct kvm_vcpu *vcpu)
 	devirt_virtio_notify_setup_desc(vcpu, kvm);
 	devirt_apic_maps_alloc_page(kvm);
 	devirt_apic_maps_setup(vcpu, kvm);
+	devirt_mem_init(kvm);
 	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
 }
 
@@ -736,11 +1351,29 @@ void devirt_init_vm(struct kvm *kvm)
 	devirt_disable_hlt(kvm);
 }
 
+void devirt_mem_unpin(struct kvm *kvm)
+{
+	int i;
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
+
+	if (!devirt->pinned_pages)
+		return;
+
+	for (i = 0; i < devirt->cur_pinned_nrpages; i++)
+		if (devirt->pinned_pages[i]) {
+			put_page(devirt->pinned_pages[i]);
+			cond_resched();
+		}
+
+	vfree(devirt->pinned_pages);
+}
+
 void devirt_destroy_vm(struct kvm *kvm)
 {
 	struct kvm_vcpu *vcpu;
 	unsigned int i;
 	struct page *page;
+	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
 
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		devirt_unset_devirt_cpu_on(vcpu_to_devirt(vcpu)->devirt_cpu, NULL);
@@ -760,11 +1393,38 @@ void devirt_destroy_vm(struct kvm *kvm)
 		page = virt_to_page(kvm->arch.devirt.dvn_desc);
 		put_page(page);
 	}
+
+	devirt_mem_unpin(kvm);
+	if (current->mm == kvm->mm) {
+		x86_set_memory_region(kvm, DEVIRT_VIRTIO_NOTIFY_MEMOSLOT, 0, 0);
+		x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, DEVIRT_MEM_MAP_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, DEVIRT_MEM_MAP_HEAD_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, DEVIRT_MEM_RMAP_MEMSLOT, 0, 0);
+		x86_set_memory_region(kvm, DEVIRT_MEM_PT_MEMSLOT, 0, 0);
+	}
+	if (devirt->mem_filp)
+		filp_close(devirt->mem_filp, NULL);
 }
 
-void devirt_init(void)
+static inline unsigned long rmap_pfn_to_node(unsigned long pfn)
 {
-	int cpu;
+	int i;
+	struct devirt_mem_rmap_head_info *info;
+
+	for (i = 0; i < devirt_mem_node_num; i++) {
+		info = &devirt_mem_pfn_info[i];
+		if (pfn >= info->start_pfn && pfn <= info->end_pfn)
+			return i;
+	}
+	return 0;
+}
+
+int devirt_init(void)
+{
+	int cpu, node, i;
+	unsigned long pfn, page_num;
+	struct page *page;
 
 	devirt_set_guest_interrupt_handler(devirt_guest_interrupt_handler);
 	devirt_set_virtio_notify_handler(devirt_virtio_notify_handler);
@@ -775,6 +1435,54 @@ void devirt_init(void)
 		INIT_LIST_HEAD(&per_cpu(devirt_notify_vm_list, cpu));
 		spin_lock_init(&per_cpu(devirt_notify_vm_list_lock, cpu));
 	}
+
+	/* Make sure the size is PMD_SIZE aligned */
+	devirt_mem_rmap_size = ((devirt_mem_max_pfn + 1) * sizeof(unsigned long)
+							 + PMD_SIZE - 1) & PMD_MASK;
+	page_num = devirt_mem_rmap_size / PAGE_SIZE;
+	devirt_mem_rmap_pages = __vmalloc(page_num * sizeof(struct page *),
+					 GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
+	if (!devirt_mem_rmap_pages)
+		goto err;
+
+	for (i = 0; i < page_num; i++) {
+		pfn = i * PAGE_SIZE / 8;
+		node = rmap_pfn_to_node(pfn);
+		page = alloc_pages_node(node, GFP_KERNEL, 0);
+		if (!page) {
+			pr_emerg("%s: allocate page failed\n", __func__);
+			goto err_free;
+		}
+		memset((void *)page_address(page), 0xff, PAGE_SIZE);
+		devirt_mem_rmap_pages[i] = page;
+	}
+	return 0;
+
+err_free:
+	for (i = 0; i < page_num; i++) {
+		if (devirt_mem_rmap_pages[i])
+			free_pages((unsigned long)page_address(devirt_mem_rmap_pages[i]), 0);
+	}
+	vfree(devirt_mem_rmap_pages);
+err:
+	return -1;
+}
+
+void devirt_exit(void)
+{
+	int i;
+	unsigned long page_num;
+
+	devirt_kvm_ops = NULL;
+	devirt_nmi_ops = NULL;
+
+	page_num = devirt_mem_rmap_size / PAGE_SIZE;
+	for (i = 0; i < page_num; i++) {
+		if (devirt_mem_rmap_pages[i])
+			free_pages((unsigned long)page_address(devirt_mem_rmap_pages[i]), 0);
+	}
+	if (devirt_mem_rmap_pages)
+		vfree(devirt_mem_rmap_pages);
 }
 
 struct devirt_kvm_operations *devirt_kvm_ops;

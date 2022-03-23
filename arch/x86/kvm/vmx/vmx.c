@@ -27,6 +27,9 @@
 #include <linux/slab.h>
 #include <linux/tboot.h>
 #include <linux/trace_events.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <linux/memblock.h>
+#endif
 
 #include <asm/apic.h>
 #include <asm/asm.h>
@@ -3549,7 +3552,7 @@ static int init_rmode_identity_map(struct kvm *kvm)
 	identity_map_pfn = kvm_vmx->ept_identity_map_addr >> PAGE_SHIFT;
 
 	r = __x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT,
-				    kvm_vmx->ept_identity_map_addr, PAGE_SIZE);
+				    kvm_vmx->ept_identity_map_addr, PAGE_SIZE, NULL);
 	if (r < 0)
 		goto out2;
 
@@ -3600,7 +3603,7 @@ static int alloc_apic_access_page(struct kvm *kvm)
 	if (kvm->arch.apic_access_page_done)
 		goto out;
 	r = __x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT,
-				    APIC_DEFAULT_PHYS_BASE, PAGE_SIZE);
+				    APIC_DEFAULT_PHYS_BASE, PAGE_SIZE, NULL);
 	if (r)
 		goto out;
 
@@ -4137,7 +4140,11 @@ static void vmx_compute_secondary_exec_control(struct vcpu_vmx *vmx)
 	*/
 	exec_control &= ~SECONDARY_EXEC_SHADOW_VMCS;
 
-	if (!enable_pml)
+	if (!enable_pml
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || devirt_enable(vmx->vcpu.kvm)
+#endif
+	 )
 		exec_control &= ~SECONDARY_EXEC_ENABLE_PML;
 
 	if (vmx_xsaves_supported()) {
@@ -4356,7 +4363,11 @@ static void vmx_vcpu_setup(struct vcpu_vmx *vmx)
 	if (vmx_xsaves_supported())
 		vmcs_write64(XSS_EXIT_BITMAP, VMX_XSS_EXIT_BITMAP);
 
-	if (enable_pml) {
+	if (enable_pml
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vmx->vcpu.kvm)
+#endif
+	 ) {
 		vmcs_write64(PML_ADDRESS, page_to_phys(vmx->pml_pg));
 		vmcs_write16(GUEST_PML_INDEX, PML_ENTITY_NUM - 1);
 	}
@@ -4773,8 +4784,17 @@ static int handle_exception_nmi(struct kvm_vcpu *vcpu)
 
 	if (is_page_fault(intr_info)) {
 		cr2 = vmcs_readl(EXIT_QUALIFICATION);
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		if (vcpu_to_devirt(vcpu)->devirt_mem_start
+			 && devirt_gva_mmio_access(vcpu, cr2)) {
+			devirt_vmx_disable_pf_trap(vcpu);
+			return x86_emulate_instruction(vcpu, cr2, 0, NULL, 0);
+		}
+#endif
 		/* EPT won't cause page fault directly */
 		WARN_ON_ONCE(!vcpu->arch.apf.host_apf_reason && enable_ept);
+
 		return kvm_handle_page_fault(vcpu, error_code, cr2, NULL, 0);
 	}
 
@@ -6022,7 +6042,11 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 	 * mode as if vcpus is in root mode, the PML buffer must has been
 	 * flushed already.
 	 */
-	if (enable_pml)
+	if (enable_pml
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vcpu->kvm)
+#endif
+	)
 		vmx_flush_pml_buffer(vcpu);
 
 	/* If guest state is invalid, start emulating */
@@ -6846,7 +6870,11 @@ static void vmx_free_vcpu(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 
-	if (enable_pml)
+	if (enable_pml
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(vcpu->kvm)
+#endif
+	 )
 		vmx_destroy_pml_buffer(vmx);
 	free_vpid(vmx->vpid);
 	nested_vmx_free_vcpu(vcpu);
@@ -6902,7 +6930,11 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	 * avoiding dealing with cases, such as enabling PML partially on vcpus
 	 * for the guest, etc.
 	 */
-	if (enable_pml) {
+	if (enable_pml
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !devirt_enable(kvm)
+#endif
+	 ) {
 		vmx->pml_pg = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 		if (!vmx->pml_pg)
 			goto uninit_vcpu;

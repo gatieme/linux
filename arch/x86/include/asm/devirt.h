@@ -41,6 +41,28 @@
 #define DEVIRT_VIRTIO_NOTIFY_ENTRY_USING   1
 #define DEVIRT_VIRTIO_NOTIFY_ENTRY_USED    2
 
+/* For mem-devirt */
+#define DEVIRT_MEM_MAP_HEAD_MAX_SIZE 0x200000ul
+#define DEVIRT_MEM_MAP_HEAD_PHYS_BASE 0x10000000000
+#define DEVIRT_MEM_MAP_PHYS_BASE \
+		(DEVIRT_MEM_MAP_HEAD_PHYS_BASE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE)
+#define DEVIRT_MEM_MAP_MAX_SIZE 0x20000000ul
+#define DEVIRT_MEM_MAP_TOTAl_MAX_SIZE (DEVIRT_MEM_MAP_MAX_SIZE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE)
+
+#define DEVIRT_MAP_HEAD_NPAGES ((KVM_MEM_SLOTS_NUM * sizeof(struct devirt_mem_map_head) \
+		+ PAGE_SIZE - 1) / PAGE_SIZE)
+#define DEVIRT_MEM_MAP_FLAG_VALID 1
+
+#define DEVIRT_MEM_RMAP_MAX_SIZE 0x400000000ul
+#define DEVIRT_MEM_RMAP_PHYS_BASE 0x10040000000
+
+#define DEVIRT_MEM_PT_MAX_SIZE 0x10000000ul
+#define DEVIRT_MEM_PT_PHYS_BASE 0x10440000000
+
+#define DEVIRT_MEM_RMAP_VIRT 0xffff810000000000
+#define DEVIRT_MEM_MAP_HEAD_VIRT 0xffff800000000000
+#define DEVIRT_MEM_MAP_VIRT 0xffff800000200000
+
 #define KVM_DEVIRT_VIRTIO_NOTIFY_CPU    0
 
 #define DEVIRT_CPU_SET(pid, vcpuid) ((pid << 2) + vcpuid)
@@ -119,6 +141,12 @@ struct devirt_affinity_info {
 	u16 dest_id;
 };
 
+struct devirt_mem_rmap_head_info {
+	unsigned long start_pfn;
+	unsigned long end_pfn;
+	unsigned long nrpages;
+};
+
 struct devirt_nmi_operations {
 	int (*devirt_in_guest_mode)(void);
 	void (*devirt_tigger_failed_vm_entry)(struct kvm_vcpu *vcpu);
@@ -128,6 +156,10 @@ struct devirt_kvm_operations {
 	void (*devirt_set_msr_interception)(struct kvm_vcpu *vcpu);
 	void (*devirt_tigger_failed_vm_entry)(struct kvm_vcpu *vcpu);
 	void (*devirt_trigger_vm_shut_down)(struct kvm_vcpu *vcpu);
+	void (*devirt_set_mem_interception)(struct kvm_vcpu *vcpu);
+	unsigned long (*devirt_guest_cr3)(struct kvm_vcpu *vcpu);
+	void (*devirt_set_guest_cr3)(struct kvm_vcpu *vcpu, unsigned long addr);
+	void (*devirt_enable_pf_trap)(struct kvm_vcpu *vcpu);
 };
 
 struct devirt_guest_irq_pending {
@@ -190,6 +222,9 @@ DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 extern struct cpumask cpu_devirt_mask;
 extern struct cpumask nmi_ipi_mask;
 
+extern void devirt_memory_init_mmu_ops(struct kvm_vcpu *vcpu);
+extern void devirt_vmx_disable_pf_trap(struct kvm_vcpu *vcpu);
+
 extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
 extern void devirt_flush_tlb(void);
 
@@ -220,6 +255,18 @@ extern struct devirt_kvm_operations devirt_svm_kvm_ops;
 extern void devirt_tick_broadcast_set_event(ktime_t expires);
 extern bool devirt_host_system_interrupt_pending(void);
 
+extern int devirt_mem_start(struct kvm_vcpu *vcpu, unsigned long guest_cr3);
+extern int devirt_mem_convert(struct kvm_vcpu *vcpu, unsigned long guest_cr3);
+extern bool devirt_gva_mmio_access(struct kvm_vcpu *vcpu, unsigned long gva);
+extern void devirt_svm_disable_pf_trap(struct kvm_vcpu *vcpu);
+extern int devirt_create_mapping_info(struct kvm *kvm,
+			    struct kvm_memory_slot *new, struct kvm_memory_slot *old,
+			    enum kvm_mr_change change);
+extern int devirt_mem_mmap(struct file *file, struct vm_area_struct *vma);
+extern struct devirt_mem_rmap_head_info devirt_mem_pfn_info[MAX_NUMNODES];
+extern int devirt_mem_node_num;
+extern unsigned long devirt_mem_max_pfn;
+
 void delete_devirt_vfio_irq_info_by_vcpu(struct kvm_vcpu *vcpu);
 
 extern unsigned int devirt_num_cpus_for_device(void);
@@ -235,6 +282,7 @@ extern void devirt_vcpu_free(struct kvm_vcpu *vcpu);
 extern void devirt_vcpu_init(struct kvm_vcpu *vcpu);
 extern void devirt_init_vm(struct kvm *kvm);
 extern void devirt_destroy_vm(struct kvm *kvm);
-extern void devirt_init(void);
+extern int devirt_init(void);
+extern void devirt_exit(void);
 
 #endif /* _ASM_X86_DEVIRT_H */

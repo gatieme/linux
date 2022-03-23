@@ -55,6 +55,9 @@
 #include <asm/init.h>
 #include <asm/uv/uv.h>
 #include <asm/setup.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "mm_internal.h"
 
@@ -807,8 +810,44 @@ void __init initmem_init(void)
 }
 #endif
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+struct devirt_mem_rmap_head_info devirt_mem_pfn_info[MAX_NUMNODES];
+EXPORT_SYMBOL(devirt_mem_pfn_info);
+int devirt_mem_node_num;
+EXPORT_SYMBOL(devirt_mem_node_num);
+unsigned long devirt_mem_max_pfn;
+EXPORT_SYMBOL(devirt_mem_max_pfn);
+
+void __init devirt_mem_init_rmap_info(void)
+{
+	int nid;
+
+	for_each_online_node(nid) {
+		unsigned long start_pfn, end_pfn;
+		int i;
+		unsigned long start = 0xffffffffffffffff, end = 0;
+
+		for_each_mem_pfn_range(i, nid, &start_pfn, &end_pfn, NULL) {
+			if (start_pfn < start)
+				start = start_pfn;
+			if (end_pfn > end)
+				end = end_pfn;
+		}
+		devirt_mem_pfn_info[nid].start_pfn = start;
+		devirt_mem_pfn_info[nid].end_pfn = end;
+		if (end > devirt_mem_max_pfn)
+			devirt_mem_max_pfn = end;
+		devirt_mem_pfn_info[nid].nrpages = end - start + 1;
+		devirt_mem_node_num++;
+	}
+}
+#endif
+
 void __init paging_init(void)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	devirt_mem_init_rmap_info();
+#endif
 	sparse_memory_present_with_active_regions(MAX_NUMNODES);
 	sparse_init();
 

@@ -55,6 +55,10 @@
 
 #define MSR_KVM_DEVIRT_VIRTIO_NOTIFY	0x4b564dbd
 #define MSR_KVM_DEVIRT_APIC_MAPS	0x4b564dbc
+#define MSR_KVM_DEVIRT_MEM_MAP_SIZE	0x4b564dbe
+#define MSR_KVM_DEVIRT_MEM_RMAP_SIZE	0x4b564dbf
+#define MSR_KVM_DEVIRT_MEM_START 0x4b564dc0
+#define MSR_KVM_DEVIRT_MEM_CONVERT 0x4b564dc1
 
 struct kvm_steal_time {
 	__u64 steal;

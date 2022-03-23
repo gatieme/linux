@@ -1769,7 +1769,7 @@ static int avic_update_access_page(struct kvm *kvm, bool activate)
 	ret = __x86_set_memory_region(kvm,
 				      APIC_ACCESS_PAGE_PRIVATE_MEMSLOT,
 				      APIC_DEFAULT_PHYS_BASE,
-				      activate ? PAGE_SIZE : 0);
+				      activate ? PAGE_SIZE : 0, NULL);
 	if (ret)
 		goto out;
 
@@ -2823,6 +2823,15 @@ static int pf_interception(struct vcpu_svm *svm)
 {
 	u64 fault_address = __sme_clr(svm->vmcb->control.exit_info_2);
 	u64 error_code = svm->vmcb->control.exit_info_1;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+
+	if (vcpu_to_devirt(vcpu)->devirt_mem_start
+			 && devirt_gva_mmio_access(vcpu, fault_address)) {
+		devirt_svm_disable_pf_trap(vcpu);
+		return x86_emulate_instruction(vcpu, fault_address, 0, NULL, 0);
+	}
+#endif
 
 	return kvm_handle_page_fault(&svm->vcpu, error_code, fault_address,
 			static_cpu_has(X86_FEATURE_DECODEASSISTS) ?
@@ -5907,10 +5916,53 @@ void devirt_svm_trigger_vm_shut_down(struct kvm_vcpu *vcpu)
 	mark_dirty(svm->vmcb, VMCB_CR);
 }
 
+void devirt_svm_set_mem_interception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	svm->vmcb->control.nested_ctl &= ~SVM_NESTED_CTL_NP_ENABLE;
+	mark_dirty(svm->vmcb, VMCB_NPT);
+}
+
+unsigned long devirt_svm_guest_cr3(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	return svm->vmcb->save.cr3;
+}
+
+void devirt_svm_set_guest_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	svm->vmcb->save.cr3 = cr3;
+	mark_dirty(svm->vmcb, VMCB_CR);
+}
+
+void devirt_svm_enable_pf_trap(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	set_exception_intercept(svm, PF_VECTOR);
+	mark_dirty(svm->vmcb, VMCB_INTERCEPTS);
+}
+
+void devirt_svm_disable_pf_trap(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	clr_exception_intercept(svm, PF_VECTOR);
+	mark_dirty(svm->vmcb, VMCB_INTERCEPTS);
+}
+
 struct devirt_kvm_operations devirt_svm_kvm_ops = {
 	.devirt_set_msr_interception = devirt_svm_set_msr_interception,
 	.devirt_tigger_failed_vm_entry = svm_tigger_failed_vm_entry,
 	.devirt_trigger_vm_shut_down = devirt_svm_trigger_vm_shut_down,
+	.devirt_set_mem_interception = devirt_svm_set_mem_interception,
+	.devirt_guest_cr3 = devirt_svm_guest_cr3,
+	.devirt_set_guest_cr3 = devirt_svm_set_guest_cr3,
+	.devirt_enable_pf_trap = devirt_svm_enable_pf_trap,
 };
 
 static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)

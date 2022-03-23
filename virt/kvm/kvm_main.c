@@ -1170,6 +1170,17 @@ int __kvm_set_memory_region(struct kvm *kvm,
 
 	kvm_arch_commit_memory_region(kvm, mem, &old, &new, change);
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	/* Devirt-memory currently does not support the second address space */
+	if (kvm->arch.devirt.mem_mapping_init && as_id == 0) {
+		if (devirt_create_mapping_info(kvm, &new, &old, change)) {
+			kvm_free_memslot(kvm, &old, &new);
+			kvfree(old_memslots);
+			return -ENOMEM;
+		}
+	}
+#endif
+
 	kvm_free_memslot(kvm, &old, &new);
 	kvfree(old_memslots);
 	return 0;
@@ -3763,6 +3774,9 @@ out:
 static struct file_operations kvm_chardev_ops = {
 	.unlocked_ioctl = kvm_dev_ioctl,
 	.llseek		= noop_llseek,
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	.mmap = devirt_mem_mmap,
+#endif
 	KVM_COMPAT(kvm_dev_ioctl),
 };
 

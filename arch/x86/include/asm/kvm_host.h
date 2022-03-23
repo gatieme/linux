@@ -48,10 +48,14 @@
 #ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 #define KVM_PRIVATE_MEM_SLOTS 3
 #else
-#define KVM_PRIVATE_MEM_SLOTS 5
+#define KVM_PRIVATE_MEM_SLOTS 9
 
 #define DEVIRT_VIRTIO_NOTIFY_MEMOSLOT           (KVM_USER_MEM_SLOTS + 3)
 #define DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT        (KVM_USER_MEM_SLOTS + 4)
+#define DEVIRT_MEM_MAP_MEMSLOT            (KVM_USER_MEM_SLOTS + 5)
+#define DEVIRT_MEM_MAP_HEAD_MEMSLOT            (KVM_USER_MEM_SLOTS + 6)
+#define DEVIRT_MEM_RMAP_MEMSLOT            (KVM_USER_MEM_SLOTS + 7)
+#define DEVIRT_MEM_PT_MEMSLOT            (KVM_USER_MEM_SLOTS + 8)
 #endif
 #define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
 
@@ -1693,7 +1697,7 @@ void __kvm_request_immediate_exit(struct kvm_vcpu *vcpu);
 
 int kvm_is_in_guest(void);
 
-int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size);
+int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u64 size, struct file *filp);
 int x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size);
 bool kvm_vcpu_is_reset_bsp(struct kvm_vcpu *vcpu);
 bool kvm_vcpu_is_bsp(struct kvm_vcpu *vcpu);

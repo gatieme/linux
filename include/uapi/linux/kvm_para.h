@@ -33,6 +33,7 @@
 #define KVM_HC_DEVIRT_IOEVENTFD_CHECK   32
 #define KVM_HC_DEVIRT_ICR_WRITE		33
 #define KVM_HC_DEVIRT_GLOBAL_RIP	34
+#define KVM_HC_DEVIRT_PF_HANDLER	35
 
 /*
  * hypercalls use architecture specific
