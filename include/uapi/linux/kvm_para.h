@@ -18,6 +18,9 @@
 #define KVM_EPERM		EPERM
 #define KVM_EOPNOTSUPP		95
 
+#define DEVIRT_APIC_UNINIT      0
+#define DEVIRT_APIC_INIT        1
+
 #define KVM_HC_VAPIC_POLL_IRQ		1
 #define KVM_HC_MMU_OP			2
 #define KVM_HC_FEATURES			3
@@ -34,6 +37,7 @@
 #define KVM_HC_DEVIRT_ICR_WRITE		33
 #define KVM_HC_DEVIRT_GLOBAL_RIP	34
 #define KVM_HC_DEVIRT_PF_HANDLER	35
+#define KVM_HC_DEVIRT_APIC_INIT         36
 
 /*
  * hypercalls use architecture specific

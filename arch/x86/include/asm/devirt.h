@@ -31,6 +31,7 @@
 #define DEVIRT_VMENTRY_SHUTDOWN_FLAG        0x4000000000000000
 
 #define DEVIRT_AFFINITY_INFO_TYPE 0xffffffffffffffff
+#define DEVIRT_XAPIC_NMI_VECTOR   0x100 /* Used for devirt nmi vector */
 
 /*
  * Now virtual MSI interrupts which injected by don't rely on the
@@ -298,6 +299,7 @@ extern void devirt_enter_guest(struct kvm_vcpu *vcpu);
 extern void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu);
 extern int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu);
 extern int devirt_vcpu_create(struct kvm_vcpu *vcpu);
+extern int  devirt_alloc_apic_shared_page(struct kvm *kvm);
 extern void devirt_vcpu_free(struct kvm_vcpu *vcpu);
 extern void devirt_vcpu_init(struct kvm_vcpu *vcpu);
 extern void devirt_init_vm(struct kvm *kvm);
@@ -305,4 +307,10 @@ extern void devirt_destroy_vm(struct kvm *kvm);
 extern int devirt_init(void);
 extern void devirt_exit(void);
 
+extern int devirt_set_ipi_pending(int cpu, int vector);
+extern void x2apic_send_IPI_to_devirt_guest(int cpu, int vector);
+extern void default_send_IPI_to_devirt_guest(int cpu, int vector);
+extern int  devirt_x2apic_enabled(void);
+extern int  devirt_xapic_msr_read(struct kvm_vcpu *vcpu, u32 msr, u64 *data);
+extern int  devirt_xapic_msr_write(struct kvm_vcpu *vcpu, u32 msr, u64 data);
 #endif /* _ASM_X86_DEVIRT_H */

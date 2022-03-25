@@ -11,8 +11,10 @@
 #define _ASM_X86_DEVIRT_TYPES_H
 
 #define KVM_USER_MEM_SLOTS 509
-#define KVM_PRIVATE_MEM_SLOTS 10
+#define KVM_PRIVATE_MEM_SLOTS 11
+#ifndef KVM_MEM_SLOTS_NUM
 #define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
+#endif
 
 struct devirt_vfio_irq_info {
 	int host_irq;
@@ -79,6 +81,11 @@ struct devirt_kvm_arch {
 	struct file *mem_filp;
 	bool mem_mapping_init;
 	struct file *hp_filp;
+
+	/* Used for xapic. */
+	struct file *xapic_file;
+	bool xapic_page_state;
+	bool xapic_page_done;
 };
 
 #endif /* _ASM_X86_DEVIRT_TYPES_H */

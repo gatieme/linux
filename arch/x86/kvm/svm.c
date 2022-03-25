@@ -5902,9 +5902,11 @@ static void svm_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
 
 void devirt_svm_set_msr_interception(struct kvm_vcpu *vcpu)
 {
-	svm_disable_apic_irq(vcpu);
-	svm_disable_apic_tmr(vcpu);
-	svm_disalbe_apic_icr(vcpu);
+	if (devirt_x2apic_enabled()) {
+		svm_disable_apic_irq(vcpu);
+		svm_disable_apic_tmr(vcpu);
+		svm_disalbe_apic_icr(vcpu);
+	}
 }
 
 void devirt_svm_trigger_vm_shut_down(struct kvm_vcpu *vcpu)
