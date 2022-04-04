@@ -46,6 +46,9 @@
  */
 #define VFIO_NOIOMMU_IOMMU		8
 
+#define VFIO_TYPE1_IOMMU_DEVIRT		21
+#define VFIO_TYPE1v2_IOMMU_DEVIRT		22
+
 /*
  * The IOCTL interface is designed for extensibility by embedding the
  * structure length (argsz) and flags into structures passed between

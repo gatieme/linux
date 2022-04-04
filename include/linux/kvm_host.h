@@ -513,8 +513,9 @@ struct kvm {
 	bool devirt_enable;
 	bool devirt_enable_intel;
 	bool devirt_enable_amd;
+	unsigned int devirt_feature;
 	unsigned long devirt_apic_rip_start;
-	unsigned long devirt_apic_rip_end;
+	unsigned long devirt_apic_rip_end;	
 	struct list_head devirt_notify_vm_list;
 #endif
 };

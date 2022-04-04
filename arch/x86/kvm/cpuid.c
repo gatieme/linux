@@ -1067,7 +1067,7 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	if (function == KVM_CPUID_FEATURES && devirt_enable(vcpu->kvm))
 		*eax |= (1 << KVM_FEATURE_PV_DEVIRT);
-	if ((function == 1 || function == 0x80000001) && devirt_enable(vcpu->kvm))
+	if ((function == 1 || function == 0x80000001) && devirt_enable_mem(vcpu->kvm))
 		*edx &= ~(1 << X86_FEATURE_PSE);
 #endif
 

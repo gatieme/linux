@@ -11,7 +11,7 @@
 #define _ASM_X86_DEVIRT_TYPES_H
 
 #define KVM_USER_MEM_SLOTS 509
-#define KVM_PRIVATE_MEM_SLOTS 9
+#define KVM_PRIVATE_MEM_SLOTS 10
 #define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
 
 struct devirt_vfio_irq_info {
@@ -78,6 +78,7 @@ struct devirt_kvm_arch {
 	unsigned long cur_pinned_nrpages;
 	struct file *mem_filp;
 	bool mem_mapping_init;
+	struct file *hp_filp;
 };
 
 #endif /* _ASM_X86_DEVIRT_TYPES_H */

@@ -22,6 +22,10 @@
 #define DEVIRT_HOST_SERVER_INTEL 1
 #define DEVIRT_HOST_SERVER_AMD 2
 
+#define VM_TYPE_DEVIRT_BASIC_ENABLE (1 << 0)
+#define VM_TYPE_DEVIRT_MEM_ENABLE (1 << 1)
+#define VM_TYPE_DEVIRT_DMA_ENABLE (1 << 2)
+
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
 #define DEVIRT_VMENTRY_SHUTDOWN_FLAG        0x4000000000000000
@@ -59,6 +63,9 @@
 #define DEVIRT_MEM_PT_MAX_SIZE 0x10000000ul
 #define DEVIRT_MEM_PT_PHYS_BASE 0x10440000000
 
+#define DEVIRT_MEM_CONT_MAX_SIZE 0x1000000ul
+#define DEVIRT_MEM_CONT_PHYS_BASE 0x10450000000
+
 #define DEVIRT_MEM_RMAP_VIRT 0xffff810000000000
 #define DEVIRT_MEM_MAP_HEAD_VIRT 0xffff800000000000
 #define DEVIRT_MEM_MAP_VIRT 0xffff800000200000
@@ -66,6 +73,9 @@
 #define KVM_DEVIRT_VIRTIO_NOTIFY_CPU    0
 
 #define DEVIRT_CPU_SET(pid, vcpuid) ((pid << 2) + vcpuid)
+
+#define DEVIRT_ENABLE_MEM (1 << 0)
+#define DEVIRT_ENABLE_DMA (1 << 1)
 
 /* Dvn: devirt virtio notify */
 struct kick_entry {
@@ -185,6 +195,16 @@ static inline bool devirt_enable_amd(struct kvm *kvm)
 	return kvm->devirt_enable_amd;
 }
 
+static inline bool devirt_enable_mem(struct kvm *kvm)
+{
+	return kvm->devirt_feature & DEVIRT_ENABLE_MEM;
+}
+
+static inline bool devirt_enable_dma(struct kvm *kvm)
+{
+	return kvm->devirt_feature & DEVIRT_ENABLE_DMA;
+}
+
 static inline struct devirt_vcpu_arch *vcpu_to_devirt(struct kvm_vcpu *vcpu)
 {
 	return &vcpu->arch.devirt;
@@ -277,7 +297,7 @@ extern void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_enter_guest(struct kvm_vcpu *vcpu);
 extern void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu);
 extern int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu);
-extern void devirt_vcpu_create(struct kvm_vcpu *vcpu);
+extern int devirt_vcpu_create(struct kvm_vcpu *vcpu);
 extern void devirt_vcpu_free(struct kvm_vcpu *vcpu);
 extern void devirt_vcpu_init(struct kvm_vcpu *vcpu);
 extern void devirt_init_vm(struct kvm *kvm);

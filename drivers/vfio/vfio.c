@@ -1184,6 +1184,20 @@ static long vfio_fops_unl_ioctl(struct file *filep,
 	return ret;
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+static long vfio_fops_unl_ioctl_devirt(struct file *filep,
+				unsigned int cmd, unsigned long arg)
+{
+	if (cmd == VFIO_SET_IOMMU) {
+		if (arg == VFIO_TYPE1v2_IOMMU)
+			arg = VFIO_TYPE1v2_IOMMU_DEVIRT;
+		if (arg == VFIO_TYPE1_IOMMU)
+			arg = VFIO_TYPE1_IOMMU_DEVIRT;
+	}
+	return vfio_fops_unl_ioctl(filep, cmd, arg);
+}
+#endif
+
 #ifdef CONFIG_COMPAT
 static long vfio_fops_compat_ioctl(struct file *filep,
 				   unsigned int cmd, unsigned long arg)
@@ -1281,6 +1295,21 @@ static const struct file_operations vfio_fops = {
 	.mmap		= vfio_fops_mmap,
 };
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+static const struct file_operations vfio_fops_devirt = {
+	.owner		= THIS_MODULE,
+	.open		= vfio_fops_open,
+	.release	= vfio_fops_release,
+	.read		= vfio_fops_read,
+	.write		= vfio_fops_write,
+	.unlocked_ioctl	= vfio_fops_unl_ioctl_devirt,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= vfio_fops_compat_ioctl,
+#endif
+	.mmap		= vfio_fops_mmap,
+};
+#endif
+
 /**
  * VFIO Group fd, /dev/vfio/$GROUP
  */
@@ -1363,7 +1392,11 @@ static int vfio_group_set_container(struct vfio_group *group, int container_fd)
 		return -EBADF;
 
 	/* Sanity check, is this really our fd? */
-	if (f.file->f_op != &vfio_fops) {
+	if (f.file->f_op != &vfio_fops
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && f.file->f_op != &vfio_fops_devirt
+#endif
+	 ) {
 		fdput(f);
 		return -EINVAL;
 	}
@@ -2177,6 +2210,16 @@ static struct miscdevice vfio_dev = {
 	.mode = S_IRUGO | S_IWUGO,
 };
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+static struct miscdevice vfio_dev_devirt = {
+	.minor = VFIO_DEVIRT_MINOR,
+	.name = "vfio_devirt",
+	.fops = &vfio_fops_devirt,
+	.nodename = "vfio/vfio_devirt",
+	.mode = S_IRUGO | S_IWUGO,
+};
+#endif
+
 static int __init vfio_init(void)
 {
 	int ret;
@@ -2193,6 +2236,15 @@ static int __init vfio_init(void)
 		pr_err("vfio: misc device register failed\n");
 		return ret;
 	}
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	ret = misc_register(&vfio_dev_devirt);
+	if (ret) {
+		misc_deregister(&vfio_dev);
+		pr_err("vfio: misc device register failed\n");
+		return ret;
+	}
+#endif
 
 	/* /dev/vfio/$GROUP */
 	vfio.class = class_create(THIS_MODULE, "vfio");
@@ -2225,6 +2277,9 @@ err_alloc_chrdev:
 	class_destroy(vfio.class);
 	vfio.class = NULL;
 err_class:
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	misc_deregister(&vfio_dev_devirt);
+#endif
 	misc_deregister(&vfio_dev);
 	return ret;
 }
@@ -2241,6 +2296,9 @@ static void __exit vfio_cleanup(void)
 	unregister_chrdev_region(vfio.group_devt, MINORMASK + 1);
 	class_destroy(vfio.class);
 	vfio.class = NULL;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	misc_deregister(&vfio_dev_devirt);
+#endif
 	misc_deregister(&vfio_dev);
 }
 

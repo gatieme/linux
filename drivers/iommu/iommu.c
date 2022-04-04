@@ -1618,6 +1618,14 @@ struct iommu_domain *iommu_domain_alloc(struct bus_type *bus)
 }
 EXPORT_SYMBOL_GPL(iommu_domain_alloc);
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+struct iommu_domain *iommu_domain_alloc_identity(struct bus_type *bus)
+{
+	return __iommu_domain_alloc(bus, IOMMU_DOMAIN_IDENTITY);
+}
+EXPORT_SYMBOL_GPL(iommu_domain_alloc_identity);
+#endif
+
 void iommu_domain_free(struct iommu_domain *domain)
 {
 	domain->ops->domain_free(domain);

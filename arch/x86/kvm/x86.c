@@ -2975,6 +2975,8 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_KVM_DEVIRT_MEM_CONVERT:
 		devirt_mem_convert(vcpu, data);
 		break;
+	case MSR_KVM_DEVIRT_CAP:
+		break;
 #endif
 	case MSR_KVM_POLL_CONTROL:
 		/* only enable bit supported */
@@ -3239,6 +3241,13 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_KVM_DEVIRT_MEM_RMAP_SIZE:
 		msr_info->data = vcpu->kvm->arch.devirt.rmap_size;
+		break;
+	case MSR_KVM_DEVIRT_CAP:
+		msr_info->data = 0;
+		if (devirt_enable_mem(vcpu->kvm))
+			msr_info->data |= (1 << MSR_KVM_DEVIRT_CAP_MEM_BIT);
+		if (devirt_enable_dma(vcpu->kvm))
+			msr_info->data |= (1 << MSR_KVM_DEVIRT_CAP_DMA_BIT);
 		break;
 #endif
 	case MSR_KVM_POLL_CONTROL:
@@ -9478,7 +9487,10 @@ struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	if (vcpu && devirt_enable(kvm))
-		devirt_vcpu_create(vcpu);
+		if (devirt_vcpu_create(vcpu)) {
+			kvm_arch_vcpu_destroy(vcpu);
+			return ERR_PTR(-1);
+		}
 #endif
 
 	return vcpu;
@@ -9881,11 +9893,8 @@ EXPORT_SYMBOL(devirt_host_server_type);
 #endif
 int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 {
-	if (type && type != 1)
-		return -EINVAL;
-
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (type == 1) {
+	if (type & VM_TYPE_DEVIRT_BASIC_ENABLE) {
 		if (devirt_arat_disable || !devirt_enable_at_startup)
 			return -EINVAL;
 		kvm->devirt_enable = true;
@@ -9894,7 +9903,13 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 		else if (devirt_host_server_type == DEVIRT_HOST_SERVER_AMD)
 			kvm->devirt_enable_amd = true;
 		else
-			pr_emerg("devirt error: devirt_host_server_type\n");
+			pr_info("devirt error: devirt_host_server_type\n");
+
+		if (type & VM_TYPE_DEVIRT_MEM_ENABLE) {
+			kvm->devirt_feature |= DEVIRT_ENABLE_MEM;
+			if (type & VM_TYPE_DEVIRT_DMA_ENABLE)
+				kvm->devirt_feature |= DEVIRT_ENABLE_DMA;
+		}
 	}
 #endif
 

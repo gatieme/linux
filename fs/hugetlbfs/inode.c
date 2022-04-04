@@ -1487,6 +1487,9 @@ out:
 	}
 	return file;
 }
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+EXPORT_SYMBOL(hugetlb_file_setup);
+#endif
 
 static struct vfsmount *__init mount_one_hugetlbfs(struct hstate *h)
 {
