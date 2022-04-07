@@ -5094,6 +5094,12 @@ static int handle_exit(struct kvm_vcpu *vcpu)
 	u32 exit_code = svm->vmcb->control.exit_code;
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	if (svm->vmcb->save.cr0 & DEVIRT_VMENTRY_SHUTDOWN_FLAG) {
+		kvm_run->exit_reason = KVM_EXIT_FAIL_ENTRY;
+		kvm_run->fail_entry.hardware_entry_failure_reason
+			= 0xdeaddead;
+		return 0;
+	}
 	if (svm->vmcb->save.cr0 & DEVIRT_VMENTRY_FAILED_FLAG) {
 		svm->vmcb->save.cr0 &= ~DEVIRT_VMENTRY_FAILED_FLAG;
 		mark_dirty(svm->vmcb, VMCB_CR);
@@ -5892,9 +5898,19 @@ void devirt_svm_set_msr_interception(struct kvm_vcpu *vcpu)
 	svm_disalbe_apic_icr(vcpu);
 }
 
+void devirt_svm_trigger_vm_shut_down(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	svm = to_svm(vcpu);
+	svm->vmcb->save.cr0 |= DEVIRT_VMENTRY_SHUTDOWN_FLAG;
+	mark_dirty(svm->vmcb, VMCB_CR);
+}
+
 struct devirt_kvm_operations devirt_svm_kvm_ops = {
 	.devirt_set_msr_interception = devirt_svm_set_msr_interception,
 	.devirt_tigger_failed_vm_entry = svm_tigger_failed_vm_entry,
+	.devirt_trigger_vm_shut_down = devirt_svm_trigger_vm_shut_down,
 };
 
 static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)

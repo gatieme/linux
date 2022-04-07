@@ -631,7 +631,11 @@ static void devirt_check_devirt_cpu_set(struct kvm_vcpu *vcpu)
 		devirt_update_apic_maps(vcpu);
 		*set = new_val;
 	} else
-		WARN_ON(set_val != new_val);
+		if (set_val != new_val) {
+			pr_err("katabm: a vCPU thread has been migrated to a wrong core\n");
+			devirt_kvm_ops->devirt_trigger_vm_shut_down(vcpu);
+		}
+
 }
 
 static void devirt_check_devirt_cpu_unset(struct kvm_vcpu *vcpu)
@@ -647,10 +651,22 @@ static void devirt_check_devirt_cpu_unset(struct kvm_vcpu *vcpu)
 	}
 }
 
+static void devirt_check_nmi_mask(struct kvm_vcpu *vcpu)
+{
+	int cpu = smp_processor_id();
+
+	if (!cpumask_test_cpu(cpu, &nmi_ipi_mask)) {
+		pr_err("katabm: start BM vcpu on a non nmi_ipi_mask core, vcpu_id:%d\n",
+			 vcpu->vcpu_id);
+		devirt_kvm_ops->devirt_trigger_vm_shut_down(vcpu);
+	}
+}
+
 static void devirt_check_devirt_cpu(struct kvm_vcpu *vcpu)
 {
 	devirt_check_devirt_cpu_set(vcpu);
 	devirt_check_devirt_cpu_unset(vcpu);
+	devirt_check_nmi_mask(vcpu);
 	vcpu_to_devirt(vcpu)->devirt_cpu = smp_processor_id();
 }
 

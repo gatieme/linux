@@ -234,6 +234,7 @@ static struct cpu_attr cpu_attrs[] = {
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 extern struct cpumask nmi_ipi_mask;
+extern struct cpumask cpu_devirt_mask;
 static DEFINE_MUTEX(dyn_nmi_ipi_mutex);
 
 static ssize_t dyn_nmi_ipi_store(struct device *dev,
@@ -255,6 +256,11 @@ static ssize_t dyn_nmi_ipi_store(struct device *dev,
 		goto err_out;
 
 	if (!cpumask_subset(tmp_mask, cpu_possible_mask)) {
+		ret = -EINVAL;
+		goto err_out;
+	}
+
+	if (!cpumask_subset(&cpu_devirt_mask, tmp_mask)) {
 		ret = -EINVAL;
 		goto err_out;
 	}

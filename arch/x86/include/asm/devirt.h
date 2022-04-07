@@ -24,6 +24,7 @@
 
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
+#define DEVIRT_VMENTRY_SHUTDOWN_FLAG        0x4000000000000000
 
 #define DEVIRT_AFFINITY_INFO_TYPE 0xffffffffffffffff
 
@@ -126,6 +127,7 @@ struct devirt_nmi_operations {
 struct devirt_kvm_operations {
 	void (*devirt_set_msr_interception)(struct kvm_vcpu *vcpu);
 	void (*devirt_tigger_failed_vm_entry)(struct kvm_vcpu *vcpu);
+	void (*devirt_trigger_vm_shut_down)(struct kvm_vcpu *vcpu);
 };
 
 struct devirt_guest_irq_pending {
@@ -186,6 +188,7 @@ DECLARE_PER_CPU(u8, devirt_state);
 DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 
 extern struct cpumask cpu_devirt_mask;
+extern struct cpumask nmi_ipi_mask;
 
 extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
 extern void devirt_flush_tlb(void);

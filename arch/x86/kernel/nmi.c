@@ -345,6 +345,7 @@ static int devirt_handle_nmi_IPI(struct pt_regs *regs)
 }
 
 struct cpumask nmi_ipi_mask;
+EXPORT_SYMBOL(nmi_ipi_mask);
 static int __init nmi_ipi_cpus_setup(char *str)
 {
 	int err;
