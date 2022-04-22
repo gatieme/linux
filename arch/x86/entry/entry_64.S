@@ -1280,6 +1280,10 @@ idtentry debug			do_debug		has_error_code=0	paranoid=1 shift_ist=IST_INDEX_DB is
 idtentry int3			do_int3			has_error_code=0	create_gap=1
 idtentry stack_segment		do_stack_segment	has_error_code=1
 
+#if defined(CONFIG_X86_64) && IS_ENABLED(CONFIG_KVM_INTEL)
+idtentry nmi_noist		do_nmi_noist	has_error_code=0
+#endif
+
 #ifdef CONFIG_XEN_PV
 idtentry xennmi			do_nmi			has_error_code=0
 idtentry xendebug		do_debug		has_error_code=0

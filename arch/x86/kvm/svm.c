@@ -5974,7 +5974,7 @@ static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)
 		svm_tigger_failed_vm_entry(vcpu);
 
 	if (svm_extirq_get_and_clear(vcpu, &injected_vector))
-		apic->send_IPI_self(injected_vector);
+		apic->send_IPI_self_devirt(injected_vector);
 
 	WARN_ON(*state != 0);
 	*state = DEVERT_IN_GUEST;

@@ -87,7 +87,7 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 	u8 *state = this_cpu_ptr(&devirt_state);
 
 	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
-		apic->send_IPI_self(injected_vector);
+		apic->send_IPI_self_devirt(injected_vector);
 	vmx_notify_tsc_offset(vcpu);
 
 	*this_cpu_ptr(&devirt_in_guest) = 1;
@@ -102,6 +102,17 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 	return devirt_host_system_interrupt_pending();
 }
 
+/* Existing sync_core is implemented by iret which will unmask NMIs and will
+ * cause NMIs before vmx_do_interrupt_nmi_irqoff on Intel. This will futher
+ * result in undetected swallow NMI issue. So we use cpuid instead.
+ */
+static void devirt_sync_core(void)
+{
+	unsigned int a, b, c, d;
+
+	cpuid(0x80000002, &a, &b, &c, &d);
+}
+
 void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)
 {
 	u8 *state = this_cpu_ptr(&devirt_state);
@@ -113,7 +124,7 @@ void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)
 	else if (state_val & DEVIRT_FLUSH_TLB_LOCAL)
 		devirt_flush_tlb();
 	if (state_val & DEVIRT_SYNC_CORE)
-		sync_core();
+		devirt_sync_core();
 
 	*this_cpu_ptr(&devirt_in_guest) = 0;
 }

@@ -6399,8 +6399,12 @@ static void vmx_apicv_post_state_restore(struct kvm_vcpu *vcpu)
 	memset(vmx->pi_desc.pir, 0, sizeof(vmx->pi_desc.pir));
 }
 
+extern void nmi_noist(struct pt_regs *regs);
+extern void vmx_do_interrupt_nmi_irqoff(unsigned long entry);
 static void handle_exception_nmi_irqoff(struct vcpu_vmx *vmx)
 {
+	const unsigned long nmi_entry = (unsigned long)nmi_noist;
+
 	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
 
 	/* if exit due to PF check for async PF */
@@ -6414,7 +6418,7 @@ static void handle_exception_nmi_irqoff(struct vcpu_vmx *vmx)
 	/* We need to handle NMIs before interrupts are enabled */
 	if (is_nmi(vmx->exit_intr_info)) {
 		kvm_before_interrupt(&vmx->vcpu);
-		asm("int $2");
+		vmx_do_interrupt_nmi_irqoff(nmi_entry);
 		kvm_after_interrupt(&vmx->vcpu);
 	}
 }

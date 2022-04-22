@@ -235,6 +235,7 @@ static struct cpu_attr cpu_attrs[] = {
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 extern struct cpumask nmi_ipi_mask;
 extern struct cpumask cpu_devirt_mask;
+extern unsigned long nmi_ipi_mask_change_timeout;
 static DEFINE_MUTEX(dyn_nmi_ipi_mutex);
 
 static ssize_t dyn_nmi_ipi_store(struct device *dev,
@@ -270,6 +271,10 @@ static ssize_t dyn_nmi_ipi_store(struct device *dev,
 		ret = count;
 		goto err_out;
 	}
+
+	nmi_ipi_mask_change_timeout = ktime_get_ns() + NSEC_PER_SEC;
+	/* make sure nmi_ipi_mask_change_timeout is visible to other cores */
+	smp_wmb();
 
 	/* The copy does not need to be atomic */
 	cpumask_copy(&nmi_ipi_mask, tmp_mask);

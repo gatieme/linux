@@ -167,7 +167,7 @@ static void devirt_set_guest_irq(void)
 
 	bitmap = this_cpu_ptr(&devirt_guest_irq_pending)->pending_map;
 	for_each_set_bit(i, bitmap, 256) {
-		apic->send_IPI_self(i);
+		apic->send_IPI_self_devirt(i);
 		clear_bit(i, bitmap);
 	}
 }
