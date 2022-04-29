@@ -237,7 +237,7 @@ config CLANG_SUPPORTS_DYNAMIC_FTRACE_WITH_REGS
 
 config GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_REGS
 	def_bool CC_IS_GCC
-	depends on $(cc-option,-fpatchable-function-entry=2)
+	depends on $(cc-option,-fpatchable-function-entry=4,2)
 	select HAVE_DYNAMIC_FTRACE_WITH_REGS
 
 config 64BIT
