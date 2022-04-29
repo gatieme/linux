@@ -89,10 +89,15 @@ SYM_CODE_START(ftrace_caller)
 SYM_CODE_END(ftrace_caller)
 
 SYM_CODE_START(ftrace_common)
-	sub	x0, x30, #AARCH64_INSN_SIZE	// ip (callsite's BL insn)
-	mov	x1, x9				// parent_ip (callsite's LR)
-	ldr_l	x2, function_trace_op		// op
-	mov	x3, sp				// regs
+	sub	x0, x30, #AARCH64_INSN_SIZE		// ip (callsite's BL insn)
+	mov	x1, x9					// parent_ip (callsite's LR)
+	ldr	x2, [x30, #-(4*AARCH64_INSN_SIZE)]	// op
+	mov	x3, sp					// regs
+
+	ldr	x4, [x2]				// op->func
+	blr	x4					// func(ip, parent_ip, op, regs)
+
+	b	ftrace_common_return
 
 SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 	bl	ftrace_stub
