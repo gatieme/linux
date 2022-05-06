@@ -52,7 +52,7 @@
 #define DEVIRT_MEM_MAP_PHYS_BASE \
 		(DEVIRT_MEM_MAP_HEAD_PHYS_BASE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE)
 #define DEVIRT_MEM_MAP_MAX_SIZE 0x20000000ul
-#define DEVIRT_MEM_MAP_TOTAl_MAX_SIZE (DEVIRT_MEM_MAP_MAX_SIZE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE)
+#define DEVIRT_MEM_MAP_MAX_NPAGES (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT)
 
 #define DEVIRT_MAP_HEAD_NPAGES ((KVM_MEM_SLOTS_NUM * sizeof(struct devirt_mem_map_head) \
 		+ PAGE_SIZE - 1) / PAGE_SIZE)
@@ -276,6 +276,7 @@ extern struct devirt_kvm_operations devirt_svm_kvm_ops;
 extern void devirt_tick_broadcast_set_event(ktime_t expires);
 extern bool devirt_host_system_interrupt_pending(void);
 
+extern int devirt_mem_init(struct kvm *kvm);
 extern int devirt_mem_start(struct kvm_vcpu *vcpu, unsigned long guest_cr3);
 extern int devirt_mem_convert(struct kvm_vcpu *vcpu, unsigned long guest_cr3);
 extern bool devirt_gva_mmio_access(struct kvm_vcpu *vcpu, unsigned long gva);
