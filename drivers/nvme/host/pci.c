@@ -24,6 +24,12 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/sed-opal.h>
 #include <linux/pci-p2pdma.h>
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+#include <linux/jiffies.h>
+#include <linux/debugfs.h>
+#include <linux/delay.h>
+#include <asm/param.h>		/* for HZ */
+#endif
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 #include <asm/devirt.h>
 #endif
@@ -87,6 +93,55 @@ struct nvme_queue;
 static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown);
 static bool __nvme_disable_io_queues(struct nvme_dev *dev, u8 opcode);
 
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+
+#define MAX_NR_MAP 256
+/* its length equal to nvme queue
+ *  the index starts from 0
+ */
+struct nvme_qmap_nmap {
+	cpumask_var_t qid_mask;	/* which queue forword to me */
+	int flag_disabled;	/* disabled or not */
+	int dst_qid;		/* which nvme queue I forword */
+};
+
+/* stores the blk map map to nvme queue
+ * use it to directly map blk mq
+ */
+struct nvme_qmap_mmap {
+	cpumask_var_t mask;	/* cpu mask */
+	int nvme_qid;		/* directly find nvmeq */
+};
+
+/* index start from 0:map info for cq -> blk_mq
+ * completion queue map
+ */
+struct nvme_qmap_cmap {
+	int dst_mqid;
+};
+
+/* nmap means nvme map
+ * mmap means blk mq map
+ */
+struct nvme_qmap {
+	/* protect all the map */
+	struct completion compl;
+	struct nvme_qmap_nmap *nvme_map;
+	struct nvme_qmap_nmap *shadow_nvme_map;
+	struct nvme_qmap_mmap *blk_mq_map;
+	struct nvme_qmap_cmap *comp_map;
+	struct dentry *dbg_file;
+	u32 nr_blk_mq;		/* stores the current blk mq queues */
+	unsigned long timeout;	/* in ms */
+};
+
+struct nvme_qmap_qid_param {
+	int (*map_arr)[2];
+	int next_nr_ques;
+	int nr_groups;
+};
+#endif
+
 /*
  * Represents an NVM Express device.  Each nvme_dev is a PCI function.
  */
@@ -134,6 +189,9 @@ struct nvme_dev {
 	unsigned int nr_allocated_queues;
 	unsigned int nr_write_queues;
 	unsigned int nr_poll_queues;
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	struct nvme_qmap qmap;
+#endif
 };
 
 static int io_queue_depth_set(const char *val, const struct kernel_param *kp)
@@ -426,6 +484,915 @@ static int queue_irq_offset(struct nvme_dev *dev)
 	return 0;
 }
 
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+static int nvme_qmap_pci_map(struct blk_mq_queue_map *qmap,
+			     struct nvme_dev *ndev)
+{
+	const struct cpumask *mask;
+	unsigned int queue, cpu;
+
+	qmap->nr_queues = ndev->qmap.nr_blk_mq;
+
+	for (queue = 0; queue < qmap->nr_queues; queue++) {
+		mask = ndev->qmap.blk_mq_map[queue].mask;
+		if (!mask) {
+			dev_err(ndev->ctrl.device,
+				"failed to find blk mq mask.\n");
+			goto fallback;
+		}
+		for_each_cpu(cpu, mask) {
+			qmap->mq_map[cpu] = qmap->queue_offset + queue;
+		}
+	}
+	return 0;
+
+fallback:
+	WARN_ON_ONCE(qmap->nr_queues > 1);
+	return 0;
+}
+
+static int hctx_to_nvme(struct nvme_dev *ndev, int hctx_idx)
+{
+	struct nvme_qmap_mmap *mmap = ndev->qmap.blk_mq_map;
+	return mmap[hctx_idx].nvme_qid;
+}
+
+static void update_driver_data(struct blk_mq_tag_set *set,
+			       struct request_queue *q)
+{
+	struct blk_mq_hw_ctx **hctxs = q->queue_hw_ctx;
+	struct nvme_queue *nvmeq;
+	struct nvme_dev *ndev;
+	int i;
+
+	nvmeq = hctxs[0]->driver_data;
+	ndev = nvmeq->dev;
+	mutex_lock(&q->sysfs_lock);
+	for (i = 0; i < set->nr_hw_queues; i++) {
+		nvmeq = &ndev->queues[hctx_to_nvme(ndev, hctxs[i]->queue_num)];
+		hctxs[i]->driver_data = nvmeq;
+	}
+	mutex_unlock(&q->sysfs_lock);
+}
+
+static void nvme_qmap_update_driver_data(struct blk_mq_tag_set *set)
+{
+	struct request_queue *q;
+
+	if (NULL == set->tag_list.prev || NULL == set->tag_list.next)
+		return;
+
+	list_for_each_entry(q, &set->tag_list, tag_set_list) {
+		update_driver_data(set, q);
+	}
+}
+
+static void nvme_qmap_restart_io(struct blk_mq_tag_set *set)
+{
+	struct request_queue *q;
+
+	list_for_each_entry(q, &set->tag_list, tag_set_list) {
+		blk_mq_unquiesce_queue(q);
+	}
+
+	list_for_each_entry(q, &set->tag_list, tag_set_list) {
+		blk_mq_unfreeze_queue(q);
+	}
+}
+
+static bool nvme_qmap_completed_rqs_timeout
+(struct request *rq, void *data, bool reserved)
+{
+	unsigned int *count = data;
+
+	if (blk_mq_request_completed(rq))
+		(*count)++;
+	return true;
+}
+
+static int nvme_qmap_wait_mq_completed_timeout
+(struct blk_mq_tag_set *tagset, unsigned long timeout)
+{
+	unsigned long expiry;
+
+	expiry = jiffies + timeout;
+
+	while (true) {
+		unsigned int count = 0;
+
+		blk_mq_tagset_busy_iter(tagset,
+					nvme_qmap_completed_rqs_timeout,
+					&count);
+		if (time_after(jiffies, expiry))
+			return -1;
+		if (!count)
+			break;
+		msleep(5);
+	}
+	return 0;
+}
+
+static int nvme_qmap_cease_io(struct nvme_dev *ndev, unsigned long timeout)
+{
+	struct nvme_ctrl *ctrl = &ndev->ctrl;
+
+	/* do not accept new io submit */
+	nvme_start_freeze(ctrl);
+	timeout = nvme_wait_freeze_timeout(ctrl, timeout);
+	if (timeout <= 0) {
+		dev_err(ndev->ctrl.device, "freeze timeout.\n");
+		return -1;
+	}
+
+	/* wait all hw queue dispatch finished */
+	nvme_stop_queues(ctrl);
+
+	/* wait all request completed from blk layer
+	 * work like blk_mq_tagset_wait_completed_request
+	 */
+	return nvme_qmap_wait_mq_completed_timeout(&ndev->tagset, timeout);
+}
+
+/* got the precise length of id */
+static char *precise_alloc(const char *fmt, ...)
+{
+	uint32_t len = 0;
+	char *buffer;
+	va_list valist;
+
+	va_start(valist, fmt);
+	len = vsnprintf(NULL, 0, fmt, valist);
+	va_end(valist);
+
+	buffer = kmalloc(len + 1, GFP_KERNEL);
+	if (buffer == NULL)
+		return NULL;
+
+	va_start(valist, fmt);
+	vsnprintf(buffer, len + 1, fmt, valist);
+	va_end(valist);
+
+	return buffer;
+}
+
+static char *nvme_qmap_topo_mq_view(struct device *dev)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	struct nvme_qmap_mmap *mmap;
+	int nr_queues, qid;
+	char *str, *tmp_buf;
+	char *affinity;
+
+	nr_queues = ndev->qmap.nr_blk_mq;
+
+	/* the header */
+	str = precise_alloc("%12s\t%12s\t%12s\n",
+			    "index", "cpu_affinity", "dst_nvme_qid");
+	if (str == NULL) {
+		dev_err(dev, "not enough mem for blk mq veiw head.\n");
+		return NULL;
+	}
+
+	for (qid = 0; qid < nr_queues; qid++) {
+		mmap = &ndev->qmap.blk_mq_map[qid];
+		affinity = precise_alloc("%*pbl", cpumask_pr_args(mmap->mask));
+		tmp_buf =
+		    precise_alloc("%s%12d\t%12s\t%12d\n", str, qid, affinity,
+				  mmap->nvme_qid);
+		kfree(affinity);
+		kfree(str);
+		if (NULL == affinity || NULL == tmp_buf) {
+			dev_err(dev, "no mem for blk mq view map.\n");
+			kfree(tmp_buf);
+			return NULL;
+		}
+		str = tmp_buf;
+	}
+	return str;
+}
+
+/* attention this must be the exactly one nmap, not the head one */
+static inline int nvme_qmap_flag_disabled(struct nvme_qmap_nmap *nmap)
+{
+	return nmap->flag_disabled;
+}
+
+static inline int nvme_qmap_wait_compl(struct nvme_dev *ndev)
+{
+	struct nvme_qmap *qmap = &ndev->qmap;
+	int rc;
+
+	rc = wait_for_completion_interruptible_timeout(&qmap->compl,
+						       qmap->timeout);
+	if (rc == 0) {
+		dev_err(ndev->ctrl.device, "failed to  get lock, timeout.\n");
+		return -1;
+	}
+	if (rc < 0) {
+		dev_err(ndev->ctrl.device,
+			"failed to  get lock, interrupted.\n");
+		return -1;
+	}
+
+	if (qmap->nvme_map == NULL) {
+		dev_err(ndev->ctrl.device, "queue map info released yet.\n");
+		complete(&qmap->compl);
+		return -1;
+	}
+	return 0;
+}
+
+static ssize_t queue_map_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	struct nvme_qmap *qmap = &ndev->qmap;
+	struct nvme_qmap_nmap *nmap;
+	int nr_queues = ndev->io_queues[HCTX_TYPE_DEFAULT];
+	const struct cpumask *mask;
+	int idx;
+	int size = 0;
+
+	if (nvme_qmap_wait_compl(ndev))
+		return -1;
+
+	for (idx = 0; idx < nr_queues; idx++) {
+		size += scnprintf(buf + size, PAGE_SIZE - size, "%d\t", idx);
+
+		nmap = &qmap->nvme_map[idx];
+		mask = nmap->qid_mask;
+		if (nvme_qmap_flag_disabled(nmap)) {
+			size += scnprintf(buf + size, PAGE_SIZE - size,
+					  "Dead\t");
+		} else {
+			size += scnprintf(buf + size, PAGE_SIZE - size,
+					  "%*pbl\t", cpumask_pr_args(mask));
+		}
+		size += scnprintf(buf + size, PAGE_SIZE - size,
+				  "%d\n", nmap->dst_qid);
+
+	}
+	complete(&qmap->compl);
+	return size;
+}
+
+static char *nvme_qmap_topo_nq_view(struct device *dev,
+				    struct nvme_qmap_nmap *top_nmap)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	struct pci_dev *pdev = to_pci_dev(ndev->dev);
+	struct nvme_qmap *qmap = &ndev->qmap;
+	int nr_queues = ndev->io_queues[HCTX_TYPE_DEFAULT];
+	const int q_off = 1;
+	const struct cpumask *mask;
+	int idx;
+	char *str, *tmp_buf;
+	char *name, *cpu_list, *src_qid_list;
+
+	/* the header */
+	str = precise_alloc("%12s\t%12s\t%12s\t%12s\t%12s\t%12s\n",
+			    "name", "nvme_qid", "cpu_affinity", "src_nqid",
+			    "dst_nqid", "dst_mqid");
+
+	/* start from 0 is good to user */
+	for (idx = 0; idx < nr_queues; idx++) {
+		struct nvme_qmap_nmap *nmap = &top_nmap[idx];
+		struct nvme_qmap_cmap *cmap = &qmap->comp_map[idx];
+
+		name = precise_alloc("io_queue:%d", idx);
+
+		/* io queue start from 1 in msix table */
+		mask = pci_irq_get_affinity(pdev, idx + q_off);
+		cpu_list = precise_alloc("%*pbl", cpumask_pr_args(mask));
+
+		mask = nmap->qid_mask;
+		if (nvme_qmap_flag_disabled(nmap))
+			src_qid_list =
+			    precise_alloc("Dead:%*pbl", cpumask_pr_args(mask));
+		else
+			src_qid_list =
+			    precise_alloc("%*pbl", cpumask_pr_args(mask));
+
+		tmp_buf =
+		    precise_alloc("%s%12s\t%12d\t%12s\t%12s\t%12d\t%12d\n", str,
+				  name, idx + 1, cpu_list, src_qid_list,
+				  nmap->dst_qid, cmap->dst_mqid);
+
+		kfree(name);
+		kfree(cpu_list);
+		kfree(src_qid_list);
+		kfree(str);
+
+		if (name == NULL ||
+		    cpu_list == NULL ||
+		    src_qid_list  == NULL || tmp_buf == NULL) {
+			dev_err(dev, "no mem for nq view map.\n");
+			kfree(tmp_buf);
+			return NULL;
+		}
+		str = tmp_buf;
+	}
+	return str;
+}
+
+static inline int locate_word(const char *buf, int *start_off)
+{
+	int start, idx, str_len;
+
+	idx = 0;
+	while (buf[idx] == ' ' && buf[idx] != '\0')
+		idx++;
+	start = idx;
+	while (buf[idx] != ' ' && buf[idx] != '\0')
+		idx++;
+	str_len = idx - start;
+	*start_off = start;
+	return str_len;
+}
+
+/* offset means the pos of next byte of cur word */
+static inline char *find_word(const char *buf, int *end_off)
+{
+	int start, str_len;
+
+	str_len = locate_word(buf, &start);
+	if (str_len == 0) {
+		*end_off = 0;
+		return NULL;
+	}
+
+	/* idx points at the next char of cur word */
+	*end_off = start + str_len;
+	return kmemdup_nul(&buf[start], str_len, GFP_KERNEL);
+}
+
+static int boundary_check(struct nvme_dev *ndev, int qid)
+{
+	int nr_io_queues = ndev->io_queues[HCTX_TYPE_DEFAULT];
+
+	if (qid < 0 || qid >= nr_io_queues) {
+		dev_warn(ndev->ctrl.device, "qid:%d illegal.\n", qid);
+		return -1;
+	}
+	return 0;
+}
+
+static inline int parse_int(const char *buf, int *num, int *next_off)
+{
+	char *int_buf;
+	int rc = 0;
+
+	int_buf = find_word(buf, next_off);
+	if (int_buf == NULL)
+		return -1;
+	if (kstrtoint(int_buf, 10, num))
+		rc = -2;
+	kfree(int_buf);
+	return rc;
+}
+
+static inline int parse_qid
+(struct nvme_dev *ndev, const char *buf, int *qid, int *next_off)
+{
+	int rc = 0;
+
+	rc = parse_int(buf, qid, next_off);
+	if (!rc && boundary_check(ndev, *qid))
+		rc = -3;
+	return rc;
+}
+
+/* if greater than 256, we will cut it */
+static int
+nvme_qmap_gen_qid
+(struct nvme_dev *ndev, const char *buf, struct nvme_qmap_qid_param *param)
+{
+	struct device *dev = ndev->ctrl.device;
+	const char *next_buf;
+	int offset, idx, rc;
+	int src_qid, dst_qid;
+
+	next_buf = buf;
+	offset = 0;
+
+	param->map_arr =
+	    kcalloc(MAX_NR_MAP, sizeof(*param->map_arr), GFP_KERNEL);
+	if (param->map_arr == NULL) {
+		dev_err(dev, "failed to alloc mem for qmap param.\n");
+		return -1;
+	}
+
+	for (idx = 0; idx < MAX_NR_MAP; idx++) {
+		next_buf += offset;
+		rc = parse_qid(ndev, next_buf, &src_qid, &offset);
+		/* end of parse */
+		if (-1 == rc)
+			break;
+
+		if (rc != 0) {
+			dev_err(dev, "failed to parse group:%d src.\n", idx);
+			goto free_arr;
+		}
+
+		next_buf += offset;
+		if (parse_qid(ndev, next_buf, &dst_qid, &offset)) {
+			dev_err(dev, "failed to parse group:%d dst.\n", idx);
+			goto free_arr;
+		}
+		param->map_arr[idx][0] = src_qid;
+		param->map_arr[idx][1] = dst_qid;
+	}
+
+	if (idx == 0) {
+		dev_err(dev, "no input pair detected.\n");
+		goto free_arr;
+	}
+	param->nr_groups = idx;
+	return 0;
+
+free_arr:
+	kfree(param->map_arr);
+	param->map_arr = NULL;
+	param->nr_groups = 0;
+	return -1;
+}
+
+static inline void nvme_qmap_flag_enable(struct nvme_qmap_nmap *nmap)
+{
+	nmap->flag_disabled = 0;
+}
+
+static inline void nvme_qmap_flag_disable(struct nvme_qmap_nmap *nmap)
+{
+	nmap->flag_disabled = 1;
+}
+
+/* you can process any nmap. no need to be the nvme_dev one
+ * if disabled yet return 1
+ */
+static int nvme_qmap_disable
+(struct nvme_dev *ndev, struct nvme_qmap_nmap *nmap, int src_qid, int dst_qid)
+{
+	struct device *dev = ndev->ctrl.device;
+	int orig_dst_qid, qid;
+
+	if (nvme_qmap_flag_disabled(&nmap[dst_qid])) {
+		dev_err(dev, "dst qid:%d is disabled. can't be mapped.\n",
+			dst_qid);
+		return -1;
+	}
+
+	/* by default the dst qid = src qid */
+	orig_dst_qid = nmap[src_qid].dst_qid;
+	if (orig_dst_qid == dst_qid) {
+		dev_err(dev, "duplicated request.\n");
+		return -1;
+	}
+
+	/* include src qid it self */
+	for_each_cpu(qid, nmap[src_qid].qid_mask) {
+		cpumask_set_cpu(qid, nmap[dst_qid].qid_mask);
+		nmap[qid].dst_qid = dst_qid;
+	}
+	cpumask_clear_cpu(src_qid, nmap[orig_dst_qid].qid_mask);
+	cpumask_clear(nmap[src_qid].qid_mask);
+	cpumask_set_cpu(src_qid, nmap[src_qid].qid_mask);
+
+	/* tell upper layer not to decrese nr_blk_mq */
+	if (nvme_qmap_flag_disabled(&nmap[src_qid]))
+		return 1;
+
+	nvme_qmap_flag_disable(&nmap[src_qid]);
+
+	return 0;
+}
+
+static int nvme_qmap_enable
+(struct nvme_dev *ndev, struct nvme_qmap_nmap *nmap, int qid)
+{
+	int dst_qid;
+
+	if (!nvme_qmap_flag_disabled(&nmap[qid])) {
+		dev_err(ndev->ctrl.device, "qid:%d enabled yet.\n", qid);
+		return -1;
+	}
+	dst_qid = nmap[qid].dst_qid;
+	cpumask_clear_cpu(qid, nmap[dst_qid].qid_mask);
+	nmap[qid].dst_qid = qid;
+	nvme_qmap_flag_enable(&nmap[qid]);
+	return 0;
+}
+
+static inline void nvme_qmap_dup
+(int nr_queue, struct nvme_qmap_nmap *src, struct nvme_qmap_nmap *dst)
+{
+	int idx;
+
+	for (idx = 0; idx < nr_queue; idx++) {
+		dst[idx].dst_qid = src[idx].dst_qid;
+		dst[idx].flag_disabled = src[idx].flag_disabled;
+		cpumask_copy(dst[idx].qid_mask, src[idx].qid_mask);
+	}
+}
+
+static int nvme_qmap_modify_map(struct nvme_dev *ndev, struct nvme_qmap_qid_param *param)
+{
+	struct nvme_qmap_nmap *shadow = ndev->qmap.shadow_nvme_map;
+	struct nvme_qmap_nmap *nmap = ndev->qmap.nvme_map;
+	int rc, idx, sum, irq_queues, src_qid, dst_qid;
+
+	sum = 0;
+	for (idx = 0; idx < param->nr_groups; idx++) {
+		src_qid = param->map_arr[idx][0];
+		dst_qid = param->map_arr[idx][1];
+		if (src_qid == dst_qid) {
+			rc = nvme_qmap_enable(ndev, shadow, src_qid);
+			sum++;
+		} else {
+			rc = nvme_qmap_disable(ndev, shadow, src_qid, dst_qid);
+			if (rc == 0)
+				sum--;
+			else if (rc == 1)
+				rc = 0;
+		}
+		if (rc) {
+			dev_err(ndev->ctrl.device,
+				"failed to map group:%d from src:%d.dst:%d.\n",
+				idx, src_qid, dst_qid);
+			break;
+		}
+	}
+
+	irq_queues = ndev->io_queues[HCTX_TYPE_DEFAULT];
+	if (rc) {
+		nvme_qmap_dup(irq_queues, nmap, shadow);
+		param->next_nr_ques = 0;
+		dev_err(ndev->ctrl.device, "moidfy queue illegal. restore.\n");
+	} else {
+		param->next_nr_ques = ndev->qmap.nr_blk_mq + sum;
+	}
+	return rc;
+}
+
+static void nvme_qmap_clean_blk_mq_map(struct nvme_dev *ndev)
+{
+	struct nvme_qmap *qmap = &ndev->qmap;
+	struct nvme_qmap_mmap *mmap = qmap->blk_mq_map;
+	int i, nr_queues;
+
+	nr_queues = ndev->io_queues[HCTX_TYPE_DEFAULT];
+	for (i = 0; i < nr_queues; i++) {
+		cpumask_clear(mmap[i].mask);
+		mmap[i].nvme_qid = -1;
+	}
+}
+
+/* core map logical */
+static void nvme_qmap_gen_map(struct nvme_dev *ndev, unsigned int nr_blk_mq)
+{
+	struct pci_dev *pdev = to_pci_dev(ndev->dev);
+	struct nvme_qmap *qmap = &ndev->qmap;
+	struct nvme_qmap_nmap *nmap = qmap->nvme_map;
+	struct nvme_qmap_mmap *mmap = qmap->blk_mq_map;
+	struct nvme_qmap_cmap *cmap = qmap->comp_map;
+	int mqid, nqid, tmp_qid, nr_nqs;
+	const int nvme_ioq_off = 1;
+
+	qmap->nr_blk_mq = nr_blk_mq;
+
+	mqid = nqid = tmp_qid = 0;
+	nr_nqs = ndev->io_queues[HCTX_TYPE_DEFAULT];
+
+	for (; mqid < nr_blk_mq && nqid < nr_nqs; nqid++) {
+		if (nvme_qmap_flag_disabled(&nmap[nqid]))
+			continue;
+		for_each_cpu(tmp_qid, nmap[nqid].qid_mask) {
+			cpumask_or(mmap[mqid].mask, mmap[mqid].mask,
+				   pci_irq_get_affinity(pdev,
+							tmp_qid +
+							nvme_ioq_off));
+			cmap[tmp_qid].dst_mqid = mqid;
+		}
+		mmap[mqid].nvme_qid = nqid + nvme_ioq_off;
+		mqid++;
+	}
+}
+
+/* core map logical */
+static inline void nvme_qmap_generate_map(struct nvme_dev *ndev, unsigned int nr_blk_mq)
+{
+	struct nvme_qmap *qmap = &ndev->qmap;
+	struct nvme_qmap_nmap *nmap = qmap->nvme_map;
+	int nr_nqs = ndev->io_queues[HCTX_TYPE_DEFAULT];
+
+	nvme_qmap_dup(nr_nqs, qmap->shadow_nvme_map, nmap);
+	nvme_qmap_clean_blk_mq_map(ndev);
+	nvme_qmap_gen_map(ndev, nr_blk_mq);
+}
+
+static inline void nvme_qmap_free_qid_arr(struct nvme_qmap_qid_param *param)
+{
+	kfree(param->map_arr);
+}
+
+static int _nvme_qmap(struct nvme_dev *ndev, struct nvme_qmap_qid_param *param)
+{
+	if (ndev->qmap.nvme_map == NULL) {
+		dev_err(ndev->ctrl.device, "qmap info deleted.\n");
+		return -1;
+	}
+
+	if (ndev->ctrl.state != NVME_CTRL_LIVE) {
+		dev_err(ndev->ctrl.device, "device stat not live.\n");
+		return -1;
+	}
+
+	if (nvme_qmap_modify_map(ndev, param))
+		return -1;
+
+	/* if timeout happens. We need a rapid way
+	 * to escape acquire lock
+	 */
+	if (nvme_qmap_cease_io(ndev, ndev->qmap.timeout)) {
+		nvme_qmap_dup(ndev->io_queues[HCTX_TYPE_DEFAULT],
+			      ndev->qmap.nvme_map, ndev->qmap.shadow_nvme_map);
+		dev_err(ndev->ctrl.device,
+			"cease io timeout for %lu seconds.\n",
+			ndev->qmap.timeout / HZ);
+		nvme_qmap_restart_io(&ndev->tagset);
+		return -1;
+	}
+	nvme_qmap_generate_map(ndev, param->next_nr_ques);
+	blk_mq_update_nr_hw_queues(&ndev->tagset, ndev->qmap.nr_blk_mq);
+	nvme_qmap_update_driver_data(&ndev->tagset);
+	nvme_qmap_restart_io(&ndev->tagset);
+	return 0;
+}
+
+static int nvme_qmap_lock(struct nvme_dev *ndev, struct nvme_qmap_qid_param *param)
+{
+	int rc;
+
+	if (nvme_qmap_wait_compl(ndev))
+		return -1;
+	rc = _nvme_qmap(ndev, param);
+	complete(&ndev->qmap.compl);
+	return rc;
+}
+
+static ssize_t queue_map_store
+(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct nvme_dev *ndev = to_nvme_dev(dev_get_drvdata(dev));
+	struct nvme_qmap_qid_param param;
+	int rc;
+
+	if (nvme_qmap_gen_qid(ndev, buf, &param))
+		return -1;
+
+	rc = nvme_qmap_lock(ndev, &param);
+	nvme_qmap_free_qid_arr(&param);
+
+	if (rc)
+		return rc;
+
+	dev_info(dev, "remap accomplished.\n");
+	return count;
+}
+static DEVICE_ATTR_RW(queue_map);
+
+static ssize_t nvme_qmap_debug_read(struct file *filp, char __user *buf,
+				    size_t count, loff_t *pos)
+{
+	char *mq_view, *nq_view, *shadow, *str;
+	struct nvme_dev *ndev = filp->private_data;
+	struct nvme_qmap *qmap = &ndev->qmap;
+	size_t rc;
+
+	if (nvme_qmap_wait_compl(ndev))
+		return -1;
+
+	mq_view = nvme_qmap_topo_mq_view(ndev->ctrl.device);
+	nq_view =
+	    nvme_qmap_topo_nq_view(ndev->ctrl.device, ndev->qmap.nvme_map);
+	shadow =
+	    nvme_qmap_topo_nq_view(ndev->ctrl.device,
+				   ndev->qmap.shadow_nvme_map);
+	rc = ndev->qmap.timeout;
+	complete(&qmap->compl);
+
+	str = precise_alloc("mq view\n%snq view\n%sshadow view\n%stimeout:%d\n",
+			    mq_view, nq_view, shadow, rc);
+	if (str == NULL) {
+		rc = -1;
+		goto free_str;
+	}
+
+	rc = simple_read_from_buffer
+		(buf, count, pos, str, strlen(str));
+free_str:
+	kfree(mq_view);
+	kfree(nq_view);
+	kfree(shadow);
+	kfree(str);
+	return rc;
+}
+
+static ssize_t nvme_qmap_debug_write(struct file *filp, const char __user *buf,
+				     size_t count, loff_t *pos)
+{
+	struct nvme_dev *ndev = filp->private_data;
+	struct nvme_qmap *qmap = &ndev->qmap;
+	unsigned long var;
+
+	if (kstrtoul_from_user(buf, count, 10, &var)) {
+		dev_err(ndev->ctrl.device, "input format err.");
+		return -EFAULT;
+	}
+
+	if (nvme_qmap_wait_compl(ndev))
+		return -1;
+
+	qmap->timeout = var;
+	complete(&qmap->compl);
+	return count;
+}
+
+const struct file_operations nvme_qmap_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = nvme_qmap_debug_read,
+	.write = nvme_qmap_debug_write,
+};
+
+/* remove all of it in nvme_remove */
+static int nvme_qmap_add_files(struct nvme_dev *dev)
+{
+	const int min_timeout = 15;
+	int timeout = nvme_io_timeout / 2;
+
+	if (sysfs_add_file_to_group(&dev->ctrl.device->kobj,
+				    &dev_attr_queue_map.attr, NULL)) {
+		dev_err(dev->ctrl.device,
+			"failed to add sysfs for queue_map.\n");
+		return -1;
+	}
+
+	dev->qmap.dbg_file = debugfs_create_file(dev_name(dev->ctrl.device),
+						 0644, debug_nvme_qmap,
+						 (void *)dev, &nvme_qmap_fops);
+	if (dev->qmap.dbg_file == NULL) {
+		dev_err(dev->ctrl.device,
+			"failed to add debugfs for queue_map.\n");
+		return -1;
+	}
+
+	timeout = (timeout > min_timeout ? timeout : min_timeout);
+	dev->qmap.timeout = timeout * HZ;
+
+	return 0;
+}
+
+static void nvme_qmap_init_default_nmap(struct nvme_dev *dev)
+{
+	struct nvme_qmap *qmap;
+	struct nvme_qmap_nmap *nmap;
+	int i, irq_queues;
+
+	qmap = &(dev->qmap);
+	irq_queues = dev->io_queues[HCTX_TYPE_DEFAULT];
+
+	for (i = 0; i < irq_queues; i++) {
+		nmap = &qmap->nvme_map[i];
+		cpumask_clear(nmap->qid_mask);
+		cpumask_set_cpu(i, nmap->qid_mask);
+		nmap->dst_qid = i;
+		nvme_qmap_flag_enable(nmap);
+	}
+}
+
+/* this is the default map
+ * need after setup_io_queue and before nvme_dev_add
+ */
+static void nvme_qmap_init_default_map(struct nvme_dev *dev)
+{
+	nvme_qmap_init_default_nmap(dev);
+	nvme_qmap_dup(dev->io_queues[HCTX_TYPE_DEFAULT],
+		      dev->qmap.nvme_map, dev->qmap.shadow_nvme_map);
+	nvme_qmap_generate_map(dev, dev->io_queues[HCTX_TYPE_DEFAULT]);
+}
+
+/* must be called after the interrupts are initailized yet
+ * before nvme_dev_add or pci_map will fail
+ */
+static void nvme_qmap_setup_qmap(struct nvme_dev *dev)
+{
+	if (dev->qmap.nr_blk_mq == 0) {
+		if (nvme_qmap_add_files(dev)) {
+			dev_err(dev->ctrl.device,
+				"failed to create debug file.\n");
+		}
+	}
+	nvme_qmap_init_default_map(dev);
+}
+
+static void nvme_qmap_free_qmap(struct nvme_dev *dev)
+{
+	int nr_queues = dev->nr_allocated_queues;
+	struct nvme_qmap *qmap = &dev->qmap;
+	struct nvme_qmap_nmap *nmap = qmap->nvme_map;
+	struct nvme_qmap_mmap *mmap = qmap->blk_mq_map;
+	struct nvme_qmap_nmap *snmap = qmap->shadow_nvme_map;
+	int idx;
+
+	debugfs_remove(dev->qmap.dbg_file);
+	for (idx = 0; idx < nr_queues; idx++) {
+		free_cpumask_var(nmap[idx].qid_mask);
+		free_cpumask_var(mmap[idx].mask);
+		free_cpumask_var(snmap[idx].qid_mask);
+	}
+	kfree(nmap);
+	kfree(mmap);
+	kfree(snmap);
+	kfree(qmap->comp_map);
+	qmap->nvme_map = NULL;
+}
+
+static int nvme_qmap_alloc(struct nvme_dev *dev)
+{
+	struct nvme_qmap *qmap;
+	int nr_queues, idx, node;
+
+	init_completion(&dev->qmap.compl);
+	complete(&dev->qmap.compl);
+
+	nr_queues = dev->nr_allocated_queues;
+	qmap = &dev->qmap;
+	node = dev_to_node(dev->dev);
+
+	qmap->blk_mq_map =
+	    kcalloc_node(nr_queues, sizeof(*qmap->blk_mq_map), GFP_KERNEL,
+			 node);
+	qmap->comp_map =
+	    kcalloc_node(nr_queues, sizeof(*qmap->comp_map), GFP_KERNEL, node);
+	qmap->nvme_map =
+	    kcalloc_node(nr_queues, sizeof(*qmap->nvme_map), GFP_KERNEL, node);
+	qmap->shadow_nvme_map =
+	    kcalloc_node(nr_queues, sizeof(*qmap->nvme_map), GFP_KERNEL, node);
+
+	if (qmap->blk_mq_map == NULL ||
+	    qmap->comp_map == NULL ||
+	    qmap->nvme_map == NULL ||
+	    qmap->shadow_nvme_map == NULL) {
+		dev_err(dev->dev, "kalloc map failed.\n");
+		goto free_map;
+	}
+
+	for (idx = 0; idx < nr_queues; idx++) {
+		if (!zalloc_cpumask_var
+		    (&qmap->nvme_map[idx].qid_mask, GFP_KERNEL)
+		    || !zalloc_cpumask_var(&qmap->blk_mq_map[idx].mask,
+					   GFP_KERNEL)
+		    || !zalloc_cpumask_var(&qmap->shadow_nvme_map[idx].qid_mask,
+					   GFP_KERNEL))
+			goto free_mask;
+	}
+	return 0;
+
+free_mask:
+	for (idx = 0; idx < nr_queues; idx++) {
+		dev_err(dev->dev, "zalloc qid mask failed.\n");
+		free_cpumask_var(qmap->blk_mq_map[idx].mask);
+		free_cpumask_var(qmap->nvme_map[idx].qid_mask);
+		free_cpumask_var(qmap->shadow_nvme_map[idx].qid_mask);
+	}
+free_map:
+	kfree(qmap->nvme_map);
+	kfree(qmap->shadow_nvme_map);
+	kfree(qmap->comp_map);
+	kfree(qmap->blk_mq_map);
+
+	return -1;
+}
+
+static inline int nvme_to_mqid(struct nvme_dev *dev, int nvme_qid)
+{
+	return dev->qmap.comp_map[nvme_qid - 1].dst_mqid;
+}
+
+static inline void nvme_dev_add(struct nvme_dev *dev);
+static inline void nvme_qmap_dev_add(struct nvme_dev *dev)
+{
+	/* avoid re-add agagin */
+	wait_for_completion(&dev->qmap.compl);
+	nvme_qmap_setup_qmap(dev);
+	nvme_dev_add(dev);
+	nvme_qmap_update_driver_data(&dev->tagset);
+	complete(&dev->qmap.compl);
+}
+
+#endif /* CONFIG_BYTEDANCE_NVME_QMAP */
+
 static int nvme_pci_map_queues(struct blk_mq_tag_set *set)
 {
 	struct nvme_dev *dev = set->driver_data;
@@ -446,10 +1413,16 @@ static int nvme_pci_map_queues(struct blk_mq_tag_set *set)
 		 * affinity), so use the regular blk-mq cpu mapping
 		 */
 		map->queue_offset = qoff;
-		if (i != HCTX_TYPE_POLL && offset)
-			blk_mq_pci_map_queues(map, to_pci_dev(dev->dev), offset);
-		else
+		if (i != HCTX_TYPE_POLL && offset) {
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+			nvme_qmap_pci_map(map, dev);
+#else
+			blk_mq_pci_map_queues(map, to_pci_dev(dev->dev),
+					      offset);
+#endif
+		} else {
 			blk_mq_map_queues(map);
+		}
 		qoff += map->nr_queues;
 		offset += map->nr_queues;
 	}
@@ -980,7 +1953,11 @@ static inline struct blk_mq_tags *nvme_queue_tagset(struct nvme_queue *nvmeq)
 {
 	if (!nvmeq->qid)
 		return nvmeq->dev->admin_tagset.tags[0];
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	return nvmeq->dev->tagset.tags[nvme_to_mqid(nvmeq->dev, nvmeq->qid)];
+#else
 	return nvmeq->dev->tagset.tags[nvmeq->qid - 1];
+#endif
 }
 
 static inline void nvme_handle_cqe(struct nvme_queue *nvmeq, u16 idx)
@@ -1229,7 +2206,6 @@ static void abort_endio(struct request *req, blk_status_t error)
 
 static bool nvme_should_reset(struct nvme_dev *dev, u32 csts)
 {
-
 	/* If true, indicates loss of adapter communication, possibly by a
 	 * NVMe Subsystem reset.
 	 */
@@ -2441,7 +3417,6 @@ static int nvme_pci_enable(struct nvme_dev *dev)
 			 dev->q_depth);
 	}
 
-
 	nvme_map_cmb(dev);
 
 	pci_enable_pcie_error_reporting(pdev);
@@ -2570,7 +3545,14 @@ static void nvme_pci_free_ctrl(struct nvme_ctrl *ctrl)
 
 	nvme_dbbuf_dma_free(dev);
 	put_device(dev->dev);
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	wait_for_completion(&dev->qmap.compl);
 	nvme_free_tagset(dev);
+	nvme_qmap_free_qmap(dev);
+	complete(&dev->qmap.compl);
+#else
+	nvme_free_tagset(dev);
+#endif
 	if (dev->ctrl.admin_q)
 		blk_put_queue(dev->ctrl.admin_q);
 	kfree(dev->queues);
@@ -2698,7 +3680,11 @@ static void nvme_reset_work(struct work_struct *work)
 	} else {
 		nvme_start_queues(&dev->ctrl);
 		nvme_wait_freeze(&dev->ctrl);
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+		nvme_qmap_dev_add(dev);
+#else
 		nvme_dev_add(dev);
+#endif
 		nvme_unfreeze(&dev->ctrl);
 	}
 
@@ -2867,9 +3853,20 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	dev->dev = get_device(&pdev->dev);
 	pci_set_drvdata(pdev, dev);
 
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	if (nvme_qmap_alloc(dev)) {
+		dev_err(dev->dev, "failled to alloc qmap.\n");
+		goto put_pci;
+	}
+#endif
+
 	result = nvme_dev_map(dev);
 	if (result)
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+		goto free_qmap;
+#else
 		goto put_pci;
+#endif
 
 	INIT_WORK(&dev->ctrl.reset_work, nvme_reset_work);
 	INIT_WORK(&dev->remove_work, nvme_remove_dead_ctrl_work);
@@ -2916,6 +3913,10 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	nvme_release_prp_pools(dev);
  unmap:
 	nvme_dev_unmap(dev);
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+ free_qmap:
+	nvme_qmap_free_qmap(dev);
+#endif
  put_pci:
 	put_device(dev->dev);
  free:
@@ -3221,6 +4222,7 @@ static const struct pci_device_id nvme_id_table[] = {
 				NVME_QUIRK_SHARED_TAGS },
 	{ 0, }
 };
+
 MODULE_DEVICE_TABLE(pci, nvme_id_table);
 
 static struct pci_driver nvme_driver = {

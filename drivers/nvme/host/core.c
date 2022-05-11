@@ -22,6 +22,9 @@
 #include <linux/t10-pi.h>
 #include <linux/pm_qos.h>
 #include <asm/unaligned.h>
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+#include <linux/debugfs.h>
+#endif
 
 #include "nvme.h"
 #include "fabrics.h"
@@ -40,6 +43,10 @@ unsigned int nvme_io_timeout = 30;
 module_param_named(io_timeout, nvme_io_timeout, uint, 0644);
 MODULE_PARM_DESC(io_timeout, "timeout in seconds for I/O");
 EXPORT_SYMBOL_GPL(nvme_io_timeout);
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+struct dentry *debug_nvme_qmap;
+EXPORT_SYMBOL_GPL(debug_nvme_qmap);
+#endif
 
 static unsigned char shutdown_timeout = 5;
 module_param(shutdown_timeout, byte, 0644);
@@ -4337,6 +4344,9 @@ static int __init nvme_core_init(void)
 		goto unregister_chrdev;
 	}
 	nvme_class->dev_uevent = nvme_class_uevent;
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	debug_nvme_qmap = debugfs_create_dir("nvme_qmap", NULL);
+#endif
 
 	nvme_subsys_class = class_create(THIS_MODULE, "nvme-subsystem");
 	if (IS_ERR(nvme_subsys_class)) {
@@ -4361,6 +4371,9 @@ out:
 
 static void __exit nvme_core_exit(void)
 {
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+	debugfs_remove_recursive(debug_nvme_qmap);
+#endif
 	class_destroy(nvme_subsys_class);
 	class_destroy(nvme_class);
 	unregister_chrdev_region(nvme_chr_devt, NVME_MINORS);

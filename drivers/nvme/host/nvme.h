@@ -31,6 +31,9 @@ extern unsigned int admin_timeout;
 extern struct workqueue_struct *nvme_wq;
 extern struct workqueue_struct *nvme_reset_wq;
 extern struct workqueue_struct *nvme_delete_wq;
+#ifdef CONFIG_BYTEDANCE_NVME_QMAP
+extern struct dentry *debug_nvme_qmap;
+#endif
 
 enum {
 	NVME_NS_LBA		= 0,

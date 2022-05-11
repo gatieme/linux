@@ -14,6 +14,20 @@ config BLK_DEV_NVME
 	  To compile this driver as a module, choose M here: the
 	  module will be called nvme.
 
+config BYTEDANCE_NVME_QMAP
+	bool "NVM Express queue map"
+	depends on NVME_CORE
+	depends on BLK_DEV_NVME
+	depends on SYSFS
+	depends on DEBUG_FS
+	default n
+	help
+	  This provides support for the NVMe pci contorller to logically
+	  disable specified io queue. Related irq won't trigger any more.
+	  This would help for katabm workflow. Currently it doesn't
+	  support write queue.
+	  If unsure, say N.
+
 config NVME_MULTIPATH
 	bool "NVMe multipath support"
 	depends on NVME_CORE
