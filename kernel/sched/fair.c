@@ -11559,6 +11559,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 		goto err;
 
 	tg->shares = NICE_0_LOAD;
+	tg->latency_prio = DEFAULT_LATENCY_PRIO;
 
 	init_cfs_bandwidth(tg_cfs_bandwidth(tg));
 
@@ -11657,6 +11658,7 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	}
 
 	se->my_q = cfs_rq;
+	se->latency_weight = sched_latency_to_weight[tg->latency_prio];
 	/* guarantee group entities always have weight */
 	update_load_set(&se->load, NICE_0_LOAD);
 	se->parent = parent;
@@ -11782,6 +11784,36 @@ next_cpu:
 		__sched_group_set_shares(tg, scale_load(WEIGHT_IDLEPRIO));
 	else
 		__sched_group_set_shares(tg, NICE_0_LOAD);
+
+	mutex_unlock(&shares_mutex);
+	return 0;
+}
+
+int sched_group_set_latency(struct task_group *tg, long latency_prio)
+{
+	int i;
+
+	if (tg == &root_task_group)
+		return -EINVAL;
+
+	if (latency_prio < 0 ||
+	    latency_prio > LATENCY_NICE_WIDTH)
+		return -EINVAL;
+
+	mutex_lock(&shares_mutex);
+
+	if (tg->latency_prio == latency_prio) {
+		mutex_unlock(&shares_mutex);
+		return 0;
+	}
+
+	tg->latency_prio = latency_prio;
+
+	for_each_possible_cpu(i) {
+		struct sched_entity *se = tg->se[i];
+
+		WRITE_ONCE(se->latency_weight, sched_latency_to_weight[latency_prio]);
+	}
 
 	mutex_unlock(&shares_mutex);
 	return 0;
