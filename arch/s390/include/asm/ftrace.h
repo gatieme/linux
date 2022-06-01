@@ -54,6 +54,11 @@ static __always_inline struct pt_regs *arch_ftrace_get_regs(struct ftrace_regs *
 	return NULL;
 }
 
+#define ftrace_regs_get_argument(fregs, n) \
+	regs_get_kernel_argument((&fregs)->regs, n)
+#define ftrace_regs_get_stack_pointer(fregs) \
+	kernel_stack_pointer(&(fregs)->regs)
+
 static __always_inline void ftrace_instruction_pointer_set(struct ftrace_regs *fregs,
 							   unsigned long ip)
 {
