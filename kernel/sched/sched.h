@@ -2511,6 +2511,70 @@ void arch_scale_freq_tick(void)
 }
 #endif
 
+#ifdef CONFIG_SCHED_TASK_CLASSES
+DECLARE_STATIC_KEY_FALSE(sched_task_classes);
+
+static inline bool sched_task_classes_enabled(void)
+{
+	return static_branch_unlikely(&sched_task_classes);
+}
+
+#ifndef arch_has_task_classes
+/**
+ * arch_has_task_classes() - Check whether hardware supports classes of tasks
+ *
+ * Returns: true of classes of tasks are supported.
+ */
+static __always_inline
+bool arch_has_task_classes(void)
+{
+	return false;
+}
+#endif
+
+#ifndef arch_update_task_class
+/**
+ * arch_update_task_class() - Update the classification of the current task
+ * @curr:		The current task
+ * @smt_siblings_idle:	True if all of the SMT siblings of the CPU of @curr
+ *			are idle.
+ *
+ * Request that the classification of @curr is updated. On certain CPUs, the
+ * classification is only reliable if all of the SMT siblings of the CPU of
+ * @curr are idle.
+ *
+ * Returns: none
+ */
+static __always_inline
+void arch_update_task_class(struct task_struct *curr, bool smt_siblings_idle)
+{
+}
+#endif
+
+#ifndef arch_get_task_class_score
+/**
+ * arch_get_task_class_score() - Get the priority of a class
+ * @class:	A classification value
+ * @cpu:	A CPU number
+ *
+ * Returns the performance score of a class of tasks when running on @cpu.
+ * Error when either @class or @cpu are invalid.
+ */
+static __always_inline
+int arch_get_task_class_score(int class, int cpu)
+{
+	return 1;
+}
+#endif
+#else /* CONFIG_SCHED_TASK_CLASSES */
+
+#define arch_get_task_class_score(class, cpu) (-EINVAL)
+#define arch_update_task_class(curr, smt_siblings_idle)
+
+static inline bool sched_task_classes_enabled(void) { return false; }
+
+#endif /* CONFIG_SCHED_TASK_CLASSES */
+
 #ifndef arch_scale_freq_capacity
 /**
  * arch_scale_freq_capacity - get the frequency scale factor of a given CPU.
