@@ -175,9 +175,10 @@ static struct workqueue_struct *hfi_updates_wq;
 static void get_hfi_caps(struct hfi_instance *hfi_instance,
 			 struct thermal_genl_cpu_caps *cpu_caps)
 {
+	unsigned long flags;
 	int cpu, i = 0;
 
-	raw_spin_lock_irq(&hfi_instance->table_lock);
+	raw_spin_lock_irqsave(&hfi_instance->table_lock, flags);
 	for_each_cpu(cpu, hfi_instance->cpus) {
 		struct hfi_cpu_data *caps;
 		s16 index;
@@ -199,7 +200,7 @@ static void get_hfi_caps(struct hfi_instance *hfi_instance,
 
 		++i;
 	}
-	raw_spin_unlock_irq(&hfi_instance->table_lock);
+	raw_spin_unlock_irqrestore(&hfi_instance->table_lock, flags);
 }
 
 /*
@@ -262,6 +263,7 @@ void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
 	struct hfi_instance *hfi_instance;
 	int cpu = smp_processor_id();
 	struct hfi_cpu_info *info;
+	unsigned long flags;
 	u64 new_timestamp;
 
 	if (!pkg_therm_status_msr_val)
@@ -298,7 +300,7 @@ void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
 		return;
 	}
 
-	raw_spin_lock(&hfi_instance->table_lock);
+	raw_spin_lock_irqsave(&hfi_instance->table_lock, flags);
 
 	/*
 	 * Copy the updated table into our local copy. This includes the new
@@ -307,7 +309,7 @@ void intel_hfi_process_event(__u64 pkg_therm_status_msr_val)
 	memcpy(hfi_instance->local_table, hfi_instance->hw_table,
 	       hfi_features.nr_table_pages << PAGE_SHIFT);
 
-	raw_spin_unlock(&hfi_instance->table_lock);
+	raw_spin_unlock_irqrestore(&hfi_instance->table_lock, flags);
 	raw_spin_unlock(&hfi_instance->event_lock);
 
 	/*
