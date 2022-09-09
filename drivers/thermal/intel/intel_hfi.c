@@ -73,6 +73,17 @@ union cpuid6_edx {
 	u32 full;
 };
 
+#ifdef CONFIG_INTEL_THREAD_DIRECTOR
+union hfi_thread_feedback_char_msr {
+	struct {
+		u8	classid;
+		u64	__reserved:55;
+		u8	valid:1;
+	} split;
+	u64 full;
+};
+#endif
+
 /**
  * struct hfi_cpu_data - HFI capabilities per CPU
  * @perf_cap:		Performance capability
@@ -171,6 +182,30 @@ static DEFINE_MUTEX(hfi_instance_lock);
 static struct workqueue_struct *hfi_updates_wq;
 #define HFI_UPDATE_INTERVAL		HZ
 #define HFI_MAX_THERM_NOTIFY_COUNT	16
+
+#ifdef CONFIG_INTEL_THREAD_DIRECTOR
+int intel_hfi_has_task_classes(void)
+{
+	return cpu_feature_enabled(X86_FEATURE_ITD);
+}
+
+void intel_hfi_update_task_class(struct task_struct *curr, bool smt_siblings_idle)
+{
+	union hfi_thread_feedback_char_msr msr;
+
+	/* We should not be here if ITD is not supported. */
+	if (!cpu_feature_enabled(X86_FEATURE_ITD)) {
+		pr_warn_once("task classification requested but not supported!");
+		return;
+	}
+
+	rdmsrl(MSR_IA32_HW_FEEDBACK_CHAR, msr.full);
+	if (!msr.split.valid)
+		return;
+
+	curr->class = msr.split.classid;
+}
+#endif /* CONFIG_INTEL_THREAD_DIRECTOR */
 
 static void get_hfi_caps(struct hfi_instance *hfi_instance,
 			 struct thermal_genl_cpu_caps *cpu_caps)

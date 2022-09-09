@@ -227,4 +227,12 @@ void init_freq_invariance_cppc(void);
 #define arch_init_invariance_cppc init_freq_invariance_cppc
 #endif
 
+#ifdef CONFIG_INTEL_THREAD_DIRECTOR
+int intel_hfi_has_task_classes(void);
+void intel_hfi_update_task_class(struct task_struct *curr, bool smt_siblings_idle);
+
+#define arch_has_task_classes intel_hfi_has_task_classes
+#define arch_update_task_class intel_hfi_update_task_class
+#endif
+
 #endif /* _ASM_X86_TOPOLOGY_H */
