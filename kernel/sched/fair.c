@@ -8945,6 +8945,60 @@ static void compute_ilb_sg_task_class_scores(struct sg_lb_task_class_stats *clas
 	sgs->task_class_score_before = group_score;
 }
 
+/**
+ * sched_asym_class_prefer - Select a sched group based on its classes of tasks
+ * @a:	Load balancing statistics of @sg_a
+ * @b:	Load balancing statistics of @sg_b
+ *
+ * Returns: true if preferring @a yields a higher overall throughput after
+ * balancing load. Returns false otherwise.
+ */
+static bool sched_asym_class_prefer(struct sg_lb_stats *a,
+				    struct sg_lb_stats *b)
+{
+	if (!sched_task_classes_enabled())
+		return false;
+
+	/* @a increases overall throughput after load balance. */
+	if (a->task_class_score_after > b->task_class_score_after)
+		return true;
+
+	/*
+	 * If @a and @b yield the same overall throughput, pick @a if
+	 * its current throughput is lower than that of @b.
+	 */
+	if (a->task_class_score_after == b->task_class_score_after)
+		return a->task_class_score_before < b->task_class_score_before;
+
+	return false;
+}
+
+/**
+ * sched_asym_class_pick - Select a sched group based on classes of tasks
+ * @a:		A scheduling group
+ * @b:		A second scheduling group
+ * @a_stats:	Load balancing statistics of @a
+ * @b_stats:	Load balancing statistics of @b
+ *
+ * Returns: true if @a has the same priority and @a has classes of tasks that
+ * yield higher overall throughput after load balance. Returns false otherwise.
+ */
+static bool sched_asym_class_pick(struct sched_group *a,
+				  struct sched_group *b,
+				  struct sg_lb_stats *a_stats,
+				  struct sg_lb_stats *b_stats)
+{
+	/*
+	 * Only use the class-specific preference selection if both sched
+	 * groups have the same priority.
+	 */
+	if (arch_asym_cpu_priority(a->asym_prefer_cpu) !=
+	    arch_asym_cpu_priority(b->asym_prefer_cpu))
+		return false;
+
+	return sched_asym_class_prefer(a_stats, b_stats);
+}
+
 #else /* CONFIG_SCHED_TASK_CLASSES */
 static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs,
 					 struct rq *rq)
@@ -8959,6 +9013,14 @@ static void compute_ilb_sg_task_class_scores(struct sg_lb_task_class_stats *clas
 					     struct sg_lb_stats *sgs,
 					     int dst_cpu)
 {
+}
+
+static bool sched_asym_class_pick(struct sched_group *a,
+				  struct sched_group *b,
+				  struct sg_lb_stats *a_stats,
+				  struct sg_lb_stats *b_stats)
+{
+	return false;
 }
 
 #endif /* CONFIG_SCHED_TASK_CLASSES */
@@ -9228,6 +9290,12 @@ static bool update_sd_pick_busiest(struct lb_env *env,
 		/* Prefer to move from lowest priority CPU's work */
 		if (sched_asym_prefer(sg->asym_prefer_cpu, sds->busiest->asym_prefer_cpu))
 			return false;
+
+		/* @sg and @sds::busiest have the same priority. */
+		if (sched_asym_class_pick(sds->busiest, sg, &sds->busiest_stat, sgs))
+			return false;
+
+		/* @sg has lower priority than @sds::busiest. */
 		break;
 
 	case group_misfit_task:
