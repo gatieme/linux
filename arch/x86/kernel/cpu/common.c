@@ -52,6 +52,7 @@
 #include <asm/cpu.h>
 #include <asm/mce.h>
 #include <asm/msr.h>
+#include <asm/hreset.h>
 #include <asm/memtype.h>
 #include <asm/microcode.h>
 #include <asm/microcode_intel.h>
@@ -412,6 +413,15 @@ out:
 }
 
 static u32 hardware_history_features __read_mostly;
+
+void reset_hardware_history(void)
+{
+	if (!static_cpu_has(X86_FEATURE_HRESET))
+		return;
+
+	asm volatile("mov %0, %%eax;" __ASM_HRESET "\n" : :
+		     "r" (hardware_history_features) : "%rax");
+}
 
 static __always_inline void setup_hreset(struct cpuinfo_x86 *c)
 {
