@@ -8573,6 +8573,8 @@ struct sg_lb_stats {
 	enum group_type group_type;
 	unsigned int group_asym_packing; /* Tasks should be moved to preferred CPU */
 	unsigned long group_misfit_task_load; /* A CPU has a task too big for its capacity */
+	long task_class_score_after; /* Prospective task-class score after load balancing */
+	long task_class_score_before; /* Task-class score before load balancing */
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned int nr_numa_running;
 	unsigned int nr_preferred_running;
@@ -8900,6 +8902,49 @@ static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sg
 	class_sgs->min_score = score;
 	class_sgs->p_min_score = rq->curr;
 }
+
+static void compute_ilb_sg_task_class_scores(struct sg_lb_task_class_stats *class_sgs,
+					     struct sg_lb_stats *sgs,
+					     int dst_cpu)
+{
+	int group_score, group_score_without, score_on_dst_cpu;
+	int busy_cpus = sgs->group_weight - sgs->idle_cpus;
+
+	if (!sched_task_classes_enabled())
+		return;
+
+	/* No busy CPUs in the group. No tasks to move. */
+	if (!busy_cpus)
+		return;
+
+	score_on_dst_cpu = arch_get_task_class_score(class_sgs->p_min_score->class,
+						     dst_cpu);
+
+	/*
+	 * The simpest case. The single busy CPU in the current group will
+	 * become idle after pulling its current task. The destination CPU is
+	 * idle.
+	 */
+	if (busy_cpus == 1) {
+		sgs->task_class_score_before = class_sgs->sum_score;
+		sgs->task_class_score_after = score_on_dst_cpu;
+		return;
+	}
+
+	/*
+	 * Now compute the group score with and without the task with the
+	 * lowest score. We assume that the tasks that remain in the group share
+	 * the CPU resources equally.
+	 */
+	group_score = class_sgs->sum_score / busy_cpus;
+
+	group_score_without =  (class_sgs->sum_score - class_sgs->min_score) /
+			       (busy_cpus - 1);
+
+	sgs->task_class_score_after = group_score_without + score_on_dst_cpu;
+	sgs->task_class_score_before = group_score;
+}
+
 #else /* CONFIG_SCHED_TASK_CLASSES */
 static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs,
 					 struct rq *rq)
@@ -8909,6 +8954,13 @@ static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sg
 static void init_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs)
 {
 }
+
+static void compute_ilb_sg_task_class_scores(struct sg_lb_task_class_stats *class_sgs,
+					     struct sg_lb_stats *sgs,
+					     int dst_cpu)
+{
+}
+
 #endif /* CONFIG_SCHED_TASK_CLASSES */
 
 /**
@@ -9099,6 +9151,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 	if (!local_group && env->sd->flags & SD_ASYM_PACKING &&
 	    env->idle != CPU_NOT_IDLE && sgs->sum_h_nr_running &&
 	    sched_asym(env, sds, sgs, group)) {
+		compute_ilb_sg_task_class_scores(&class_stats, sgs, env->dst_cpu);
 		sgs->group_asym_packing = 1;
 	}
 
