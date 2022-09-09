@@ -865,6 +865,15 @@ config UCLAMP_BUCKETS_COUNT
 
 	  If in doubt, use the default value.
 
+config SCHED_TASK_CLASSES
+	bool "Classes of tasks"
+	depends on SMP
+	help
+	  If selected, each task is assigned a classification value that
+	  reflects the types of instructions that the task executes. The
+	  scheduler uses the classification value to improve the placement of
+	  tasks.
+
 endmenu
 
 #

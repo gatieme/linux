@@ -127,6 +127,8 @@ struct task_group;
 					 __TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE | \
 					 TASK_PARKED)
 
+#define TASK_CLASS_UNCLASSIFIED		-1
+
 #define task_is_running(task)		(READ_ONCE((task)->__state) == TASK_RUNNING)
 
 #define task_is_traced(task)		((READ_ONCE(task->jobctl) & JOBCTL_TRACED) != 0)
@@ -1526,6 +1528,11 @@ struct task_struct {
 	 * none of these are justified.
 	 */
 	union rv_task_monitor		rv[RV_PER_TASK_MONITORS];
+#endif
+
+#ifdef CONFIG_SCHED_TASK_CLASSES
+	/* Class of task that the scheduler uses for task placement decisions */
+	short				class;
 #endif
 
 	/*
