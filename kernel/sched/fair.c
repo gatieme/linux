@@ -8854,6 +8854,63 @@ group_type group_classify(unsigned int imbalance_pct,
 	return group_has_spare;
 }
 
+struct sg_lb_task_class_stats {
+	/*
+	 * Score of the task with lowest score among the current tasks (i.e.,
+	 * runqueue::curr) of all runqueues in the scheduling group.
+	 */
+	int min_score;
+	/*
+	 * Sum of the scores of the current tasks of all runqueues in the
+	 * scheduling group.
+	 */
+	long sum_score;
+	/* The task with score equal to @min_score */
+	struct task_struct *p_min_score;
+};
+
+#ifdef CONFIG_SCHED_TASK_CLASSES
+static void init_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs)
+{
+	class_sgs->min_score = INT_MAX;
+	class_sgs->sum_score = 0;
+	class_sgs->p_min_score = NULL;
+}
+
+/** Called only if cpu_of(@rq) is not idle and has tasks running. */
+static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs,
+					 struct rq *rq)
+{
+	int score;
+
+	if (!sched_task_classes_enabled())
+		return;
+
+	/*
+	 * TODO: if nr_running > 1 we may want go through all the tasks behind
+	 * rq->curr.
+	 */
+	score = arch_get_task_class_score(rq->curr->class, cpu_of(rq));
+
+	class_sgs->sum_score += score;
+
+	if (score >= class_sgs->min_score)
+		return;
+
+	class_sgs->min_score = score;
+	class_sgs->p_min_score = rq->curr;
+}
+#else /* CONFIG_SCHED_TASK_CLASSES */
+static void update_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs,
+					 struct rq *rq)
+{
+}
+
+static void init_rq_task_classes_stats(struct sg_lb_task_class_stats *class_sgs)
+{
+}
+#endif /* CONFIG_SCHED_TASK_CLASSES */
+
 /**
  * asym_smt_can_pull_tasks - Check whether the load balancing CPU can pull tasks
  * @dst_cpu:	Destination CPU of the load balancing
@@ -8976,9 +9033,11 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 				      struct sg_lb_stats *sgs,
 				      int *sg_status)
 {
+	struct sg_lb_task_class_stats class_stats;
 	int i, nr_running, local_group;
 
 	memset(sgs, 0, sizeof(*sgs));
+	init_rq_task_classes_stats(&class_stats);
 
 	local_group = group == sds->local;
 
@@ -9028,6 +9087,8 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 			if (sgs->group_misfit_task_load < load)
 				sgs->group_misfit_task_load = load;
 		}
+
+		update_rq_task_classes_stats(&class_stats, rq);
 	}
 
 	sgs->group_capacity = group->sgc->capacity;
