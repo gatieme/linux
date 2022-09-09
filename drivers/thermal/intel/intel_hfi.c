@@ -184,6 +184,20 @@ static struct workqueue_struct *hfi_updates_wq;
 #define HFI_MAX_THERM_NOTIFY_COUNT	16
 
 #ifdef CONFIG_INTEL_THREAD_DIRECTOR
+
+/*
+ * Tasks may be unclassified if they have been recently created, spend most
+ * of its lifetime sleeping, or hardware has not provided a classification.
+ *
+ * Most tasks will be classified as 0 eventually. Meanwhile, the scheduler
+ * will place tasks of higher per-class performance on higher-performance
+ * CPUs.
+ *
+ * Class 0 is a reasonable choice. It matches the performance capability
+ * of the legacy, classless, Hardware Feedback Interface table.
+ */
+#define UNCLASSIFIED_TASK_DEFAULT 0
+
 int intel_hfi_has_task_classes(void)
 {
 	return cpu_feature_enabled(X86_FEATURE_ITD);
@@ -222,14 +236,14 @@ int intel_hfi_get_task_class_score(int class, int cpu)
 	struct hfi_cpu_info *info = &per_cpu(hfi_cpu_info, cpu);
 	struct hfi_instance *instance;
 	struct hfi_cpu_data caps;
+	int cap, _class = class;
 	unsigned long flags;
-	int cap;
 
 	if (cpu < 0 || cpu >= nr_cpu_ids)
 		return -EINVAL;
 
 	if (class == TASK_CLASS_UNCLASSIFIED)
-		return -EINVAL;
+		_class = UNCLASSIFIED_TASK_DEFAULT;
 
 	if (class >= (int)hfi_features.nr_classes)
 		return -EINVAL;
@@ -239,7 +253,7 @@ int intel_hfi_get_task_class_score(int class, int cpu)
 		return -ENOENT;
 
 	raw_spin_lock_irqsave(&instance->table_lock, flags);
-	get_one_hfi_cap(instance, info->index, &caps, class);
+	get_one_hfi_cap(instance, info->index, &caps, _class);
 	cap = caps.perf_cap;
 	raw_spin_unlock_irqrestore(&instance->table_lock, flags);
 
