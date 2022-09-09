@@ -10188,6 +10188,7 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 	int i;
 
 	for_each_cpu_and(i, sched_group_span(group), env->cpus) {
+		int busiest_class_delta_score = INT_MIN;
 		unsigned long capacity, load, util;
 		unsigned int nr_running;
 		enum fbq_type rt;
@@ -10293,6 +10294,20 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 			if (busiest_nr < nr_running) {
 				busiest_nr = nr_running;
 				busiest = rq;
+			} else if (sched_task_classes_enabled() &&
+				   busiest_nr == nr_running) {
+				int curr_class_delta_score;
+
+				curr_class_delta_score = arch_get_task_class_score(rq->curr->class,
+										   env->dst_cpu) -
+							 arch_get_task_class_score(rq->curr->class,
+										   cpu_of(rq));
+
+				if (busiest_class_delta_score < curr_class_delta_score) {
+					busiest_class_delta_score = curr_class_delta_score;
+					busiest_nr = nr_running;
+					busiest = rq;
+				}
 			}
 			break;
 
