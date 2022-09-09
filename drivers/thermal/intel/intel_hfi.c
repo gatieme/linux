@@ -39,6 +39,7 @@
 #include <linux/workqueue.h>
 
 #include <asm/msr.h>
+#include <asm/intel-family.h>
 
 #include "../thermal_core.h"
 #include "intel_hfi.h"
@@ -214,6 +215,60 @@ int intel_hfi_has_task_classes(void)
 	return cpu_feature_enabled(X86_FEATURE_ITD);
 }
 
+#define CLASS_DEBOUNCER_SKIPS 4
+
+/**
+ * debounce_and_update_class() - Process and update a task's classification
+ *
+ * @p:		The task of which the classification will be updated
+ * @new_class:	The new class that hardware provides
+ *
+ * Update the classification of @p with the new value that hardware provides.
+ * Only update the classification of @p it has been the same during
+ * CLASS_DEBOUNCER_SKIPS consecutive ticks.
+ */
+static void debounce_and_update_class(struct task_struct *p, u8 new_class)
+{
+	char debounce_skip;
+
+	/* The class of @p changed, only restart the debounce counter. */
+	if (p->class_candidate != new_class) {
+		p->class_debounce_counter = 1;
+		goto out;
+	}
+
+	/*
+	 * The class of @p did not change. Update it if it has been the same
+	 * for CLASS_DEBOUNCER_SKIPS user ticks.
+	 */
+	debounce_skip = p->class_debounce_counter + 1;
+	if (debounce_skip < CLASS_DEBOUNCER_SKIPS)
+		p->class_debounce_counter++;
+	else
+		p->class = new_class;
+
+out:
+	p->class_candidate = new_class;
+}
+
+static bool classification_is_accurate(u8 class, bool smt_siblings_idle)
+{
+	switch (boot_cpu_data.x86_model) {
+	case INTEL_FAM6_ALDERLAKE:
+	case INTEL_FAM6_ALDERLAKE_L:
+	case INTEL_FAM6_RAPTORLAKE:
+	case INTEL_FAM6_RAPTORLAKE_P:
+	case INTEL_FAM6_RAPTORLAKE_S:
+		if (class == 3 || class == 2 || smt_siblings_idle)
+			return true;
+
+		return false;
+
+	default:
+		return true;
+	}
+}
+
 void intel_hfi_update_task_class(struct task_struct *curr, bool smt_siblings_idle)
 {
 	union hfi_thread_feedback_char_msr msr;
@@ -228,7 +283,8 @@ void intel_hfi_update_task_class(struct task_struct *curr, bool smt_siblings_idl
 	if (!msr.split.valid)
 		return;
 
-	curr->class = msr.split.classid;
+	if (classification_is_accurate(msr.split.classid, smt_siblings_idle))
+		debounce_and_update_class(curr, msr.split.classid);
 }
 
 static void get_one_hfi_cap(struct hfi_instance *hfi_instance, s16 index,
