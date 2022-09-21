@@ -5972,6 +5972,13 @@ static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)
 	u32 injected_vector = 0;
 	u8 *state = this_cpu_ptr(&devirt_state);
 
+	if (devirt_enable_notick(vcpu->kvm)) {
+		/* notify the rcu subsystem that the cpu is entering quiescent state */
+		rcu_devirt_enter();
+		cpumask_set_cpu(smp_processor_id(), &devirt_notick_mask);
+		devirt_enter_stop_tick();
+	}
+
 	if (devirt_host_system_interrupt_pending())
 		svm_tigger_failed_vm_entry(vcpu);
 
@@ -5999,6 +6006,13 @@ static void devirt_svm_exit_guest(struct kvm_vcpu *vcpu)
 		devirt_flush_tlb();
 	if (state_val & DEVIRT_SYNC_CORE)
 		devirt_sync_core();
+
+	if (devirt_enable_notick(vcpu->kvm)) {
+		rcu_devirt_exit();
+		devirt_exit_restart_tick();
+		cpumask_clear_cpu(smp_processor_id(), &devirt_notick_mask);
+		scheduler_tick();
+	}
 }
 #endif
 

@@ -554,6 +554,11 @@ __internal_add_timer(struct timer_base *base, struct timer_list *timer)
 	enqueue_timer(base, timer, idx);
 }
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+struct cpumask devirt_notick_mask;
+EXPORT_SYMBOL(devirt_notick_mask);
+#endif
+
 static void
 trigger_dyntick_cpu(struct timer_base *base, struct timer_list *timer)
 {
@@ -565,7 +570,11 @@ trigger_dyntick_cpu(struct timer_base *base, struct timer_list *timer)
 	 * will do that when we switch from push to pull for deferrable timers.
 	 */
 	if (timer->flags & TIMER_DEFERRABLE) {
-		if (tick_nohz_full_cpu(base->cpu))
+		if (tick_nohz_full_cpu(base->cpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		 || cpumask_test_cpu(base->cpu, &devirt_notick_mask)
+#endif
+		 )
 			wake_up_nohz_cpu(base->cpu);
 		return;
 	}

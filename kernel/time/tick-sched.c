@@ -27,6 +27,9 @@
 #include <linux/mm.h>
 
 #include <asm/irq_regs.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "tick-internal.h"
 
@@ -176,6 +179,9 @@ static void tick_sched_handle(struct tick_sched *ts, struct pt_regs *regs)
 #ifdef CONFIG_NO_HZ_FULL
 cpumask_var_t tick_nohz_full_mask;
 bool tick_nohz_full_running;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+EXPORT_SYMBOL(tick_nohz_full_running);
+#endif
 static atomic_t tick_dep_mask;
 
 static bool check_tick_dependency(atomic_t *dep)
@@ -256,7 +262,11 @@ static void tick_nohz_full_kick(void)
  */
 void tick_nohz_full_kick_cpu(int cpu)
 {
-	if (!tick_nohz_full_cpu(cpu))
+	if (!tick_nohz_full_cpu(cpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && !cpumask_test_cpu(cpu, &devirt_notick_mask)
+#endif
+	 )
 		return;
 
 	irq_work_queue_on(&per_cpu(nohz_full_kick_work, cpu), cpu);
@@ -269,12 +279,27 @@ void tick_nohz_full_kick_cpu(int cpu)
 static void tick_nohz_full_kick_all(void)
 {
 	int cpu;
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	struct cpumask tmp;
+#endif
 
-	if (!tick_nohz_full_running)
+	if (!tick_nohz_full_running
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 && cpumask_empty(&devirt_notick_mask)
+#endif
+	 )
 		return;
 
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	cpumask_or(&tmp, &devirt_notick_mask, tick_nohz_full_mask);
+#endif
+
 	preempt_disable();
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	for_each_cpu_and(cpu, &tmp, cpu_online_mask)
+#else
 	for_each_cpu_and(cpu, tick_nohz_full_mask, cpu_online_mask)
+#endif
 		tick_nohz_full_kick_cpu(cpu);
 	preempt_enable();
 }
@@ -870,6 +895,34 @@ static void tick_nohz_full_update_tick(struct tick_sched *ts)
 		tick_nohz_restart_sched_tick(ts, ktime_get());
 #endif
 }
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+void devirt_enter_stop_tick(void)
+{
+#ifdef CONFIG_NO_HZ_FULL
+	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
+	int cpu = smp_processor_id();
+
+	if (!ts->tick_stopped && ts->nohz_mode == NOHZ_MODE_INACTIVE)
+		return;
+
+	if (can_stop_full_tick(cpu, ts))
+		tick_nohz_stop_sched_tick(ts, cpu);
+#endif
+}
+EXPORT_SYMBOL(devirt_enter_stop_tick);
+
+void devirt_exit_restart_tick(void)
+{
+#ifdef CONFIG_NO_HZ_FULL
+	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
+
+	if(ts->tick_stopped)
+		tick_nohz_restart_sched_tick(ts, ktime_get());
+#endif
+}
+EXPORT_SYMBOL(devirt_exit_restart_tick);
+#endif
 
 static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 {

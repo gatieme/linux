@@ -86,6 +86,13 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 	u32 injected_vector;
 	u8 *state = this_cpu_ptr(&devirt_state);
 
+	if (devirt_enable_notick(vcpu->kvm)) {
+		/* notify the rcu subsystem that the cpu is entering quiescent state */
+		rcu_devirt_enter();
+		cpumask_set_cpu(smp_processor_id(), &devirt_notick_mask);
+		devirt_enter_stop_tick();
+	}
+
 	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
 		apic->send_IPI_self_devirt(injected_vector);
 	vmx_notify_tsc_offset(vcpu);
@@ -127,6 +134,13 @@ void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)
 		devirt_sync_core();
 
 	*this_cpu_ptr(&devirt_in_guest) = 0;
+
+	if (devirt_enable_notick(vcpu->kvm)) {
+		rcu_devirt_exit();
+		devirt_exit_restart_tick();
+		cpumask_clear_cpu(smp_processor_id(), &devirt_notick_mask);
+		scheduler_tick();
+	}
 }
 
 int devirt_vmx_in_guest_mode(void)

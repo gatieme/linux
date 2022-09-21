@@ -627,6 +627,15 @@ void rcu_user_enter(void)
 
 	rcu_eqs_enter(true);
 }
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+noinstr void rcu_devirt_enter(void)
+{
+	lockdep_assert_irqs_disabled();
+	rcu_eqs_enter(true);
+}
+EXPORT_SYMBOL(rcu_devirt_enter);
+#endif
 #endif /* CONFIG_NO_HZ_FULL */
 
 /*
@@ -789,6 +798,14 @@ void rcu_user_exit(void)
 {
 	rcu_eqs_exit(1);
 }
+
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+void rcu_devirt_exit(void)
+{
+	rcu_eqs_exit(1);
+}
+EXPORT_SYMBOL(rcu_devirt_exit);
+#endif
 #endif /* CONFIG_NO_HZ_FULL */
 
 /**

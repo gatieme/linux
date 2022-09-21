@@ -18,6 +18,9 @@
 
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+#include <asm/devirt.h>
+#endif
 
 #include "../workqueue_internal.h"
 #include "../../fs/io-wq.h"
@@ -614,7 +617,11 @@ static bool wake_up_full_nohz_cpu(int cpu)
 	 */
 	if (cpu_is_offline(cpu))
 		return true;  /* Don't try to wake offline CPUs. */
-	if (tick_nohz_full_cpu(cpu)) {
+	if (tick_nohz_full_cpu(cpu)
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	 || cpumask_test_cpu(cpu, &devirt_notick_mask)
+#endif
+	 ) {
 		if (cpu != smp_processor_id() ||
 		    tick_nohz_tick_stopped())
 			tick_nohz_full_kick_cpu(cpu);
@@ -3715,6 +3722,9 @@ void scheduler_tick(void)
 	trigger_load_balance(rq);
 #endif
 }
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+EXPORT_SYMBOL(scheduler_tick);
+#endif
 
 #ifdef CONFIG_NO_HZ_FULL
 
