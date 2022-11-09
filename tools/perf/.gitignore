@@ -36,5 +36,6 @@ trace/beauty/generated/
 pmu-events/pmu-events.c
 pmu-events/jevents
 feature/
+libsymbol/
 fixdep
 libtraceevent-dynamic-list
