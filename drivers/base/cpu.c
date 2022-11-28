@@ -225,64 +225,6 @@ static struct cpu_attr cpu_attrs[] = {
 	_CPU_ATTR(present, &__cpu_present_mask),
 };
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern struct cpumask nmi_ipi_mask;
-static DEFINE_MUTEX(dyn_nmi_ipi_mutex);
-
-static ssize_t dyn_nmi_ipi_store(struct device *dev,
-				 struct device_attribute *attr,
-				 const char *buf,
-				 size_t count)
-{
-	cpumask_var_t tmp_mask;
-	int ret;
-
-	mutex_lock(&dyn_nmi_ipi_mutex);
-	if (!alloc_cpumask_var(&tmp_mask, GFP_KERNEL)) {
-		ret = -ENOMEM;
-		goto err_mask;
-	}
-
-	ret = cpulist_parse(buf, tmp_mask);
-	if (ret < 0)
-		goto err_out;
-
-	if (!cpumask_subset(tmp_mask, cpu_possible_mask)) {
-		ret = -EINVAL;
-		goto err_out;
-	}
-
-	cpumask_and(tmp_mask, cpu_present_mask, tmp_mask);
-	if (cpumask_equal(tmp_mask, &nmi_ipi_mask)) {
-		ret = count;
-		goto err_out;
-	}
-
-	/* The copy does not need to be atomic */
-	cpumask_copy(&nmi_ipi_mask, tmp_mask);
-
-err_out:
-	free_cpumask_var(tmp_mask);
-err_mask:
-	mutex_unlock(&dyn_nmi_ipi_mutex);
-
-	return ret < 0 ? ret : count;
-}
-
-static ssize_t dyn_nmi_ipi_show(struct device *dev,
-				  struct device_attribute *attr, char *buf)
-{
-	int n, len = PAGE_SIZE - 2;
-
-	mutex_lock(&dyn_nmi_ipi_mutex);
-	n = scnprintf(buf, len, "%*pbl\n", cpumask_pr_args(&nmi_ipi_mask));
-	mutex_unlock(&dyn_nmi_ipi_mutex);
-
-	return n;
-}
-static DEVICE_ATTR_RW(dyn_nmi_ipi);
-#endif
-
 /*
  * Print values for NR_CPUS and offlined cpus
  */
@@ -533,9 +475,6 @@ static struct attribute *cpu_root_attrs[] = {
 #endif
 #ifdef CONFIG_GENERIC_CPU_AUTOPROBE
 	&dev_attr_modalias.attr,
-#endif
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	&dev_attr_dyn_nmi_ipi.attr,
 #endif
 	NULL
 };
