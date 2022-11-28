@@ -334,12 +334,6 @@ void kvm_apic_set_version(struct kvm_vcpu *vcpu)
 
 	if (!lapic_in_kernel(vcpu))
 		return;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm) &&
-	    !devirt_x2apic_enabled() &&
-	    guest_cpuid_has(vcpu, X86_FEATURE_X2APIC))
-		guest_cpuid_clear(vcpu, X86_FEATURE_X2APIC);
-#endif
 
 	/*
 	 * KVM emulates 82093AA datasheet (with in-kernel IOAPIC implementation)
@@ -1029,15 +1023,13 @@ bool kvm_intr_is_single_vcpu_fast(struct kvm *kvm, struct kvm_lapic_irq *irq,
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+extern void x2apic_send_IPI_mask_devirt(const struct cpumask *mask, int vector);
 /*
  * Send interrupt to vcpu via ipi.
  */
 static inline void devirt_send_interrupt_with_ipi(struct kvm_vcpu *vcpu, int vector)
 {
-	if (apic_x2apic_mode(vcpu->arch.apic))
-		x2apic_send_IPI_to_devirt_guest(vcpu->cpu, vector);
-	else
-		default_send_IPI_to_devirt_guest(vcpu->cpu, vector);
+	x2apic_send_IPI_mask_devirt(get_cpu_mask(vcpu->cpu), vector);
 }
 #endif
 

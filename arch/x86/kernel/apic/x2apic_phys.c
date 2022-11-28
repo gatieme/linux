@@ -43,8 +43,29 @@ static int x2apic_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern struct cpumask nmi_ipi_mask;
+DEFINE_PER_CPU(atomic64_t, devirt_ipi_pending) = ATOMIC_INIT(0);
+
+static inline int devirt_set_ipi_pending(int cpu, int vector)
+{
+	atomic64_t *pending = per_cpu_ptr(&devirt_ipi_pending, cpu);
+	unsigned long pending_map = atomic64_read(pending);
+
+	/* First handle IRQ_MOVE_CLEANUP_VECTOR which we put at bit 63
+	 * in devirt_ipi_pending.
+	 */
+	if (vector == IRQ_MOVE_CLEANUP_VECTOR)
+		vector = FIRST_SYSTEM_VECTOR + 63;
+
+	if (test_bit(vector - FIRST_SYSTEM_VECTOR, &pending_map))
+		/* already pending, just return */
+		return 1;
+	atomic64_or(1 << (vector - FIRST_SYSTEM_VECTOR), pending);
+	/* Make sure the write is completed */
+	wmb();
+	return 0;
+}
 #endif
+
 static void x2apic_send_IPI(int cpu, int vector)
 {
 	u32 dest = per_cpu(x86_cpu_to_apicid, cpu);
@@ -145,25 +166,27 @@ static int x2apic_phys_probe(void)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void x2apic_send_IPI_to_devirt_guest(int cpu,  int vector)
+void x2apic_send_IPI_mask_devirt(const struct cpumask *mask, int vector)
 {
+	unsigned long query_cpu;
+	unsigned long this_cpu;
 	unsigned long flags;
+	int apic_dest = APIC_DEST_ALLINC;
 
 	weak_wrmsr_fence();
 
 	local_irq_save(flags);
 
-	__x2apic_send_IPI_dest(per_cpu(x86_cpu_to_apicid, cpu),
-			vector, APIC_DEST_PHYSICAL);
+	this_cpu = smp_processor_id();
+	for_each_cpu(query_cpu, mask) {
+		if (apic_dest == APIC_DEST_ALLBUT && this_cpu == query_cpu)
+			continue;
+		__x2apic_send_IPI_dest(per_cpu(x86_cpu_to_apicid, query_cpu),
+				       vector, APIC_DEST_PHYSICAL);
+	}
 	local_irq_restore(flags);
 }
-EXPORT_SYMBOL(x2apic_send_IPI_to_devirt_guest);
-
-int devirt_x2apic_enabled(void)
-{
-	return x2apic_mode;
-}
-EXPORT_SYMBOL(devirt_x2apic_enabled);
+EXPORT_SYMBOL(x2apic_send_IPI_mask_devirt);
 #endif
 
 /* Common x2apic functions, also used by x2apic_cluster */
@@ -225,7 +248,7 @@ void x2apic_send_IPI_self(int vector)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static void x2apic_send_IPI_self_devirt(int vector)
+void x2apic_send_IPI_self_devirt(int vector)
 {
 	apic_write(APIC_SELF_IPI, vector);
 }
@@ -269,6 +292,7 @@ static struct apic apic_x2apic_phys __ro_after_init = {
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	.send_IPI_self_devirt			= x2apic_send_IPI_self_devirt,
 #endif
+
 	.inquire_remote_apic		= NULL,
 
 	.read				= native_apic_msr_read,

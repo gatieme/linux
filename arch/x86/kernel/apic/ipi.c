@@ -2,9 +2,6 @@
 
 #include <linux/cpumask.h>
 #include <linux/smp.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "local.h"
 
@@ -157,10 +154,6 @@ void __default_send_IPI_dest_field(unsigned int mask, int vector, unsigned int d
 	else
 		__xapic_wait_icr_idle();
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (unlikely(vector == DEVIRT_XAPIC_NMI_VECTOR))
-		vector = NMI_VECTOR;
-#endif
 	/*
 	 * prepare target chip field
 	 */
@@ -178,87 +171,11 @@ void __default_send_IPI_dest_field(unsigned int mask, int vector, unsigned int d
 	native_apic_mem_write(APIC_ICR, cfg);
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void default_send_IPI_to_devirt_guest(int cpu,  int vector)
-{
-	unsigned long flags;
-
-	local_irq_save(flags);
-
-	__default_send_IPI_dest_field(per_cpu(x86_cpu_to_apicid, cpu),
-				      vector, APIC_DEST_PHYSICAL);
-	local_irq_restore(flags);
-}
-EXPORT_SYMBOL(default_send_IPI_to_devirt_guest);
-
-DEFINE_PER_CPU(atomic64_t, devirt_ipi_pending) = ATOMIC64_INIT(0);
-int devirt_set_ipi_pending(int cpu, int vector)
-{
-	atomic64_t *pending = per_cpu_ptr(&devirt_ipi_pending, cpu);
-	unsigned long pending_map = atomic64_read(pending);
-
-	/* First handle IRQ_MOVE_CLEANUP_VECTOR which we put at bit 63
-	 * in devirt_ipi_pending.
-	 */
-	if (vector == IRQ_MOVE_CLEANUP_VECTOR)
-		vector = FIRST_SYSTEM_VECTOR + 63;
-
-	if (test_bit(vector - FIRST_SYSTEM_VECTOR, &pending_map))
-		/* already pending, just return */
-		return 1;
-	atomic64_or(1ul << (vector - FIRST_SYSTEM_VECTOR), pending);
-
-	/* force devirt_ipi_pending update */
-	smp_wmb();
-	return 0;
-}
-
-extern struct cpumask nmi_ipi_mask;
-static void
-devirt_send_IPI_mask(const struct cpumask *mask, int vector, int apic_dest)
-{
-	unsigned int this_cpu = smp_processor_id();
-	unsigned int query_cpu;
-	unsigned long flags;
-
-	/* See Hack comment above */
-
-	local_irq_save(flags);
-	for_each_cpu(query_cpu, mask) {
-		int vector_temp;
-
-		if ((apic_dest == APIC_DEST_ALLBUT) && (query_cpu == this_cpu))
-			continue;
-
-		if (vector != NMI_VECTOR &&
-		    cpumask_test_cpu(query_cpu, &nmi_ipi_mask)) {
-			if (devirt_set_ipi_pending(query_cpu, vector))
-				continue;
-			vector_temp = DEVIRT_XAPIC_NMI_VECTOR;
-		} else
-			vector_temp = vector;
-
-		__default_send_IPI_dest_field(per_cpu(x86_cpu_to_apicid,
-				 query_cpu), vector_temp, APIC_DEST_PHYSICAL);
-	}
-	local_irq_restore(flags);
-}
-#endif
-
 void default_send_IPI_single_phys(int cpu, int vector)
 {
 	unsigned long flags;
 
 	local_irq_save(flags);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (vector != NMI_VECTOR && cpumask_test_cpu(cpu, &nmi_ipi_mask)) {
-		if (devirt_set_ipi_pending(cpu, vector)) {
-			local_irq_restore(flags);
-			return;
-		}
-		vector = DEVIRT_XAPIC_NMI_VECTOR;
-	}
-#endif
 	__default_send_IPI_dest_field(per_cpu(x86_cpu_to_apicid, cpu),
 				      vector, APIC_DEST_PHYSICAL);
 	local_irq_restore(flags);
@@ -266,7 +183,6 @@ void default_send_IPI_single_phys(int cpu, int vector)
 
 void default_send_IPI_mask_sequence_phys(const struct cpumask *mask, int vector)
 {
-#ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 	unsigned long query_cpu;
 	unsigned long flags;
 
@@ -281,15 +197,11 @@ void default_send_IPI_mask_sequence_phys(const struct cpumask *mask, int vector)
 				query_cpu), vector, APIC_DEST_PHYSICAL);
 	}
 	local_irq_restore(flags);
-#else
-	devirt_send_IPI_mask(mask, vector, APIC_DEST_ALLINC);
-#endif
 }
 
 void default_send_IPI_mask_allbutself_phys(const struct cpumask *mask,
 						 int vector)
 {
-#ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 	unsigned int this_cpu = smp_processor_id();
 	unsigned int query_cpu;
 	unsigned long flags;
@@ -304,9 +216,6 @@ void default_send_IPI_mask_allbutself_phys(const struct cpumask *mask,
 				 query_cpu), vector, APIC_DEST_PHYSICAL);
 	}
 	local_irq_restore(flags);
-#else
-	devirt_send_IPI_mask(mask, vector, APIC_DEST_ALLBUT);
-#endif
 }
 
 /*
@@ -319,50 +228,18 @@ void default_send_IPI_single(int cpu, int vector)
 
 void default_send_IPI_allbutself(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct cpumask mask;
-
-	if (!cpumask_empty(&nmi_ipi_mask)) {
-		cpumask_setall(&mask);
-		devirt_send_IPI_mask(&mask, vector, APIC_DEST_ALLBUT);
-	} else
-#endif
-		__default_send_IPI_shortcut(APIC_DEST_ALLBUT, vector);
+	__default_send_IPI_shortcut(APIC_DEST_ALLBUT, vector);
 }
 
 void default_send_IPI_all(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct cpumask mask;
-
-	if (!cpumask_empty(&nmi_ipi_mask)) {
-		cpumask_setall(&mask);
-		devirt_send_IPI_mask(&mask, vector, APIC_DEST_ALLINC);
-	} else
-#endif
-		__default_send_IPI_shortcut(APIC_DEST_ALLINC, vector);
+	__default_send_IPI_shortcut(APIC_DEST_ALLINC, vector);
 }
 
 void default_send_IPI_self(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct devirt_nmi_operations *ops = devirt_nmi_ops;
-
-	/* default_send_IPI_self() would be called in NMI handler. So we must
-	 * prevent the self IPI from being sent to guest mode.
-	 */
-	if (ops && ops->devirt_in_guest_mode())
-		ops->devirt_tigger_failed_vm_entry(NULL);
-#endif
 	__default_send_IPI_shortcut(APIC_DEST_SELF, vector);
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void default_send_IPI_self_devirt(int vector)
-{
-	__default_send_IPI_shortcut(APIC_DEST_SELF, vector);
-}
-#endif
 
 #ifdef CONFIG_X86_32
 

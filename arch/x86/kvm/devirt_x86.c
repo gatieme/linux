@@ -12,15 +12,11 @@
 #include <linux/kvm_host.h>
 #include <linux/hugetlb.h>
 #include <uapi/linux/mman.h>
-#include <linux/clockchips.h>
-#include <linux/file.h>
-#include <linux/anon_inodes.h>
 #include <asm/devirt.h>
 #include <asm/apic.h>
 #include <asm/pgtable_types.h>
 
 #include "kvm_cache_regs.h"
-#include "lapic.h"
 
 static DEFINE_PER_CPU(u32, devirt_cpu_set);
 static DEFINE_RAW_SPINLOCK(devirt_vcpu_migration_lock);
@@ -137,6 +133,7 @@ void devirt_check_guest_icr_apicid(struct kvm_vcpu *vcpu)
 {
 	unsigned long rip;
 	struct kvm *kvm = vcpu->kvm;
+	struct apic_maps *maps = kvm->arch.devirt.apic_maps;
 	struct kvm_vcpu *target;
 	struct devirt_vcpu_arch *devirt;
 	int i = 0;
@@ -935,8 +932,7 @@ static int devirt_mem_init(struct kvm *kvm)
 	}
 
 	r = __x86_set_memory_region(kvm, DEVIRT_MEM_RMAP_MEMSLOT,
-				    DEVIRT_MEM_RMAP_PHYS_BASE, devirt->rmap_size,
-				    devirt->mem_filp);
+				    DEVIRT_MEM_RMAP_PHYS_BASE, devirt->rmap_size, devirt->mem_filp);
 	if (r) {
 		pr_emerg("katabm: set DEVIRT_MEM_RMAP_MEMSLOT failed, %d\n", r);
 		goto out_unlock;
@@ -1342,7 +1338,6 @@ void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu)
 	 */
 	devirt_check_devirt_cpu(vcpu);
 	devirt_check_guest_icr_apicid(vcpu);
-
 	devirt_load_guest_tpr(vcpu);
 	devirt_set_guest_irq();
 }
@@ -1353,108 +1348,8 @@ void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu)
 	devirt_check_eoi();
 }
 
-static int devirt_update_apic_shared_page(struct kvm *kvm, bool activate)
-{
-	int r = 0;
-
-	mutex_lock(&kvm->slots_lock);
-	if (kvm->arch.devirt.xapic_page_done == activate)
-		goto out;
-
-	if (kvm->arch.devirt.xapic_file == NULL)
-		goto out;
-
-	r = __x86_set_memory_region(kvm, DEVIRT_APIC_PAGE_MEMSLOT,
-				    APIC_DEFAULT_PHYS_BASE,
-				    activate ? PAGE_SIZE : 0,
-				    kvm->arch.devirt.xapic_file);
-	if (r)
-		goto out;
-	kvm->arch.devirt.xapic_page_done = activate;
-out:
-	mutex_unlock(&kvm->slots_lock);
-	return r;
-}
-
 void devirt_enter_guest(struct kvm_vcpu *vcpu)
 {
-	struct kvm *kvm = vcpu->kvm;
-	struct devirt_kvm_arch devirt = kvm->arch.devirt;
-
-	if (devirt.xapic_page_state != devirt.xapic_page_done) {
-		srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
-		devirt_update_apic_shared_page(kvm, devirt.xapic_page_state);
-		vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
-	}
-}
-
-static vm_fault_t devirt_xapic_fault(struct vm_fault *vmf)
-{
-	struct vm_area_struct *vma = vmf->vma;
-
-	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-	if (remap_pfn_range(vma, vmf->address & PAGE_MASK,
-			    APIC_DEFAULT_PHYS_BASE >> PAGE_SHIFT, PAGE_SIZE,
-			    vma->vm_page_prot))
-		return VM_FAULT_SIGBUS;
-
-	return  VM_FAULT_NOPAGE;
-}
-
-static const struct vm_operations_struct devirt_xapic_vm_ops = {
-	.fault = devirt_xapic_fault,
-};
-
-static int devirt_xapic_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	if (vma->vm_end - vma->vm_start != PAGE_SIZE)
-		return -EINVAL;
-	if (((vma->vm_flags & VM_SHARED) == 0) ||
-	    ((vma->vm_flags & VM_READ) == 0) ||
-	    ((vma->vm_flags & VM_WRITE) == 0))
-		return -EINVAL;
-
-	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
-
-	vma->vm_ops = &devirt_xapic_vm_ops;
-	return 0;
-}
-
-static int devirt_xapic_release(struct inode *inode, struct file *filp)
-{
-	filp->private_data = NULL;
-	return 0;
-}
-
-static const struct file_operations devirt_xapic_fops = {
-	.release        = devirt_xapic_release,
-	.mmap           = devirt_xapic_mmap,
-	.llseek		= noop_llseek,
-};
-
-static void devirt_xapic_init(struct kvm *kvm)
-{
-	struct file *file;
-
-	if (kvm->arch.devirt.xapic_file)
-		return;
-
-	file = anon_inode_getfile("devirt_xapic", &devirt_xapic_fops, kvm, O_RDWR);
-	if (IS_ERR(file)) {
-		pr_warn("create xapic file failed: %ld", PTR_ERR(file));
-		return;
-	}
-
-	kvm->arch.devirt.xapic_file = file;
-	kvm->arch.devirt.xapic_page_done = false;
-
-	/* If devirt_enable_mem is true, the guest will boot with pvh. And
-	 * we can setup the page for xapic when creating vm.
-	 */
-	if (devirt_enable_mem(kvm))
-		kvm->arch.devirt.xapic_page_state = true;
-	else
-		kvm->arch.devirt.xapic_page_state = false;
 }
 
 int devirt_vcpu_create(struct kvm_vcpu *vcpu)
@@ -1496,9 +1391,6 @@ void devirt_vcpu_init(struct kvm_vcpu *vcpu)
 void devirt_init_vm(struct kvm *kvm)
 {
 	devirt_disable_hlt(kvm);
-
-	if (!devirt_x2apic_enabled())
-		devirt_xapic_init(kvm);
 }
 
 void devirt_mem_unpin(struct kvm *kvm)
@@ -1552,22 +1444,11 @@ void devirt_destroy_vm(struct kvm *kvm)
 		x86_set_memory_region(kvm, DEVIRT_MEM_MAP_HEAD_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, DEVIRT_MEM_RMAP_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, DEVIRT_MEM_PT_MEMSLOT, 0, 0);
-		x86_set_memory_region(kvm, DEVIRT_MEM_CONT_MEMSLOT, 0, 0);
-		if (kvm->arch.devirt.xapic_page_done)
-			x86_set_memory_region(kvm, DEVIRT_APIC_PAGE_MEMSLOT, 0, 0);
 	}
 	if (devirt->mem_filp)
 		filp_close(devirt->mem_filp, NULL);
 	if (devirt->hp_filp)
 		filp_close(devirt->hp_filp, NULL);
-
-	/*Release xapic file. */
-	if (kvm->arch.devirt.xapic_file) {
-		fput(kvm->arch.devirt.xapic_file);
-		kvm->arch.devirt.xapic_page_state = false;
-		kvm->arch.devirt.xapic_page_done = false;
-		kvm->arch.devirt.xapic_file = NULL;
-	}
 }
 
 static inline unsigned long rmap_pfn_to_node(unsigned long pfn)

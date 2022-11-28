@@ -2847,11 +2847,6 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		++vcpu->stat.wrmsr_set_apic_base;
 		return kvm_set_apic_base(vcpu, msr_info);
 	case APIC_BASE_MSR ... APIC_BASE_MSR + 0xff:
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(vcpu->kvm) &&
-		    !apic_x2apic_mode(vcpu->arch.apic))
-			return devirt_xapic_msr_write(vcpu, msr, data);
-#endif
 		return kvm_x2apic_msr_write(vcpu, msr, data);
 	case MSR_IA32_TSCDEADLINE:
 		kvm_set_lapic_tscdeadline_msr(vcpu, data);
@@ -3189,15 +3184,7 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		msr_info->data = kvm_get_apic_base(vcpu);
 		break;
 	case APIC_BASE_MSR ... APIC_BASE_MSR + 0xff:
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(vcpu->kvm) &&
-		    !apic_x2apic_mode(vcpu->arch.apic))
-			return devirt_xapic_msr_read(vcpu, msr_info->index,
-						     &msr_info->data);
-		else
-#endif
-			return kvm_x2apic_msr_read(vcpu, msr_info->index,
-						   &msr_info->data);
+		return kvm_x2apic_msr_read(vcpu, msr_info->index, &msr_info->data);
 		break;
 	case MSR_IA32_TSCDEADLINE:
 		msr_info->data = kvm_get_lapic_tscdeadline_msr(vcpu);
@@ -7726,25 +7713,11 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = devirt_virtio_notify(vcpu->kvm, a0, a1, a2);
 		break;
 	case KVM_HC_DEVIRT_ICR_WRITE:
-		if (apic_x2apic_mode(vcpu->arch.apic))
-			kvm_x2apic_msr_write(vcpu, a0, a1);
-		else
-			kvm_lapic_reg_write(vcpu->arch.apic, a0, a1);
-		break;
-	case KVM_HC_DEVIRT_APIC_INIT:
-		ret = 0;
-		if (devirt_enable_mem(vcpu->kvm))
-			break;
-
-		if (a0 == DEVIRT_APIC_INIT)
-			vcpu->kvm->arch.devirt.xapic_page_state = true;
-		else
-			vcpu->kvm->arch.devirt.xapic_page_state = false;
+		kvm_x2apic_msr_write(vcpu, a0, a1);
 		break;
 	case KVM_HC_DEVIRT_GLOBAL_RIP:
 		vcpu->kvm->devirt_apic_rip_start = a0;
 		vcpu->kvm->devirt_apic_rip_end = a1;
-		ret = 0;
 		break;
 	case KVM_HC_DEVIRT_PF_HANDLER:
 		devirt_kvm_ops->devirt_enable_pf_trap(vcpu);
@@ -8313,10 +8286,7 @@ void kvm_vcpu_reload_apic_access_page(struct kvm_vcpu *vcpu)
 
 	if (!kvm_x86_ops->set_apic_access_page_addr)
 		return;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm) && !devirt_x2apic_enabled())
-		return;
-#endif
+
 	page = gfn_to_page(vcpu->kvm, APIC_DEFAULT_PHYS_BASE >> PAGE_SHIFT);
 	if (is_error_page(page))
 		return;
@@ -10022,9 +9992,7 @@ void kvm_arch_sync_events(struct kvm *kvm)
 	kvm_free_pit(kvm);
 }
 
-int __x86_set_memory_region(struct kvm *kvm, int id,
-			    gpa_t gpa, u64 size,
-			    struct file *filp)
+int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u64 size, struct file *filp)
 {
 	int i, r;
 	unsigned long hva;
@@ -10039,16 +10007,17 @@ int __x86_set_memory_region(struct kvm *kvm, int id,
 	if (size) {
 		if (slot->npages)
 			return -EEXIST;
+
 		/*
 		 * MAP_SHARED to prevent internal slot pages from being moved
 		 * by fork()/COW.
 		 */
 		if (filp)
 			hva = vm_mmap(filp, 0, size, PROT_READ | PROT_WRITE,
-				      MAP_SHARED, 0);
+					  MAP_SHARED, 0);
 		else
 			hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
-				      MAP_SHARED | MAP_ANONYMOUS, 0);
+					  MAP_SHARED | MAP_ANONYMOUS, 0);
 		if (IS_ERR((void *)hva))
 			return PTR_ERR((void *)hva);
 	} else {
@@ -10877,36 +10846,6 @@ int devirt_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 	__irq_set_devirt_affinity(host_irq, dest_id, irq.vector);
 
 	add_devirt_vfio_irq_info(vcpu, host_irq, irq.vector);
-
-	return 0;
-}
-
-int devirt_xapic_msr_write(struct kvm_vcpu *vcpu, u32 msr, u64 data)
-{
-	struct kvm_lapic *apic = vcpu->arch.apic;
-	u32 reg = (msr - APIC_BASE_MSR) << 4;
-
-	if (!lapic_in_kernel(vcpu))
-		return 1;
-
-	if (kvm_lapic_reg_write(apic, reg, (u32)data))
-		return 1;
-
-	return 0;
-}
-
-int devirt_xapic_msr_read(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
-{
-	struct kvm_lapic *apic = vcpu->arch.apic;
-	u32 reg = (msr - APIC_BASE_MSR) << 4, low, high = 0;
-
-	if (!lapic_in_kernel(vcpu))
-		return 1;
-
-	if (kvm_lapic_reg_read(apic, reg, 4, &low))
-		return 1;
-
-	*data = (((u64)high) << 32) | low;
 
 	return 0;
 }
