@@ -27,9 +27,6 @@
 #include <trace/events/kvm.h>
 
 #include <kvm/iodev.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #ifdef CONFIG_HAVE_KVM_IRQFD
 
@@ -254,13 +251,9 @@ static void irqfd_update(struct kvm *kvm, struct kvm_kernel_irqfd *irqfd)
 	write_seqcount_begin(&irqfd->irq_entry_sc);
 
 	e = entries;
-	if (n_entries == 1) {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(kvm) && e->type == KVM_IRQ_ROUTING_MSI)
-			e->msi.use_irqfd = DEVIRT_DELIVERY_MSI_USING_IPI_FLAG;
-#endif
+	if (n_entries == 1)
 		irqfd->irq_entry = *e;
-	} else
+	else
 		irqfd->irq_entry.type = 0;
 
 	write_seqcount_end(&irqfd->irq_entry_sc);

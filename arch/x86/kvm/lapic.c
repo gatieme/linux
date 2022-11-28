@@ -1022,17 +1022,6 @@ bool kvm_intr_is_single_vcpu_fast(struct kvm *kvm, struct kvm_lapic_irq *irq,
 	return ret;
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern void x2apic_send_IPI_mask_devirt(const struct cpumask *mask, int vector);
-/*
- * Send interrupt to vcpu via ipi.
- */
-static inline void devirt_send_interrupt_with_ipi(struct kvm_vcpu *vcpu, int vector)
-{
-	x2apic_send_IPI_mask_devirt(get_cpu_mask(vcpu->cpu), vector);
-}
-#endif
-
 /*
  * Add a pending IRQ into lapic.
  * Return 1 if successfully added and 0 if discarded.
@@ -1043,14 +1032,6 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
 {
 	int result = 0;
 	struct kvm_vcpu *vcpu = apic->vcpu;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	int send_ipi = 0;
-
-	if (delivery_mode & DEVIRT_DELIVERY_MSI_USING_IPI_FLAG) {
-		delivery_mode &= APIC_DM_FIXED_MASK;
-		send_ipi = DEVIRT_DELIVERY_MSI_USING_IPI_FLAG;
-	}
-#endif
 
 	trace_kvm_apic_accept_irq(vcpu->vcpu_id, delivery_mode,
 				  trig_mode, vector);
@@ -1083,19 +1064,9 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
 		}
 
 		if (kvm_x86_ops->deliver_posted_interrupt(vcpu, vector)) {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-			if (devirt_enable(vcpu->kvm) && send_ipi) {
-				devirt_send_interrupt_with_ipi(vcpu, vector);
-			} else {
-				kvm_lapic_set_irr(vector, apic);
-				kvm_make_request(KVM_REQ_EVENT, vcpu);
-				kvm_vcpu_kick(vcpu);
-			}
-#else
 			kvm_lapic_set_irr(vector, apic);
 			kvm_make_request(KVM_REQ_EVENT, vcpu);
 			kvm_vcpu_kick(vcpu);
-#endif
 		}
 		break;
 

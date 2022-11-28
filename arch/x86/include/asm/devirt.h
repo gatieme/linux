@@ -20,13 +20,6 @@
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
 
-/*
- * Now virtual MSI interrupts which injected by don't rely on the
- * host handling of guest EOI. For katabm, such virtual MSI interrupts
- * can be directly injected into the BM using physical IPI.
- */
-#define DEVIRT_DELIVERY_MSI_USING_IPI_FLAG   0x1
-
 #define DEVIRT_VIRTIO_NOTIFY_PHYS_BASE   0xfefb0000
 #define DEVIRT_VIRTIO_NOTIFY_ENTRY_MAX   168
 #define DEVIRT_VIRTIO_NOTIFY_ENTRY_UNUSED  0
