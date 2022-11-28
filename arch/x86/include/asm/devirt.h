@@ -186,8 +186,6 @@ extern struct devirt_kvm_operations *devirt_kvm_ops;
 DECLARE_PER_CPU(u8, devirt_state);
 DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 
-extern struct cpumask cpu_devirt_mask;
-
 extern int apic_extirq_clear(struct kvm_vcpu *vcpu);
 extern void devirt_flush_tlb(void);
 
