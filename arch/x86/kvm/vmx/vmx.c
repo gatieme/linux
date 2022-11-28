@@ -6001,11 +6001,6 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	u64 guest_rflags = vmcs_readl(GUEST_RFLAGS);
 
-	if (guest_rflags & DEVIRT_VMENTRY_SHUTDOWN_FLAG) {
-		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
-		vcpu->run->fail_entry.hardware_entry_failure_reason = 0xdeaddead;
-		return 0;
-	}
 	/* check if the VM entry failed is due to host interrupt pending */
 	if (guest_rflags & DEVIRT_VMENTRY_FAILED_FLAG) {
 		vmcs_writel(GUEST_RFLAGS, guest_rflags & ~DEVIRT_VMENTRY_FAILED_FLAG);

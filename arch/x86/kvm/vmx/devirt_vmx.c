@@ -139,14 +139,6 @@ void devirt_vmx_set_msr_interception(struct kvm_vcpu *vcpu)
 	vmx_disable_apic_icr(vcpu);
 }
 
-void devirt_vmx_trigger_vm_shut_down(struct kvm_vcpu *vcpu)
-{
-	u64 guest_rflag = vmcs_readl(GUEST_RFLAGS);
-
-	/* use the invalid bit in GUEST_RFLAGS to trigger VM shut down */
-	vmcs_writel(GUEST_RFLAGS, guest_rflag | DEVIRT_VMENTRY_SHUTDOWN_FLAG);
-}
-
 struct devirt_nmi_operations devirt_vmx_nmi_ops = {
 	.devirt_in_guest_mode = devirt_vmx_in_guest_mode,
 	.devirt_tigger_failed_vm_entry = devirt_vmx_tigger_failed_vm_entry,
@@ -155,5 +147,4 @@ struct devirt_nmi_operations devirt_vmx_nmi_ops = {
 struct devirt_kvm_operations devirt_vmx_kvm_ops = {
 	.devirt_set_msr_interception = devirt_vmx_set_msr_interception,
 	.devirt_tigger_failed_vm_entry = devirt_vmx_tigger_failed_vm_entry,
-	.devirt_trigger_vm_shut_down = devirt_vmx_trigger_vm_shut_down,
 };
