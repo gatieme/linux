@@ -1337,7 +1337,6 @@ static const u32 emulated_msrs_all[] = {
 	MSR_KVM_ASYNC_PF_EN, MSR_KVM_STEAL_TIME,
 	MSR_KVM_PV_EOI_EN,
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	MSR_KVM_DEVIRT_VIRTIO_NOTIFY,
 	MSR_KVM_DEVIRT_APIC_MAPS,
 #endif
 
@@ -2956,7 +2955,6 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 			return 1;
 		break;
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case MSR_KVM_DEVIRT_VIRTIO_NOTIFY:
 	case MSR_KVM_DEVIRT_APIC_MAPS:
 		break;
 #endif
@@ -3212,9 +3210,6 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		msr_info->data = vcpu->arch.pv_eoi.msr_val;
 		break;
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case MSR_KVM_DEVIRT_VIRTIO_NOTIFY:
-		msr_info->data = vcpu->kvm->arch.devirt.dvn_msr_val;
-		break;
 	case MSR_KVM_DEVIRT_APIC_MAPS:
 		msr_info->data = vcpu->kvm->arch.devirt.apic_maps_msr_val;
 		break;
@@ -10023,10 +10018,8 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(kvm)) {
-			x86_set_memory_region(kvm, DEVIRT_VIRTIO_NOTIFY_MEMOSLOT, 0, 0);
+		if (devirt_enable(kvm))
 			x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT, 0, 0);
-		}
 #endif
 	}
 	if (kvm_x86_ops->vm_destroy)

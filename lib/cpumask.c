@@ -232,21 +232,3 @@ unsigned int cpumask_local_spread(unsigned int i, int node)
 	BUG();
 }
 EXPORT_SYMBOL(cpumask_local_spread);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-struct cpumask devirt_virtio_notify_mask;
-EXPORT_SYMBOL(devirt_virtio_notify_mask);
-static int __init devirt_notify_cpus_setup(char *str)
-{
-	int err;
-
-	err = cpulist_parse(str, &devirt_virtio_notify_mask);
-	if (err < 0 || cpumask_last(&devirt_virtio_notify_mask) >= nr_cpu_ids) {
-		pr_warn("devirt_notify_cpus= incorrect CPU range\n");
-		return 0;
-	}
-
-	return 1;
-}
-__setup("devirt_notify_cpus=", devirt_notify_cpus_setup);
-#endif

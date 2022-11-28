@@ -21,10 +21,6 @@ struct devirt_vcpu_arch {
 };
 
 struct devirt_kvm_arch {
-	/* Used for virtio-device notification */
-	u64 dvn_msr_val;
-	struct dvn_desc *dvn_desc;
-
 	/* Used for apic maps */
 	u64 apic_maps_msr_val;
 	struct apic_maps *apic_maps;

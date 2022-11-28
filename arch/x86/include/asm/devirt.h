@@ -20,49 +20,7 @@
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
 
-#define DEVIRT_VIRTIO_NOTIFY_PHYS_BASE   0xfefb0000
-#define DEVIRT_VIRTIO_NOTIFY_ENTRY_MAX   168
-#define DEVIRT_VIRTIO_NOTIFY_ENTRY_UNUSED  0
-#define DEVIRT_VIRTIO_NOTIFY_ENTRY_USING   1
-#define DEVIRT_VIRTIO_NOTIFY_ENTRY_USED    2
-
-#define KVM_DEVIRT_VIRTIO_NOTIFY_CPU    0
-
 #define DEVIRT_CPU_SET(pid, vcpuid) ((pid << 2) + vcpuid)
-
-/* Dvn: devirt virtio notify */
-struct kick_entry {
-	u64 addr;         /* Legal pio/mmio address */
-	/*
-	 * Devirt virtio device notify status:
-	 *      0: entry is unused.
-	 *      1: entry is using during update.
-	 *      2: entry is used and update is completely.
-	 */
-	atomic_t status;
-	u32 len;
-	u64 val;
-};
-
-struct dvn_desc {
-	struct kick_entry entries[DEVIRT_VIRTIO_NOTIFY_ENTRY_MAX];
-	pid_t kvm_id;
-	int dest_apicid;
-	int cpu;
-	char rsvd[52];
-};
-
-struct dvn_msr {
-	union {
-		struct  {
-			/* Expose devirt notify desc to guest gfn, */
-			u64 dvn_gfn     : 50;
-			/* Enable/disable devirt notify feature */
-			u64 dvn_enable  : 1;
-		};
-		u64 val;
-	};
-} __aligned(8);
 
 /* Store physical apicid maps for kata bm */
 #define DEVIRT_APIC_MAPS_PHYS_BASE       0xfefa0000
