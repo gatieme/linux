@@ -50,31 +50,6 @@ extern asmlinkage void deferred_error_interrupt(void);
 extern asmlinkage void call_function_interrupt(void);
 extern asmlinkage void call_function_single_interrupt(void);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern asmlinkage void devirt_virtio_notify_interrupt(void);
-extern asmlinkage void guest1_irq_move_cleanup_interrupt(void);
-extern asmlinkage void guest1_apic_timer_interrupt(void);
-extern asmlinkage void guest1_hyperv_stimer0_interrupt(void);
-extern asmlinkage void guest1_hyperv_reenlightenment_interrupt(void);
-extern asmlinkage void guest1_managed_irq_shutdown_interrupt(void);
-extern asmlinkage void guest1_posted_intr_nested_interrupt(void);
-extern asmlinkage void guest1_posed_intr_wakeup_interrupt(void);
-extern asmlinkage void guest1_posted_intr_interrupt(void);
-extern asmlinkage void guest1_hypervisor_callback_interrupt(void);
-extern asmlinkage void guest1_deferred_error_interrupt(void);
-extern asmlinkage void guest1_uv_bau_interrupt(void);
-extern asmlinkage void guest1_irq_work_interrupt(void);
-extern asmlinkage void guest1_x86_platform_ipi_interrupt(void);
-extern asmlinkage void guest1_reboot_interrupt(void);
-extern asmlinkage void guest1_threshold_apic_interrupt(void);
-extern asmlinkage void guest1_thermal_apic_interrupt(void);
-extern asmlinkage void guest1_call_function_single_interrupt(void);
-extern asmlinkage void guest1_call_function_interrupt(void);
-extern asmlinkage void guest1_reschedule_interrupt(void);
-extern asmlinkage void guest1_error_apic_interrupt(void);
-extern asmlinkage void guest1_spurious_apic_interrupt(void);
-#endif
-
 #ifdef	CONFIG_X86_LOCAL_APIC
 struct irq_data;
 struct pci_dev;
@@ -176,10 +151,7 @@ extern char irq_entries_start[];
 #endif
 
 extern char spurious_entries_start[];
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern char guest1_irq_entries_start[];
-extern char guest2_irq_entries_start[];
-#endif
+
 #define VECTOR_UNUSED		NULL
 #define VECTOR_SHUTDOWN		((void *)-1L)
 #define VECTOR_RETRIGGERED	((void *)-2L)
