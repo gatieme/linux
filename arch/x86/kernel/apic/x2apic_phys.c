@@ -39,41 +39,10 @@ static int x2apic_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 	return x2apic_enabled() && (x2apic_phys || x2apic_fadt_phys());
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-DEFINE_PER_CPU(atomic64_t, devirt_ipi_pending) = ATOMIC_INIT(0);
-
-static inline int devirt_set_ipi_pending(int cpu, int vector)
-{
-	atomic64_t *pending = per_cpu_ptr(&devirt_ipi_pending, cpu);
-	unsigned long pending_map = atomic64_read(pending);
-
-	/* First handle IRQ_MOVE_CLEANUP_VECTOR which we put at bit 63
-	 * in devirt_ipi_pending.
-	 */
-	if (vector == IRQ_MOVE_CLEANUP_VECTOR)
-		vector = FIRST_SYSTEM_VECTOR + 63;
-
-	if (test_bit(vector - FIRST_SYSTEM_VECTOR, &pending_map))
-		/* already pending, just return */
-		return 1;
-	atomic64_or(1 << (vector - FIRST_SYSTEM_VECTOR), pending);
-	/* Make sure the write is completed */
-	wmb();
-	return 0;
-}
-#endif
-
 static void x2apic_send_IPI(int cpu, int vector)
 {
 	u32 dest = per_cpu(x86_cpu_to_apicid, cpu);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (cpumask_test_cpu(cpu, &nmi_ipi_mask)) {
-		if (devirt_set_ipi_pending(cpu, vector))
-			return;
-		vector = NMI_VECTOR;
-	}
-#endif
 	/* x2apic MSRs are special and need a special fence: */
 	weak_wrmsr_fence();
 	__x2apic_send_IPI_dest(dest, vector, APIC_DEST_PHYSICAL);
@@ -93,22 +62,10 @@ __x2apic_send_IPI_mask(const struct cpumask *mask, int vector, int apic_dest)
 
 	this_cpu = smp_processor_id();
 	for_each_cpu(query_cpu, mask) {
-		int vector_tmp;
-
 		if (apic_dest == APIC_DEST_ALLBUT && this_cpu == query_cpu)
 			continue;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (cpumask_test_cpu(query_cpu, &nmi_ipi_mask)) {
-			if (devirt_set_ipi_pending(query_cpu, vector))
-				continue;
-			vector_tmp = NMI_VECTOR;
-		} else
-#endif
-			vector_tmp = vector;
-
 		__x2apic_send_IPI_dest(per_cpu(x86_cpu_to_apicid, query_cpu),
-				       vector_tmp, APIC_DEST_PHYSICAL);
+				       vector, APIC_DEST_PHYSICAL);
 	}
 	local_irq_restore(flags);
 }
@@ -126,28 +83,12 @@ static void
 
 static void x2apic_send_IPI_allbutself(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct cpumask mask;
-
-	if (!cpumask_empty(&nmi_ipi_mask)) {
-		cpumask_setall(&mask);
-		__x2apic_send_IPI_mask(&mask, vector, APIC_DEST_ALLBUT);
-	} else
-#endif
-		__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLBUT);
+	__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLBUT);
 }
 
 static void x2apic_send_IPI_all(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct cpumask mask;
-
-	if (!cpumask_empty(&nmi_ipi_mask)) {
-		cpumask_setall(&mask);
-		__x2apic_send_IPI_mask(&mask, vector, APIC_DEST_ALLINC);
-	} else
-#endif
-		__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLINC);
+	__x2apic_send_IPI_shorthand(vector, APIC_DEST_ALLINC);
 }
 
 static void init_x2apic_ldr(void)

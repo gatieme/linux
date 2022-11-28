@@ -940,8 +940,4 @@ cpumap_print_to_pagebuf(bool list, char *buf, const struct cpumask *mask)
 	[0] =  1UL							\
 } }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern struct cpumask nmi_ipi_mask;
-#endif
-
 #endif /* __LINUX_CPUMASK_H */
