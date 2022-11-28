@@ -9792,8 +9792,6 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	if (type == 1) {
-		if (devirt_arat_disable)
-			return -EINVAL;
 		kvm->devirt_enable = true;
 		if (devirt_host_server_type == DEVIRT_HOST_SERVER_INTEL)
 			kvm->devirt_enable_intel = true;

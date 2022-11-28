@@ -67,11 +67,6 @@ enum clock_event_state {
  */
 # define CLOCK_EVT_FEAT_HRTIMER		0x000080
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-/* Clockevent device is used as a dummy device for devirt */
-# define CLOCK_EVT_FEAT_DEVIRT		0x800000
-#endif
-
 /**
  * struct clock_event_device - clock event device descriptor
  * @event_handler:	Assigned by the framework to be called by the low

@@ -19,9 +19,6 @@
 #include <trace/events/power.h>
 
 #include <asm/irq_regs.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "tick-internal.h"
 
@@ -397,12 +394,7 @@ int tick_broadcast_oneshot_control(enum tick_broadcast_state state)
 {
 	struct tick_device *td = this_cpu_ptr(&tick_cpu_device);
 
-	if (!(td->evtdev->features & CLOCK_EVT_FEAT_C3STOP)
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 && !(state == TICK_BROADCAST_ENTER_DEVIRT
-		 || state == TICK_BROADCAST_EXIT_DEVIRT)
-#endif
-		)
+	if (!(td->evtdev->features & CLOCK_EVT_FEAT_C3STOP))
 		return 0;
 
 	return __tick_broadcast_oneshot_control(state);

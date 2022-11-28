@@ -11,8 +11,6 @@
 #define _ASM_X86_DEVIRT_TYPES_H
 
 struct devirt_vcpu_arch {
-	/* Used to record the id of pcpu where devirt vcpu runs */
-	int devirt_cpu;
 };
 
 struct devirt_kvm_arch {
