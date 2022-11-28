@@ -70,7 +70,6 @@ struct devirt_kvm_arch {
 	/* Host user-space address */
 	unsigned long base_map_addr;
 	unsigned long cur_map_addr;
-	unsigned long map_size;
 	unsigned long map_total_size;
 	/* record the host kernel address for each devirt_mem_map_head */
 	struct devirt_mem_map_head_kaddr map_head_kaddrs[KVM_MEM_SLOTS_NUM];

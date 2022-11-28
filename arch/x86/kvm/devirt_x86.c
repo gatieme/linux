@@ -422,10 +422,10 @@ int devirt_mem_mapping_init(struct kvm *kvm)
 		total_slots_nrpages += memslot->npages;
 	}
 
-	nr_pinned_pages = DEVIRT_MAP_HEAD_NPAGES + (devirt->map_size >> PAGE_SHIFT)
+	nr_pinned_pages = DEVIRT_MAP_HEAD_NPAGES + (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT)
 		 + (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT)
-		 + total_slots_nrpages
-		 + (DEVIRT_MEM_CONT_MAX_SIZE >> PAGE_SHIFT);
+		 + (DEVIRT_MEM_CONT_MAX_SIZE >> PAGE_SHIFT)
+		 + total_slots_nrpages;
 	devirt->pinned_pages =
 		(struct page **)__vmalloc(sizeof(struct page *) * nr_pinned_pages,
 			 GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
@@ -456,7 +456,7 @@ int devirt_mem_mapping_init(struct kvm *kvm)
 	devirt->base_map_addr = gfn_to_hva(kvm, DEVIRT_MEM_MAP_PHYS_BASE >> 12);
 	devirt->cur_map_addr = devirt->base_map_addr;
 	devirt->used_heads = 0;
-	for (i = 0; i < (devirt->map_size >> PAGE_SHIFT); i++) {
+	for (i = 0; i < (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT); i++) {
 		unsigned long gfn = (DEVIRT_MEM_MAP_PHYS_BASE >> PAGE_SHIFT) + i;
 
 		page = gfn_to_page(kvm, gfn);
@@ -891,15 +891,12 @@ int devirt_mem_convert(struct kvm_vcpu *vcpu, unsigned long guest_cr3)
 
 }
 
-int devirt_mem_init(struct kvm *kvm)
+static int devirt_mem_init(struct kvm *kvm)
 {
 	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
 	int r = 0;
 	struct file *filp;
 	struct user_struct *user = NULL;
-	struct kvm_memslots *slots;
-	struct kvm_memory_slot *memslot;
-	unsigned long total_slots_nrpages = 0;
 
 	mutex_lock(&kvm->slots_lock);
 
@@ -914,10 +911,19 @@ int devirt_mem_init(struct kvm *kvm)
 	}
 	devirt->mem_filp = filp;
 
+	devirt->map_total_size = DEVIRT_MEM_MAP_MAX_SIZE + DEVIRT_MEM_MAP_HEAD_MAX_SIZE;
 	devirt->rmap_size = devirt_mem_rmap_size;
 	if (devirt->rmap_size > DEVIRT_MEM_RMAP_MAX_SIZE) {
 		pr_emerg("katabm: rmap size exceed max size\n");
 		r = -1;
+		goto out_unlock;
+	}
+
+	r = __x86_set_memory_region(kvm, DEVIRT_MEM_MAP_MEMSLOT,
+				    DEVIRT_MEM_MAP_PHYS_BASE,
+				    DEVIRT_MEM_MAP_MAX_SIZE, NULL);
+	if (r) {
+		pr_emerg("katabm: set DEVIRT_MEM_MAP_MEMSLOT failed, %d\n", r);
 		goto out_unlock;
 	}
 
@@ -956,28 +962,6 @@ int devirt_mem_init(struct kvm *kvm)
 			DEVIRT_MEM_CONT_PHYS_BASE, DEVIRT_MEM_CONT_MAX_SIZE, devirt->hp_filp);
 	if (r) {
 		pr_emerg("katabm: set DEVIRT_MEM_CONT_MEMSLOT failed, %d\n", r);
-		goto out_unlock;
-	}
-
-	slots = __kvm_memslots(kvm, 0);
-	kvm_for_each_memslot(memslot, slots) {
-		total_slots_nrpages += memslot->npages;
-	}
-
-	devirt->map_size = ((total_slots_nrpages << 3) + (DEVIRT_MEM_MAP_MAX_NPAGES << 3)
-		 + PMD_SIZE - 1) & PMD_MASK;
-	if (devirt->map_size > DEVIRT_MEM_MAP_MAX_SIZE) {
-		pr_emerg("katabm: map size exceed\n");
-		r = -EINVAL;
-		goto out_unlock;
-	}
-	devirt->map_total_size = devirt->map_size + DEVIRT_MEM_MAP_HEAD_MAX_SIZE;
-
-	r = __x86_set_memory_region(kvm, DEVIRT_MEM_MAP_MEMSLOT,
-				    DEVIRT_MEM_MAP_PHYS_BASE,
-				    devirt->map_size, NULL);
-	if (r) {
-		pr_emerg("katabm: set DEVIRT_MEM_MAP_MEMSLOT failed, %d\n", r);
 		goto out_unlock;
 	}
 
@@ -1484,6 +1468,8 @@ int devirt_vcpu_create(struct kvm_vcpu *vcpu)
 	if (devirt_apic_maps_alloc_page(kvm))
 		goto err;
 	if (devirt_apic_maps_setup(vcpu, kvm))
+		goto err;
+	if (devirt_mem_init(kvm))
 		goto err;
 	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
 

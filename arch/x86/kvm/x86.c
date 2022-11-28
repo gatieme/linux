@@ -2975,17 +2975,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_KVM_DEVIRT_APIC_MAPS:
 		break;
 	case MSR_KVM_DEVIRT_MEM_START:
-		if (devirt_mem_start(vcpu, data))
-			return 1;
-		break;
-	case MSR_KVM_DEVIRT_MEM_INIT:
-		srcu_read_unlock(&vcpu->kvm->srcu, vcpu->srcu_idx);
-		if (devirt_mem_init(vcpu->kvm)) {
-			pr_emerg("katabm: devirt_mem_init failed\n");
-			vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
-			return 1;
-		}
-		vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
+		devirt_mem_start(vcpu, data);
 		break;
 	case MSR_KVM_DEVIRT_MEM_CONVERT:
 		devirt_mem_convert(vcpu, data);
