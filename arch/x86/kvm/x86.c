@@ -9848,7 +9848,7 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
 	if (type == 1) {
-		if (devirt_arat_disable || !devirt_enable_at_startup)
+		if (devirt_arat_disable)
 			return -EINVAL;
 		kvm->devirt_enable = true;
 		if (devirt_host_server_type == DEVIRT_HOST_SERVER_INTEL)
@@ -10648,11 +10648,6 @@ int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons,
 
 	irqfd->producer = prod;
 	kvm_arch_start_assignment(irqfd->kvm);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	devirt_update_irqfd_routing(irqfd->kvm,
-				    prod->irq, irqfd->gsi,
-				    &irqfd->irq_entry, 1);
-#endif
 	ret = kvm_x86_ops->update_pi_irte(irqfd->kvm,
 					  prod->irq, irqfd->gsi, 1);
 
@@ -10691,42 +10686,6 @@ int kvm_arch_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 {
 	return kvm_x86_ops->update_pi_irte(kvm, host_irq, guest_irq, set);
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-int devirt_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
-				uint32_t guest_irq, struct kvm_kernel_irq_routing_entry *e,
-				bool set)
-{
-	struct kvm_lapic_irq irq;
-	int dest_id;
-	struct kvm_vcpu *vcpu = NULL;
-	bool found = false;
-	int i;
-
-	if (!devirt_enable(kvm))
-		return 0;
-
-	kvm_set_msi_irq(kvm, e, &irq);
-
-	kvm_for_each_vcpu(i, vcpu, kvm) {
-		if (!kvm_apic_present(vcpu))
-			continue;
-
-		if (kvm_apic_match_dest(vcpu, NULL, irq.shorthand,
-					irq.dest_id, irq.dest_mode)) {
-			found = true;
-			break;
-		}
-	}
-	WARN_ON(!found);
-
-	WARN_ON(vcpu_to_devirt(vcpu)->devirt_vfio_cpu == -1);
-	dest_id = per_cpu(x86_cpu_to_apicid, vcpu_to_devirt(vcpu)->devirt_vfio_cpu);
-	__irq_set_devirt_affinity(host_irq, dest_id, irq.vector);
-
-	return 0;
-}
-#endif
 
 bool kvm_vector_hashing_enabled(void)
 {

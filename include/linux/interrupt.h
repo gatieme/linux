@@ -304,9 +304,6 @@ extern cpumask_var_t irq_default_affinity;
 /* Internal implementation. Use the helpers below */
 extern int __irq_set_affinity(unsigned int irq, const struct cpumask *cpumask,
 			      bool force);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-extern int __irq_set_devirt_affinity(unsigned int irq, u32 dest_id, u32 vector);
-#endif
 
 /**
  * irq_set_affinity - Set the irq affinity of a given irq

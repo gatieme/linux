@@ -688,7 +688,6 @@ void devirt_vcpu_init(struct kvm_vcpu *vcpu)
 	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
 
 	devirt->devirt_cpu = -1;
-	devirt->devirt_vfio_cpu = -1;
 }
 
 void devirt_init_vm(struct kvm *kvm)

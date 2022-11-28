@@ -18,7 +18,6 @@ struct devirt_vcpu_arch {
 	unsigned int devirt_host_tpr;
 	/* Check all vcpu not in migration */
 	int devirt_apic_maps_update_status;
-	int devirt_vfio_cpu;
 };
 
 struct devirt_kvm_arch {

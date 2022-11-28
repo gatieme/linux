@@ -887,11 +887,6 @@ struct amd_ir_data {
 	int ga_vector;
 	int ga_root_ptr;
 	int ga_tag;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	u32 devirt_vector;
-	u32 devirt_destid;
-#endif
 };
 
 struct amd_irte_ops {

@@ -41,9 +41,6 @@
 #include <asm/iommu.h>
 #include <asm/gart.h>
 #include <asm/dma.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "amd_iommu_proto.h"
 #include "amd_iommu_types.h"
@@ -3681,9 +3678,6 @@ EXPORT_SYMBOL(amd_iommu_device_info);
  *****************************************************************************/
 
 static struct irq_chip amd_ir_chip;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static struct irq_chip amd_ir_chip_devirt;
-#endif
 static DEFINE_SPINLOCK(iommu_table_lock);
 
 static void set_dte_irq_entry(u16 devid, struct irq_remap_table *table)
@@ -4338,12 +4332,7 @@ static int irq_remapping_alloc(struct irq_domain *domain, unsigned int virq,
 
 		irq_data->hwirq = (devid << 16) + i;
 		irq_data->chip_data = data;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable_at_startup)
-			irq_data->chip = &amd_ir_chip_devirt;
-		else
-#endif
-			irq_data->chip = &amd_ir_chip;
+		irq_data->chip = &amd_ir_chip;
 		irq_remapping_prepare_irte(data, cfg, info, devid, index, i);
 		irq_set_status_flags(virq + i, IRQ_MOVE_PCNTXT);
 	}
@@ -4544,14 +4533,7 @@ static void amd_ir_update_irte(struct irq_data *irqd, struct amd_iommu *iommu,
 			       struct irq_2_irte *irte_info,
 			       struct irq_cfg *cfg)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (ir_data->devirt_vector) {
-		iommu->irte_ops->set_affinity(ir_data->entry, irte_info->devid,
-				      irte_info->index, ir_data->devirt_vector,
-				      ir_data->devirt_destid);
-		return;
-	}
-#endif
+
 	/*
 	 * Atomically updates the IRTE with the new destination, vector
 	 * and flushes the interrupt entry cache.
@@ -4603,44 +4585,6 @@ static struct irq_chip amd_ir_chip = {
 	.irq_set_vcpu_affinity	= amd_ir_set_vcpu_affinity,
 	.irq_compose_msi_msg	= ir_compose_msi_msg,
 };
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static int amd_ir_set_devirt_affinity(struct irq_data *data,
-			       void *info)
-{
-	struct devirt_affinity_info *i = info;
-	struct amd_ir_data *ir_data;
-	struct irq_2_irte *irte_info;
-	struct irq_cfg *cfg;
-	struct irq_data *parent;
-	struct amd_iommu *iommu;
-
-	if (i->type != DEVIRT_AFFINITY_INFO_TYPE)
-		return amd_ir_set_vcpu_affinity(data, info);
-
-	ir_data = data->chip_data;
-	irte_info = &ir_data->irq_2_irte;
-	cfg = irqd_cfg(data);
-	parent = data->parent_data;
-	iommu = amd_iommu_rlookup_table[irte_info->devid];
-
-	if (!iommu)
-		return -ENODEV;
-	ir_data->devirt_vector = i->vector;
-	ir_data->devirt_destid = i->dest_id;
-	amd_ir_update_irte(data, iommu, ir_data, irte_info, cfg);
-
-	return IRQ_SET_MASK_OK_DONE;
-}
-
-static struct irq_chip amd_ir_chip_devirt = {
-	.name			= "AMD-IR",
-	.irq_ack		= apic_ack_irq,
-	.irq_set_affinity	= amd_ir_set_affinity,
-	.irq_set_vcpu_affinity	= amd_ir_set_devirt_affinity,
-	.irq_compose_msi_msg	= ir_compose_msi_msg,
-};
-#endif
 
 int amd_iommu_create_irq_domain(struct amd_iommu *iommu)
 {

@@ -20,8 +20,6 @@
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
 
-#define DEVIRT_AFFINITY_INFO_TYPE 0xffffffffffffffff
-
 /*
  * Now virtual MSI interrupts which injected by don't rely on the
  * host handling of guest EOI. For katabm, such virtual MSI interrupts
@@ -105,13 +103,6 @@ struct apic_maps_msr {
 		u64 val;
 	};
 } __aligned(8);
-
-/* Keep the same layout with struct vcpu_data  */
-struct devirt_affinity_info {
-	u64 type;
-	u16 vector;
-	u16 dest_id;
-};
 
 struct devirt_nmi_operations {
 	int (*devirt_in_guest_mode)(void);

@@ -625,11 +625,6 @@ void kvm_irq_routing_update(struct kvm *kvm)
 					irqfd->kvm, irqfd->producer->irq,
 					irqfd->gsi, 1);
 			WARN_ON(ret);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-			devirt_update_irqfd_routing(irqfd->kvm,
-					irqfd->producer->irq, irqfd->gsi,
-					&irqfd->irq_entry, 1);
-#endif
 		}
 #endif
 	}
