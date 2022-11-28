@@ -1336,9 +1336,6 @@ static const u32 emulated_msrs_all[] = {
 
 	MSR_KVM_ASYNC_PF_EN, MSR_KVM_STEAL_TIME,
 	MSR_KVM_PV_EOI_EN,
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	MSR_KVM_DEVIRT_APIC_MAPS,
-#endif
 
 	MSR_IA32_TSC_ADJUST,
 	MSR_IA32_TSCDEADLINE,
@@ -2954,10 +2951,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		if (kvm_lapic_enable_pv_eoi(vcpu, data, sizeof(u8)))
 			return 1;
 		break;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case MSR_KVM_DEVIRT_APIC_MAPS:
-		break;
-#endif
+
 	case MSR_KVM_POLL_CONTROL:
 		/* only enable bit supported */
 		if (data & (-1ULL << 1))
@@ -3209,11 +3203,6 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_KVM_PV_EOI_EN:
 		msr_info->data = vcpu->arch.pv_eoi.msr_val;
 		break;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case MSR_KVM_DEVIRT_APIC_MAPS:
-		msr_info->data = vcpu->kvm->arch.devirt.apic_maps_msr_val;
-		break;
-#endif
 	case MSR_KVM_POLL_CONTROL:
 		msr_info->data = vcpu->arch.msr_kvm_poll_control;
 		break;
@@ -7662,15 +7651,6 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		kvm_sched_yield(vcpu->kvm, a0);
 		ret = 0;
 		break;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case KVM_HC_DEVIRT_ICR_WRITE:
-		kvm_x2apic_msr_write(vcpu, a0, a1);
-		break;
-	case KVM_HC_DEVIRT_GLOBAL_RIP:
-		vcpu->kvm->devirt_apic_rip_start = a0;
-		vcpu->kvm->devirt_apic_rip_end = a1;
-		break;
-#endif
 	default:
 		ret = -KVM_ENOSYS;
 		break;
@@ -10017,10 +9997,6 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 		x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(kvm))
-			x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT, 0, 0);
-#endif
 	}
 	if (kvm_x86_ops->vm_destroy)
 		kvm_x86_ops->vm_destroy(kvm);

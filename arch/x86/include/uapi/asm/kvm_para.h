@@ -53,8 +53,6 @@
 #define MSR_KVM_PV_EOI_EN      0x4b564d04
 #define MSR_KVM_POLL_CONTROL	0x4b564d05
 
-#define MSR_KVM_DEVIRT_APIC_MAPS	0x4b564dbc
-
 struct kvm_steal_time {
 	__u64 steal;
 	__u32 version;

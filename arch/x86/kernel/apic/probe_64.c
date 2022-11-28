@@ -9,9 +9,6 @@
  * James Cleverdon.
  */
 #include <asm/apic.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "local.h"
 
@@ -21,11 +18,6 @@
 void __init default_setup_apic_routing(void)
 {
 	struct apic **drv;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable_at_startup)
-		x2apic_phys = 1;
-#endif
 
 	enable_IR_x2apic();
 

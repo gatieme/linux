@@ -13,10 +13,7 @@
 #include <asm/devirt.h>
 #include <asm/apic.h>
 
-#include "kvm_cache_regs.h"
-
 static DEFINE_PER_CPU(u32, devirt_cpu_set);
-static DEFINE_RAW_SPINLOCK(devirt_vcpu_migration_lock);
 
 static void devirt_set_host_timer(void)
 {
@@ -122,39 +119,6 @@ static void devirt_save_guest_tpr(struct kvm_vcpu *vcpu)
 	apic_write(APIC_TASKPRI, devirt->devirt_host_tpr);
 }
 
-void devirt_check_guest_icr_apicid(struct kvm_vcpu *vcpu)
-{
-	unsigned long rip;
-	struct kvm *kvm = vcpu->kvm;
-	struct apic_maps *maps = kvm->arch.devirt.apic_maps;
-	struct kvm_vcpu *target;
-	struct devirt_vcpu_arch *devirt;
-	int i = 0;
-
-	/*
-	 * Vcpu can't enter guest until all vcpu's
-	 * guest_irq_pending->bitmap migrate completely.
-	 */
-	kvm_for_each_vcpu(i, target, kvm) {
-		if (target->vcpu_id != vcpu->vcpu_id) {
-			devirt = vcpu_to_devirt(vcpu);
-			smp_cond_load_acquire(
-				&devirt->devirt_apic_maps_update_status,
-				!(VAL & DEVIRT_APIC_MAPS_UPDATING));
-		}
-	}
-
-	/*
-	 * Now the vcpu is sending IPI to dest vcpu, but the dest vcpu is migrated
-	 * to another vcpu. So, when the vcpu enter into the guest mode, the vcpu
-	 * will send ipi again.
-	 */
-	rip = kvm_rip_read(vcpu);
-	if (rip > kvm->devirt_apic_rip_start &&
-	    rip <= kvm->devirt_apic_rip_end)
-		kvm_rip_write(vcpu, kvm->devirt_apic_rip_start);
-}
-
 static void devirt_set_guest_irq(void)
 {
 	unsigned long *bitmap;
@@ -183,159 +147,6 @@ static void devirt_check_eoi(void)
 {
 	if (APIC_ISR_is_set())
 		apic_eoi();
-}
-
-static void devirt_vcpu_update_apic_maps_entry(struct kvm_vcpu *vcpu, int cpu)
-{
-	struct apic_maps *maps = vcpu->kvm->arch.devirt.apic_maps;
-
-	/* In both QEMU and CLH, vcpu_id is equal to guest apicid, so the guest
-	 * can use guest apicid to index apic maps and find the physical apicid.
-	 */
-	maps->entries[vcpu->vcpu_id].papic_id = per_cpu(x86_cpu_to_apicid, cpu);
-	maps->entries[vcpu->vcpu_id].pcpu_id = cpu;
-	/* Make sure the writes are completed before the status write */
-	smp_wmb();
-	maps->entries[vcpu->vcpu_id].status = 1;
-}
-
-static void devirt_vcpu_kick_func(void *UNUSED)
-{
-	/* Do nothing */
-}
-
-/*
- * During reset vcpu thread's affinity, all other vcpu in guest mode
- * must exit to host mode. Then, we can migrate the guest_irq_pending->bitmap
- * from old cpu to new cpu. If we don't do it, other vcpu still run'
- * in guest mode, it may still send ipi to the vcpu's old physical apicid.
- * The interrupt which sends to vcpu's old physical apicid will be lost.
- */
-static void devirt_vcpu_update_guest_irq_bitmap(struct kvm_vcpu *vcpu,
-										int cpu)
-{
-	int i;
-	struct kvm *kvm = vcpu->kvm;
-	struct kvm_vcpu *target;
-	struct cpumask mask = {0};
-	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
-
-	if (!raw_spin_trylock(&devirt_vcpu_migration_lock)) {
-		/* Failed to aquire the spin lock, so just trigger a VM exit and try
-		 * again at next VM entry round. We cannot spin here, as we have
-		 * disabled irq and would cause deadlock.
-		 */
-		devirt_kvm_ops->devirt_tigger_failed_vm_entry(vcpu);
-		return;
-	}
-
-	devirt->devirt_apic_maps_update_status = DEVIRT_APIC_MAPS_UPDATING;
-	/* Make the write visable to other cores */
-	smp_wmb();
-
-	/* kick other vcpu by smp_call_function */
-	kvm_for_each_vcpu(i, target, kvm) {
-		if (target->vcpu_id != vcpu->vcpu_id)
-			cpumask_set_cpu(target->cpu, &mask);
-	}
-
-	smp_call_function_many(&mask, devirt_vcpu_kick_func, NULL, 1);
-
-	devirt_vcpu_update_apic_maps_entry(vcpu, cpu);
-
-	/* Make sure the write is completed */
-	smp_store_release(&devirt->devirt_apic_maps_update_status, 0);
-	raw_spin_unlock(&devirt_vcpu_migration_lock);
-}
-
-void devirt_update_apic_maps(struct kvm_vcpu *vcpu)
-{
-	int status;
-	int vcpu_id = vcpu->vcpu_id;
-	struct apic_maps *maps;
-	int cpu = smp_processor_id();
-
-	if (!vcpu->kvm->arch.devirt.apic_maps)
-		return;
-
-	maps = vcpu->kvm->arch.devirt.apic_maps;
-	status = maps->entries[vcpu_id].status;
-
-	if (!status)
-		/* apic_maps need update when vcpu first into guest mode. */
-		devirt_vcpu_update_apic_maps_entry(vcpu, cpu);
-	else
-		/* apic_maps need update when vcpu migrate from old cpu to
-		 * new cpu.
-		 */
-		devirt_vcpu_update_guest_irq_bitmap(vcpu, cpu);
-}
-
-void devirt_clear_apic_maps(struct kvm_vcpu *vcpu)
-{
-	struct apic_maps *maps;
-	int vcpu_id = vcpu->vcpu_id;
-
-	maps = vcpu->kvm->arch.devirt.apic_maps;
-	maps->entries[vcpu_id].status = 0;
-	/* Make sure the write is completed */
-	smp_mb();
-	maps->entries[vcpu_id].papic_id = -1;
-	maps->entries[vcpu_id].pcpu_id = -1;
-}
-
-/* Allocate one page to store papicid-vcpu mapping */
-static int devirt_apic_maps_alloc_page(struct kvm *kvm)
-{
-	int r = 0;
-	struct apic_maps_msr val;
-
-	mutex_lock(&kvm->slots_lock);
-	if (kvm->arch.devirt.apic_maps_msr_val)
-		goto out;
-
-	r = __x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT,
-				    DEVIRT_APIC_MAPS_PHYS_BASE,
-				    PAGE_SIZE);
-	if (r) {
-		pr_emerg("set memory region failed for DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT %d\n", r);
-		goto out;
-	}
-	val.apic_maps_gfn = DEVIRT_APIC_MAPS_PHYS_BASE >> PAGE_SHIFT;
-	val.apic_maps_enable = 1;
-	kvm->arch.devirt.apic_maps_msr_val = val.val;
-	kvm->arch.devirt.apic_maps = NULL;
-out:
-	mutex_unlock(&kvm->slots_lock);
-	return r;
-}
-
-static int devirt_apic_maps_setup(struct kvm_vcpu *vcpu, struct kvm *kvm)
-{
-	struct apic_maps *maps;
-	struct apic_maps_msr val;
-	struct page *page;
-	int r = 0;
-
-	mutex_lock(&kvm->slots_lock);
-	if (kvm->arch.devirt.apic_maps || !kvm->arch.devirt.apic_maps_msr_val)
-		goto out;
-
-	val.val = kvm->arch.devirt.apic_maps_msr_val;
-	page = kvm_vcpu_gfn_to_page(vcpu, val.apic_maps_gfn);
-	if (is_error_page(page)) {
-		pr_warn("cannot get page from gfn: 0x%llx\n",
-			val.val);
-		r = -EFAULT;
-		goto out;
-	}
-
-	maps = (struct apic_maps *)(page_address(page));
-	memset(maps, 0x00, sizeof(struct apic_maps));
-	kvm->arch.devirt.apic_maps = maps;
-out:
-	mutex_unlock(&kvm->slots_lock);
-	return r;
 }
 
 DEFINE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending) = {0};
@@ -461,8 +272,6 @@ static void devirt_check_devirt_cpu_set(struct kvm_vcpu *vcpu)
 	if (!set_val) {
 		/* Set the host timer on devirt cpu */
 		devirt_set_host_timer();
-		/* The guest apic maps must also be updated */
-		devirt_update_apic_maps(vcpu);
 		*set = new_val;
 	} else
 		WARN_ON(set_val != new_val);
@@ -494,7 +303,6 @@ void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu)
 	 * devirt_unset_devirt_cpu_on
 	 */
 	devirt_check_devirt_cpu(vcpu);
-	devirt_check_guest_icr_apicid(vcpu);
 	devirt_load_guest_tpr(vcpu);
 	devirt_set_guest_irq();
 }
@@ -511,16 +319,11 @@ void devirt_enter_guest(struct kvm_vcpu *vcpu)
 
 void devirt_vcpu_create(struct kvm_vcpu *vcpu)
 {
-	struct kvm *kvm = vcpu->kvm;
-
-	devirt_apic_maps_alloc_page(kvm);
-	devirt_apic_maps_setup(vcpu, kvm);
 	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
 }
 
 void devirt_vcpu_free(struct kvm_vcpu *vcpu)
 {
-	devirt_clear_apic_maps(vcpu);
 }
 
 void devirt_vcpu_init(struct kvm_vcpu *vcpu)
@@ -539,18 +342,9 @@ void devirt_destroy_vm(struct kvm *kvm)
 {
 	struct kvm_vcpu *vcpu;
 	unsigned int i;
-	struct page *page;
 
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		devirt_unset_devirt_cpu_on(vcpu_to_devirt(vcpu)->devirt_cpu, NULL);
-	}
-
-	/*
-	 * Free the two pages which used for apic_maps and dvn_desc.
-	 */
-	if (kvm->arch.devirt.apic_maps) {
-		page = virt_to_page(kvm->arch.devirt.apic_maps);
-		put_page(page);
 	}
 }
 
