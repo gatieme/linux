@@ -3450,11 +3450,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		r = kvm_x86_ops->has_emulated_msr(MSR_IA32_SMBASE);
 		break;
 	case KVM_CAP_VAPIC:
-		r = !(kvm_x86_ops->cpu_has_accelerated_tpr()
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		 && !devirt_enable_intel(kvm)
-#endif
-		 );
+		r = !kvm_x86_ops->cpu_has_accelerated_tpr();
 		break;
 	case KVM_CAP_NR_VCPUS:
 		r = KVM_SOFT_MAX_VCPUS;
@@ -7700,11 +7696,7 @@ static void update_cr8_intercept(struct kvm_vcpu *vcpu)
 {
 	int max_irr, tpr;
 
-	if (!kvm_x86_ops->update_cr8_intercept
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 || devirt_enable_intel(vcpu->kvm)
-#endif
-	 )
+	if (!kvm_x86_ops->update_cr8_intercept)
 		return;
 
 	if (!lapic_in_kernel(vcpu))
@@ -8446,15 +8438,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	if (req_immediate_exit) {
 		kvm_make_request(KVM_REQ_EVENT, vcpu);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		/* if devirt is enabled on Intel, we cannot use hv timer to trigger
-		 * immediate exit
-		 */
-		if (devirt_enable_intel(vcpu->kvm))
-			__kvm_request_immediate_exit(vcpu);
-		else
-#endif
-			kvm_x86_ops->request_immediate_exit(vcpu);
+		kvm_x86_ops->request_immediate_exit(vcpu);
 	}
 
 	trace_kvm_entry(vcpu->vcpu_id);
@@ -9729,12 +9713,7 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 		r = kvm_create_lapic(vcpu, lapic_timer_advance_ns);
 		if (r < 0)
 			goto fail_mmu_destroy;
-
-		if (kvm_apicv_activated(vcpu->kvm)
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		 && !devirt_enable_intel(vcpu->kvm)
-#endif
-		 )
+		if (kvm_apicv_activated(vcpu->kvm))
 			vcpu->arch.apicv_active = true;
 	} else
 		static_key_slow_inc(&kvm_no_apic_vcpu);

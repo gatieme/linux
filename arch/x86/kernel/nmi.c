@@ -40,9 +40,6 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/nmi.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 struct nmi_desc {
 	raw_spinlock_t lock;
@@ -324,20 +321,12 @@ static int devirt_handle_nmi_IPI(struct pt_regs *regs)
 
 		for_each_set_bit(bit, &pending, 64) {
 			int vector;
-			struct devirt_nmi_operations *ops = devirt_nmi_ops;
 
 			if (bit == 63)
 				vector = IRQ_MOVE_CLEANUP_VECTOR;
 			else
 				vector = bit + FIRST_SYSTEM_VECTOR;
-			if (ops && ops->devirt_in_guest_mode()) {
-				/* A failed vm entry is required to handle the self IPI
-				 * in host immediately.
-				 */
-				ops->devirt_tigger_failed_vm_entry(NULL);
-				apic->send_IPI_self(vector);
-			} else
-				apic->send_IPI_self(vector);
+			apic->send_IPI_self(vector);
 		}
 		return NMI_HANDLED;
 	}

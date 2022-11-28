@@ -4,7 +4,6 @@
 
 #include <uapi/asm/svm.h>
 
-#define X2APIC_MSR(r) (APIC_BASE_MSR + ((r) >> 4))
 
 enum {
 	INTERCEPT_INTR,

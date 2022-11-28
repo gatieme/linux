@@ -34,9 +34,6 @@
 #include <asm/delay.h>
 #include <linux/atomic.h>
 #include <linux/jump_label.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 #include "kvm_cache_regs.h"
 #include "irq.h"
 #include "trace.h"
@@ -1738,11 +1735,7 @@ static bool start_hv_timer(struct kvm_lapic *apic)
 	bool expired;
 
 	WARN_ON(preemptible());
-	if (!kvm_x86_ops->set_hv_timer
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 || devirt_enable_intel(vcpu->kvm)
-#endif
-	 )
+	if (!kvm_x86_ops->set_hv_timer)
 		return false;
 
 	if (!ktimer->tscdeadline)
