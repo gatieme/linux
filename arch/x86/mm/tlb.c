@@ -15,9 +15,6 @@
 #include <asm/cache.h>
 #include <asm/apic.h>
 #include <asm/uv/uv.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "mm_internal.h"
 
@@ -697,13 +694,8 @@ void native_flush_tlb_others(const struct cpumask *cpumask,
 		 */
 		cpumask = uv_flush_tlb_others(cpumask, info);
 		if (cpumask)
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-			smp_call_function_many_check_devirt(cpumask, flush_tlb_func_remote,
-					       (void *)info, 1, DEVIRT_FLUSH_TLB_LOCAL);
-#else
 			smp_call_function_many(cpumask, flush_tlb_func_remote,
 					       (void *)info, 1);
-#endif
 		return;
 	}
 
@@ -718,35 +710,12 @@ void native_flush_tlb_others(const struct cpumask *cpumask,
 	 * doing a speculative memory access.
 	 */
 	if (info->freed_tables)
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		smp_call_function_many_check_devirt(cpumask, flush_tlb_func_remote,
-			       (void *)info, 1, DEVIRT_FLUSH_TLB_LOCAL);
-#else
 		smp_call_function_many(cpumask, flush_tlb_func_remote,
 			       (void *)info, 1);
-#endif
 	else
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		on_each_cpu_cond_mask_check_devirt(tlb_is_not_lazy, flush_tlb_func_remote,
-				(void *)info, 1, GFP_ATOMIC, cpumask, DEVIRT_FLUSH_TLB_LOCAL);
-#else
 		on_each_cpu_cond_mask(tlb_is_not_lazy, flush_tlb_func_remote,
 				(void *)info, 1, GFP_ATOMIC, cpumask);
-#endif
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static const struct flush_tlb_info devirt_full_flush_tlb_info = {
-	.mm = NULL,
-	.start = 0,
-	.end = TLB_FLUSH_ALL,
-};
-void devirt_flush_tlb(void)
-{
-	flush_tlb_func_local(&devirt_full_flush_tlb_info, TLB_LOCAL_SHOOTDOWN);
-}
-EXPORT_SYMBOL(devirt_flush_tlb);
-#endif
 
 /*
  * See Documentation/x86/tlb.rst for details.  We choose 33
@@ -866,22 +835,14 @@ void flush_tlb_kernel_range(unsigned long start, unsigned long end)
 	/* Balance as user space task's flush, a bit conservative */
 	if (end == TLB_FLUSH_ALL ||
 	    (end - start) > tlb_single_page_flush_ceiling << PAGE_SHIFT) {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		on_each_cpu_check_devirt(do_flush_tlb_all, NULL, 1, DEVIRT_FLUSH_TLB_ALL);
-#else
 		on_each_cpu(do_flush_tlb_all, NULL, 1);
-#endif
 	} else {
 		struct flush_tlb_info *info;
 
 		preempt_disable();
 		info = get_flush_tlb_info(NULL, start, end, 0, false, 0);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		on_each_cpu_check_devirt(do_kernel_range_flush, info, 1, DEVIRT_FLUSH_TLB_ALL);
-#else
 		on_each_cpu(do_kernel_range_flush, info, 1);
-#endif
 
 		put_flush_tlb_info();
 		preempt_enable();

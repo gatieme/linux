@@ -5900,35 +5900,16 @@ struct devirt_kvm_operations devirt_svm_kvm_ops = {
 static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)
 {
 	u32 injected_vector = 0;
-	u8 *state = this_cpu_ptr(&devirt_state);
 
 	if (devirt_host_system_interrupt_pending())
 		svm_tigger_failed_vm_entry(vcpu);
 
 	if (svm_extirq_get_and_clear(vcpu, &injected_vector))
 		apic->send_IPI_self(injected_vector);
-
-	WARN_ON(*state != 0);
-	*state = DEVERT_IN_GUEST;
-}
-
-noinline void devirt_sync_core(void)
-{
-	sync_core();
 }
 
 static void devirt_svm_exit_guest(struct kvm_vcpu *vcpu)
 {
-	u8 *state = this_cpu_ptr(&devirt_state);
-	u8 state_val;
-
-	state_val = xchg(state, 0);
-	if (state_val & DEVIRT_FLUSH_TLB_ALL)
-		__flush_tlb_all();
-	else if (state_val & DEVIRT_FLUSH_TLB_LOCAL)
-		devirt_flush_tlb();
-	if (state_val & DEVIRT_SYNC_CORE)
-		devirt_sync_core();
 }
 #endif
 

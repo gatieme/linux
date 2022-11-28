@@ -108,15 +108,6 @@ void smp_call_function_many(const struct cpumask *mask,
 int smp_call_function_any(const struct cpumask *mask,
 			  smp_call_func_t func, void *info, int wait);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void on_each_cpu_check_devirt(void (*func) (void *info), void *info, int wait, int devirt_flag);
-void on_each_cpu_cond_mask_check_devirt(bool (*cond_func)(int cpu, void *info),
-			smp_call_func_t func, void *info, bool wait,
-			gfp_t gfp_flags, const struct cpumask *mask, int devirt_flag);
-void smp_call_function_many_check_devirt(const struct cpumask *mask,
-			smp_call_func_t func, void *info, bool wait, int devirt_flag);
-#endif
-
 void kick_all_cpus_sync(void);
 void wake_up_all_idle_cpus(void);
 
