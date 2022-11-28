@@ -71,9 +71,6 @@
 #include <asm/intel_pt.h>
 #include <asm/emulate_prefix.h>
 #include <clocksource/hyperv_timer.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #define CREATE_TRACE_POINTS
 #include "trace.h"
@@ -7476,10 +7473,6 @@ void kvm_arch_exit(void)
 	cancel_work_sync(&pvclock_gtod_work);
 #endif
 	kvm_x86_ops = NULL;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	devirt_kvm_ops = NULL;
-	devirt_nmi_ops = NULL;
-#endif
 	kvm_mmu_module_exit();
 	free_percpu(shared_msrs);
 	kmem_cache_destroy(x86_fpu_cache);
@@ -8385,11 +8378,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		goto cancel_injection;
 	}
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_enter_guest(vcpu);
-#endif
-
 	preempt_disable();
 
 	kvm_x86_ops->prepare_guest_switch(vcpu);
@@ -8463,17 +8451,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		set_debugreg(0, 7);
 	}
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_enter_guest_irqoff(vcpu);
-#endif
-
 	kvm_x86_ops->run(vcpu);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_exit_guest_irqoff(vcpu);
-#endif
 
 	/*
 	 * Do this here before restoring debug registers on the host.  And
@@ -9368,11 +9346,6 @@ void kvm_arch_vcpu_free(struct kvm_vcpu *vcpu)
 
 	kvmclock_reset(vcpu);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_vcpu_free(vcpu);
-#endif
-
 	kvm_x86_ops->vcpu_free(vcpu);
 	free_cpumask_var(wbinvd_dirty_mask);
 }
@@ -9388,11 +9361,6 @@ struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
 		"guest TSC will not be reliable\n");
 
 	vcpu = kvm_x86_ops->vcpu_create(kvm, id);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (vcpu && devirt_enable(kvm))
-		devirt_vcpu_create(vcpu);
-#endif
 
 	return vcpu;
 }
@@ -9648,9 +9616,6 @@ int kvm_arch_hardware_setup(void)
 	}
 
 	kvm_init_msr_list();
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	devirt_init();
-#endif
 	return 0;
 }
 
@@ -9740,10 +9705,6 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 	vcpu->arch.preempted_in_kernel = false;
 
 	kvm_hv_vcpu_init(vcpu);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_vcpu_init(vcpu);
-#endif
 
 	return 0;
 
@@ -9781,26 +9742,10 @@ void kvm_arch_sched_in(struct kvm_vcpu *vcpu, int cpu)
 	kvm_x86_ops->sched_in(vcpu, cpu);
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-int devirt_host_server_type;
-EXPORT_SYMBOL(devirt_host_server_type);
-#endif
 int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 {
-	if (type && type != 1)
+	if (type)
 		return -EINVAL;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (type == 1) {
-		kvm->devirt_enable = true;
-		if (devirt_host_server_type == DEVIRT_HOST_SERVER_INTEL)
-			kvm->devirt_enable_intel = true;
-		else if (devirt_host_server_type == DEVIRT_HOST_SERVER_AMD)
-			kvm->devirt_enable_amd = true;
-		else
-			pr_emerg("devirt error: devirt_host_server_type\n");
-	}
-#endif
 
 	INIT_HLIST_HEAD(&kvm->arch.mask_notifier_list);
 	INIT_LIST_HEAD(&kvm->arch.active_mmu_pages);
@@ -9830,11 +9775,6 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 	kvm_hv_init_vm(kvm);
 	kvm_page_track_init(kvm);
 	kvm_mmu_init_vm(kvm);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(kvm))
-		devirt_init_vm(kvm);
-#endif
 
 	return kvm_x86_ops->vm_init(kvm);
 }
@@ -9952,12 +9892,6 @@ void kvm_arch_pre_destroy_vm(struct kvm *kvm)
 
 void kvm_arch_destroy_vm(struct kvm *kvm)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(kvm)) {
-		devirt_destroy_vm(kvm);
-	}
-#endif
-
 	if (current->mm == kvm->mm) {
 		/*
 		 * Free memory regions allocated on behalf of userspace,

@@ -49,9 +49,6 @@
 #include <asm/spec-ctrl.h>
 
 #include <asm/virtext.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 #include "trace.h"
 
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
@@ -1369,12 +1366,6 @@ static __init int svm_hardware_setup(void)
 	struct page *iopm_pages;
 	void *iopm_va;
 	int r;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	devirt_host_server_type = DEVIRT_HOST_SERVER_AMD;
-	devirt_nmi_ops = NULL;
-	devirt_kvm_ops = &devirt_svm_kvm_ops;
-#endif
 
 	iopm_pages = alloc_pages(GFP_KERNEL, IOPM_ALLOC_ORDER);
 
@@ -5794,29 +5785,6 @@ static void svm_cancel_injection(struct kvm_vcpu *vcpu)
 	svm_complete_interrupts(svm);
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static void svm_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
-{
-}
-
-void devirt_svm_set_msr_interception(struct kvm_vcpu *vcpu)
-{
-}
-
-struct devirt_kvm_operations devirt_svm_kvm_ops = {
-	.devirt_set_msr_interception = devirt_svm_set_msr_interception,
-	.devirt_tigger_failed_vm_entry = svm_tigger_failed_vm_entry,
-};
-
-static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)
-{
-}
-
-static void devirt_svm_exit_guest(struct kvm_vcpu *vcpu)
-{
-}
-#endif
-
 static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
@@ -5870,10 +5838,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
 
 	local_irq_enable();
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_svm_enter_guest(vcpu);
-#endif
 
 	asm volatile (
 		"push %%" _ASM_BP "; \n\t"
@@ -5996,11 +5960,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 		svm->spec_ctrl = native_read_msr(MSR_IA32_SPEC_CTRL);
 
 	reload_tss(vcpu);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm))
-		devirt_svm_exit_guest(vcpu);
-#endif
 
 	local_irq_disable();
 

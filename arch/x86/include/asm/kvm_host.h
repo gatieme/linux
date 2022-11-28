@@ -34,9 +34,6 @@
 #include <asm/kvm_page_track.h>
 #include <asm/kvm_vcpu_regs.h>
 #include <asm/hyperv-tlfs.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt_types.h>
-#endif
 
 #define __KVM_HAVE_ARCH_VCPU_DEBUGFS
 
@@ -789,11 +786,6 @@ struct kvm_vcpu_arch {
 
 	/* AMD MSRC001_0015 Hardware Configuration */
 	u64 msr_hwcr;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	/* Per-vcpu data structure for devirt */
-	struct devirt_vcpu_arch devirt;
-#endif
 };
 
 struct kvm_lpage_info {
@@ -954,11 +946,6 @@ struct kvm_arch {
 
 	struct kvm_pmu_event_filter *pmu_event_filter;
 	struct task_struct *nx_lpage_recovery_thread;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	/* Per-VM data structure for devirt */
-	struct devirt_kvm_arch devirt;
-#endif
 };
 
 struct kvm_vm_stat {

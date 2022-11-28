@@ -307,9 +307,6 @@ static DEFINE_PER_CPU(bool, swallow_nmi);
 static DEFINE_PER_CPU(unsigned long, last_nmi_rip);
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-struct devirt_nmi_operations *devirt_nmi_ops;
-EXPORT_SYMBOL(devirt_nmi_ops);
-
 DECLARE_PER_CPU(atomic64_t, devirt_ipi_pending);
 
 static int devirt_handle_nmi_IPI(struct pt_regs *regs)

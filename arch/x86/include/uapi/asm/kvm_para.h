@@ -32,8 +32,6 @@
 #define KVM_FEATURE_POLL_CONTROL	12
 #define KVM_FEATURE_PV_SCHED_YIELD	13
 
-#define KVM_FEATURE_PV_DEVIRT           31
-
 #define KVM_HINTS_REALTIME      0
 
 /* The last 8 bits are used to indicate how to interpret the flags field

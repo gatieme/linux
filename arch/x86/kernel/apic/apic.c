@@ -1156,6 +1156,7 @@ __visible void __irq_entry smp_apic_timer_interrupt(struct pt_regs *regs)
 __visible void __irq_entry smp_guest_ipi_interrupt(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
+	u8 vector = ~regs->orig_ax;
 
 	entering_ack_irq();
 	exiting_irq();
@@ -1166,6 +1167,7 @@ __visible void __irq_entry smp_guest_ipi_interrupt(struct pt_regs *regs)
 __visible void __irq_entry smp_guest_device_interrupt(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
+	u8 vector = ~regs->orig_ax;
 
 	entering_ack_irq();
 	exiting_irq();
