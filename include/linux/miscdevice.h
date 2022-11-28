@@ -38,9 +38,6 @@
 #define IRNET_MINOR		187
 #define D7S_MINOR		193
 #define VFIO_MINOR		196
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#define VFIO_DEVIRT_MINOR	197
-#endif
 #define TUN_MINOR		200
 #define CUSE_MINOR		203
 #define MWAVE_MINOR		219	/* ACP/Mwave Modem */

@@ -59,10 +59,6 @@
 #define MSR_KVM_DEVIRT_MEM_RMAP_SIZE	0x4b564dbf
 #define MSR_KVM_DEVIRT_MEM_START 0x4b564dc0
 #define MSR_KVM_DEVIRT_MEM_CONVERT 0x4b564dc1
-#define MSR_KVM_DEVIRT_CAP 0x4b564dc2
-
-#define MSR_KVM_DEVIRT_CAP_MEM_BIT 0
-#define MSR_KVM_DEVIRT_CAP_DMA_BIT 1
 
 struct kvm_steal_time {
 	__u64 steal;

@@ -10,8 +10,6 @@
  *
  */
 #include <linux/kvm_host.h>
-#include <linux/hugetlb.h>
-#include <uapi/linux/mman.h>
 #include <asm/devirt.h>
 #include <asm/apic.h>
 #include <asm/pgtable_types.h>
@@ -420,9 +418,7 @@ int devirt_mem_mapping_init(struct kvm *kvm)
 	}
 
 	nr_pinned_pages = DEVIRT_MAP_HEAD_NPAGES + (DEVIRT_MEM_MAP_MAX_SIZE >> PAGE_SHIFT)
-		 + (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT)
-		 + (DEVIRT_MEM_CONT_MAX_SIZE >> PAGE_SHIFT)
-		 + total_slots_nrpages;
+		 + (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT) + total_slots_nrpages;
 	devirt->pinned_pages =
 		(struct page **)__vmalloc(sizeof(struct page *) * nr_pinned_pages,
 			 GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
@@ -470,18 +466,6 @@ int devirt_mem_mapping_init(struct kvm *kvm)
 
 	for (i = 0; i < (DEVIRT_MEM_PT_MAX_SIZE >> PAGE_SHIFT); i++) {
 		unsigned long gfn = (DEVIRT_MEM_PT_PHYS_BASE >> PAGE_SHIFT) + i;
-
-		page = gfn_to_page(kvm, gfn);
-		if (is_error_page(page)) {
-			pr_emerg("katabm: cannot get page from gfn: 0x%lx\n", gfn);
-			r = -EFAULT;
-			goto error_free;
-		}
-		devirt->pinned_pages[devirt->cur_pinned_nrpages++] = page;
-	}
-
-	for (i = 0; i < (DEVIRT_MEM_CONT_MAX_SIZE >> PAGE_SHIFT); i++) {
-		unsigned long gfn = (DEVIRT_MEM_CONT_PHYS_BASE >> PAGE_SHIFT) + i;
 
 		page = gfn_to_page(kvm, gfn);
 		if (is_error_page(page)) {
@@ -893,7 +877,6 @@ static int devirt_mem_init(struct kvm *kvm)
 	struct devirt_kvm_arch *devirt = &kvm->arch.devirt;
 	int r = 0;
 	struct file *filp;
-	struct user_struct *user = NULL;
 
 	mutex_lock(&kvm->slots_lock);
 
@@ -942,22 +925,6 @@ static int devirt_mem_init(struct kvm *kvm)
 				    DEVIRT_MEM_PT_PHYS_BASE, DEVIRT_MEM_PT_MAX_SIZE, NULL);
 	if (r) {
 		pr_emerg("katabm: set DEVIRT_MEM_RMAP_MEMSLOT failed, %d\n", r);
-		goto out_unlock;
-	}
-
-	filp = hugetlb_file_setup(HUGETLB_ANON_FILE, DEVIRT_MEM_CONT_MAX_SIZE,
-				VM_NORESERVE,
-				&user, HUGETLB_ANONHUGE_INODE,
-				(MAP_HUGE_2MB >> MAP_HUGE_SHIFT) & MAP_HUGE_MASK);
-	if (IS_ERR(filp)) {
-		r = PTR_ERR(filp);
-		goto out_unlock;
-	}
-	devirt->hp_filp = filp;
-	r = __x86_set_memory_region(kvm, DEVIRT_MEM_CONT_MEMSLOT,
-			DEVIRT_MEM_CONT_PHYS_BASE, DEVIRT_MEM_CONT_MAX_SIZE, devirt->hp_filp);
-	if (r) {
-		pr_emerg("katabm: set DEVIRT_MEM_CONT_MEMSLOT failed, %d\n", r);
 		goto out_unlock;
 	}
 
@@ -1352,25 +1319,16 @@ void devirt_enter_guest(struct kvm_vcpu *vcpu)
 {
 }
 
-int devirt_vcpu_create(struct kvm_vcpu *vcpu)
+void devirt_vcpu_create(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
 
-	if (devirt_virtio_notify_alloc_pages(kvm))
-		goto err;
-	if (devirt_virtio_notify_setup_desc(vcpu, kvm))
-		goto err;
-	if (devirt_apic_maps_alloc_page(kvm))
-		goto err;
-	if (devirt_apic_maps_setup(vcpu, kvm))
-		goto err;
-	if (devirt_mem_init(kvm))
-		goto err;
+	devirt_virtio_notify_alloc_pages(kvm);
+	devirt_virtio_notify_setup_desc(vcpu, kvm);
+	devirt_apic_maps_alloc_page(kvm);
+	devirt_apic_maps_setup(vcpu, kvm);
+	devirt_mem_init(kvm);
 	devirt_kvm_ops->devirt_set_msr_interception(vcpu);
-
-	return 0;
-err:
-	return -1;
 }
 
 void devirt_vcpu_free(struct kvm_vcpu *vcpu)
@@ -1447,8 +1405,6 @@ void devirt_destroy_vm(struct kvm *kvm)
 	}
 	if (devirt->mem_filp)
 		filp_close(devirt->mem_filp, NULL);
-	if (devirt->hp_filp)
-		filp_close(devirt->hp_filp, NULL);
 }
 
 static inline unsigned long rmap_pfn_to_node(unsigned long pfn)

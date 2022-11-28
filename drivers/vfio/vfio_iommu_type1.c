@@ -72,9 +72,6 @@ struct vfio_iommu {
 	unsigned int		dma_avail;
 	bool			v2;
 	bool			nesting;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	bool			devirt;
-#endif
 };
 
 struct vfio_domain {
@@ -1045,11 +1042,6 @@ static int vfio_dma_do_unmap(struct vfio_iommu *iommu,
 	size_t unmapped = 0;
 	int ret = 0, retries = 0;
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (iommu->devirt)
-		return 0;
-#endif
-
 	mask = ((uint64_t)1 << __ffs(vfio_pgsize_bitmap(iommu))) - 1;
 
 	if (unmap->iova & mask)
@@ -1257,11 +1249,6 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
 	int ret = 0, prot = 0;
 	uint64_t mask;
 	struct vfio_dma *dma;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (iommu->devirt)
-		return 0;
-#endif
 
 	/* Verify that none of our __u64 fields overflow */
 	if (map->size != size || map->vaddr != vaddr || map->iova != iova)
@@ -1973,12 +1960,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
 		bus = iommu_device->bus;
 	}
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (iommu->devirt)
-		domain->domain = iommu_domain_alloc_identity(bus);
-	else
-#endif
-		domain->domain = iommu_domain_alloc(bus);
+	domain->domain = iommu_domain_alloc(bus);
 	if (!domain->domain) {
 		ret = -EIO;
 		goto out_free;
@@ -2309,23 +2291,12 @@ static void *vfio_iommu_type1_open(unsigned long arg)
 	switch (arg) {
 	case VFIO_TYPE1_IOMMU:
 		break;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case VFIO_TYPE1_IOMMU_DEVIRT:
-		iommu->devirt = true;
-		break;
-#endif
 	case VFIO_TYPE1_NESTING_IOMMU:
 		iommu->nesting = true;
 		/* fall through */
 	case VFIO_TYPE1v2_IOMMU:
 		iommu->v2 = true;
 		break;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case VFIO_TYPE1v2_IOMMU_DEVIRT:
-		iommu->v2 = true;
-		iommu->devirt = true;
-		break;
-#endif
 	default:
 		kfree(iommu);
 		return ERR_PTR(-EINVAL);
@@ -2494,10 +2465,6 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
 		case VFIO_TYPE1_IOMMU:
 		case VFIO_TYPE1v2_IOMMU:
 		case VFIO_TYPE1_NESTING_IOMMU:
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		case VFIO_TYPE1_IOMMU_DEVIRT:
-		case VFIO_TYPE1v2_IOMMU_DEVIRT:
-#endif
 			return 1;
 		case VFIO_DMA_CC_IOMMU:
 			if (!iommu)
