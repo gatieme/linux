@@ -10,13 +10,6 @@
 #ifndef _ASM_X86_DEVIRT_TYPES_H
 #define _ASM_X86_DEVIRT_TYPES_H
 
-struct devirt_vfio_irq_info {
-	int host_irq;
-	u8 vector;
-	int prev_vcpu_id;
-	struct list_head node;
-};
-
 struct devirt_vcpu_arch {
 	/* Used to record the id of pcpu where devirt vcpu runs */
 	int devirt_cpu;
@@ -25,8 +18,6 @@ struct devirt_vcpu_arch {
 	unsigned int devirt_host_tpr;
 	/* Check all vcpu not in migration */
 	int devirt_apic_maps_update_status;
-	struct list_head devirt_vfio_irq_list;
-	spinlock_t devirt_vfio_irq_lock;
 	int devirt_vfio_cpu;
 };
 

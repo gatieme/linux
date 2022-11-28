@@ -10693,68 +10693,6 @@ int kvm_arch_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static void delete_devirt_vfio_irq_info(struct kvm *kvm, unsigned int host_irq)
-{
-	struct devirt_vfio_irq_info *info, *tmp;
-	struct kvm_vcpu *vcpu;
-	int i;
-
-	kvm_for_each_vcpu(i, vcpu, kvm) {
-		struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
-		unsigned long flags;
-
-		spin_lock_irqsave(&devirt->devirt_vfio_irq_lock, flags);
-		list_for_each_entry_safe(info, tmp, &devirt->devirt_vfio_irq_list, node) {
-			if (info->host_irq != host_irq)
-				continue;
-			list_del(&info->node);
-			kfree(info);
-			break;
-		}
-		spin_unlock_irqrestore(&devirt->devirt_vfio_irq_lock, flags);
-	}
-}
-
-void delete_devirt_vfio_irq_info_by_vcpu(struct kvm_vcpu *vcpu)
-{
-	struct devirt_vfio_irq_info *info, *tmp;
-	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
-	unsigned long flags;
-
-	spin_lock_irqsave(&devirt->devirt_vfio_irq_lock, flags);
-	list_for_each_entry_safe(info, tmp, &devirt->devirt_vfio_irq_list, node) {
-		list_del(&info->node);
-		kfree(info);
-	}
-	spin_unlock_irqrestore(&devirt->devirt_vfio_irq_lock, flags);
-}
-
-static int add_devirt_vfio_irq_info(struct kvm_vcpu *vcpu, unsigned int host_irq,
-									u8 vector)
-{
-	struct devirt_vcpu_arch *devirt = vcpu_to_devirt(vcpu);
-	struct devirt_vfio_irq_info *info;
-	unsigned long flags;
-	int ret;
-
-	delete_devirt_vfio_irq_info(vcpu->kvm, host_irq);
-
-	info = kzalloc(sizeof(struct devirt_vfio_irq_info), GFP_KERNEL_ACCOUNT);
-	if (!info) {
-		ret = -ENOMEM;
-		goto out;
-	}
-	info->host_irq = host_irq;
-	info->vector = vector;
-
-	spin_lock_irqsave(&devirt->devirt_vfio_irq_lock, flags);
-	list_add(&info->node, &devirt->devirt_vfio_irq_list);
-	spin_unlock_irqrestore(&devirt->devirt_vfio_irq_lock, flags);
-
-out:
-	return ret;
-}
-
 int devirt_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 				uint32_t guest_irq, struct kvm_kernel_irq_routing_entry *e,
 				bool set)
@@ -10785,8 +10723,6 @@ int devirt_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 	WARN_ON(vcpu_to_devirt(vcpu)->devirt_vfio_cpu == -1);
 	dest_id = per_cpu(x86_cpu_to_apicid, vcpu_to_devirt(vcpu)->devirt_vfio_cpu);
 	__irq_set_devirt_affinity(host_irq, dest_id, irq.vector);
-
-	add_devirt_vfio_irq_info(vcpu, host_irq, irq.vector);
 
 	return 0;
 }
