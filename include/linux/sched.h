@@ -2028,8 +2028,4 @@ int sched_trace_rq_nr_running(struct rq *rq);
 
 const struct cpumask *sched_trace_rd_span(struct root_domain *rd);
 
-#ifdef CONFIG_BYTEDANCE_DYN_ISOLCPUS
-int dynisolcpus_migrate_tasks(void *_param);
-#endif
-
 #endif
