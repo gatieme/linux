@@ -9950,12 +9950,6 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 			if (type & VM_TYPE_DEVIRT_DMA_ENABLE)
 				kvm->devirt_feature |= DEVIRT_ENABLE_DMA;
 		}
-		if (type & VM_TYPE_DEVIRT_NOTICK_ENABLE) {
-			if (tick_nohz_full_enabled())
-				pr_info("devirt notick is not enabled as nohz_full is enabled");
-			else
-				kvm->devirt_feature |= DEVIRT_ENABLE_NOTICK;
-		}
 	}
 #endif
 

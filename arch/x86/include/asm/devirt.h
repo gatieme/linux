@@ -25,7 +25,6 @@
 #define VM_TYPE_DEVIRT_BASIC_ENABLE (1 << 0)
 #define VM_TYPE_DEVIRT_MEM_ENABLE (1 << 1)
 #define VM_TYPE_DEVIRT_DMA_ENABLE (1 << 2)
-#define VM_TYPE_DEVIRT_NOTICK_ENABLE (1 << 3)
 
 #define DEVIRT_VM_RUN_FAILED 2
 #define DEVIRT_VMENTRY_FAILED_FLAG        0x8000000000000000
@@ -78,7 +77,6 @@
 
 #define DEVIRT_ENABLE_MEM (1 << 0)
 #define DEVIRT_ENABLE_DMA (1 << 1)
-#define DEVIRT_ENABLE_NOTICK (1 << 2)
 
 /* Dvn: devirt virtio notify */
 struct kick_entry {
@@ -208,11 +206,6 @@ static inline bool devirt_enable_dma(struct kvm *kvm)
 	return kvm->devirt_feature & DEVIRT_ENABLE_DMA;
 }
 
-static inline bool devirt_enable_notick(struct kvm *kvm)
-{
-	return kvm->devirt_feature & DEVIRT_ENABLE_NOTICK;
-}
-
 static inline struct devirt_vcpu_arch *vcpu_to_devirt(struct kvm_vcpu *vcpu)
 {
 	return &vcpu->arch.devirt;
@@ -249,8 +242,6 @@ DECLARE_PER_CPU(struct devirt_guest_irq_pending, devirt_guest_irq_pending);
 
 extern struct cpumask cpu_devirt_mask;
 extern struct cpumask nmi_ipi_mask;
-
-extern struct cpumask devirt_notick_mask;
 
 extern void devirt_memory_init_mmu_ops(struct kvm_vcpu *vcpu);
 extern void devirt_vmx_disable_pf_trap(struct kvm_vcpu *vcpu);
@@ -323,9 +314,4 @@ extern void default_send_IPI_to_devirt_guest(int cpu, int vector);
 extern int  devirt_x2apic_enabled(void);
 extern int  devirt_xapic_msr_read(struct kvm_vcpu *vcpu, u32 msr, u64 *data);
 extern int  devirt_xapic_msr_write(struct kvm_vcpu *vcpu, u32 msr, u64 data);
-
-void devirt_enter_stop_tick(void);
-void devirt_exit_restart_tick(void);
-noinstr void rcu_devirt_enter(void);
-void rcu_devirt_exit(void);
 #endif /* _ASM_X86_DEVIRT_H */
