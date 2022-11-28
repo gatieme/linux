@@ -8,9 +8,6 @@
 #include <linux/slab.h>
 #include <linux/cpu.h>
 #include <linux/sort.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 static void irq_spread_init_one(struct cpumask *irqmsk, struct cpumask *nmsk,
 				unsigned int cpus_per_vec)
@@ -270,11 +267,7 @@ static int __irq_build_affinity_masks(unsigned int startvec,
 	 * If the number of nodes in the mask is greater than or equal the
 	 * number of vectors we just spread the vectors across the nodes.
 	 */
-	if (numvecs <= nodes
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 && cpumask_empty(&devirt_managed_irq_mask)
-#endif
-	 ) {
+	if (numvecs <= nodes) {
 		for_each_node_mask(n, nodemsk) {
 			/* Ensure that only CPUs which are in both masks are set */
 			cpumask_and(nmsk, cpu_mask, node_to_cpumask[n]);
@@ -351,20 +344,12 @@ static int irq_build_affinity_masks(unsigned int startvec, unsigned int numvecs,
 	cpumask_var_t *node_to_cpumask;
 	cpumask_var_t nmsk, npresmsk;
 	int ret = -ENOMEM;
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	cpumask_var_t devirt_cpu_mask;
-#endif
 
 	if (!zalloc_cpumask_var(&nmsk, GFP_KERNEL))
 		return ret;
 
 	if (!zalloc_cpumask_var(&npresmsk, GFP_KERNEL))
 		goto fail_nmsk;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (!zalloc_cpumask_var(&devirt_cpu_mask, GFP_KERNEL))
-		goto fail_devirtmask;
-#endif
 
 	node_to_cpumask = alloc_node_to_cpumask();
 	if (!node_to_cpumask)
@@ -374,22 +359,9 @@ static int irq_build_affinity_masks(unsigned int startvec, unsigned int numvecs,
 	get_online_cpus();
 	build_node_to_cpumask(node_to_cpumask);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (!cpumask_empty(&devirt_managed_irq_mask))
-		cpumask_and(devirt_cpu_mask, &devirt_managed_irq_mask,
-			cpu_present_mask);
-	else
-		cpumask_copy(devirt_cpu_mask, cpu_present_mask);
-#endif
-
 	/* Spread on present CPUs starting from affd->pre_vectors */
 	ret = __irq_build_affinity_masks(curvec, numvecs, firstvec,
-					 node_to_cpumask,
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-					 devirt_cpu_mask,
-#else
-					 cpu_present_mask,
-#endif
+					 node_to_cpumask, cpu_present_mask,
 					 nmsk, masks);
 	if (ret < 0)
 		goto fail_build_affinity;
@@ -423,32 +395,10 @@ static int irq_build_affinity_masks(unsigned int startvec, unsigned int numvecs,
  fail_npresmsk:
 	free_cpumask_var(npresmsk);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
- fail_devirtmask:
-	free_cpumask_var(devirt_cpu_mask);
-#endif
-
  fail_nmsk:
 	free_cpumask_var(nmsk);
 	return ret < 0 ? ret : 0;
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-struct cpumask devirt_managed_irq_mask;
-static int __init devirt_managed_irq_cpus_setup(char *str)
-{
-	int err;
-
-	err = cpulist_parse(str, &devirt_managed_irq_mask);
-	if (err < 0 || cpumask_last(&devirt_managed_irq_mask) >= nr_cpu_ids) {
-		pr_warn("devirt_host_cpus= incorrect CPU range\n");
-		return 0;
-	}
-
-	return 1;
-}
-__setup("managed_irq_cpus=", devirt_managed_irq_cpus_setup);
-#endif
 
 static void default_calc_sets(struct irq_affinity *affd, unsigned int affvecs)
 {

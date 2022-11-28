@@ -211,9 +211,6 @@ extern bool devirt_host_system_interrupt_pending(void);
 
 void delete_devirt_vfio_irq_info_by_vcpu(struct kvm_vcpu *vcpu);
 
-extern unsigned int devirt_num_cpus_for_device(void);
-extern struct cpumask devirt_managed_irq_mask;
-
 extern void devirt_enter_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_exit_guest_irqoff(struct kvm_vcpu *vcpu);
 extern void devirt_enter_guest(struct kvm_vcpu *vcpu);

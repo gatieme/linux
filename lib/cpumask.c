@@ -6,9 +6,6 @@
 #include <linux/export.h>
 #include <linux/memblock.h>
 #include <linux/numa.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 /**
  * cpumask_next - get the next cpu in a cpumask
@@ -237,25 +234,6 @@ unsigned int cpumask_local_spread(unsigned int i, int node)
 EXPORT_SYMBOL(cpumask_local_spread);
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-/*
- * devirt_num_cpus_for_device() - Return the number of CPUs for host device
- *
- * When devirt_managed_irq_mask isnot empty, the number of CPUs for host device
- * is equal to devirt_host_cpus. If not, the number is the all online cpus.
- */
-unsigned int devirt_num_cpus_for_device(void)
-{
-	int cpu, num = 0;
-
-	if (cpumask_empty(&devirt_managed_irq_mask))
-		return num_possible_cpus();
-
-	for_each_cpu(cpu, &devirt_managed_irq_mask)
-		num++;
-	return num;
-}
-EXPORT_SYMBOL(devirt_num_cpus_for_device);
-
 struct cpumask devirt_virtio_notify_mask;
 EXPORT_SYMBOL(devirt_virtio_notify_mask);
 static int __init devirt_notify_cpus_setup(char *str)
@@ -272,4 +250,3 @@ static int __init devirt_notify_cpus_setup(char *str)
 }
 __setup("devirt_notify_cpus=", devirt_notify_cpus_setup);
 #endif
-
