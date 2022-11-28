@@ -57,14 +57,6 @@ static void vmx_disable_apic_icr(struct kvm_vcpu *vcpu)
 	devirt_vmx_disable_intercept_for_msr(msr_bitmap, X2APIC_MSR(APIC_ICR), MSR_TYPE_RW);
 }
 
-static void vmx_notify_tsc_offset(struct kvm_vcpu *vcpu)
-{
-	struct kvm *kvm = vcpu->kvm;
-	struct apic_maps *maps = kvm->arch.devirt.apic_maps;
-
-	maps->entries[vcpu->vcpu_id].tsc_offset = vmcs_read64(TSC_OFFSET);
-}
-
 bool vmx_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
 {
 	u32 intr_info = vmcs_read32(VM_ENTRY_INTR_INFO_FIELD);
@@ -88,7 +80,6 @@ int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 
 	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
 		apic->send_IPI_self(injected_vector);
-	vmx_notify_tsc_offset(vcpu);
 
 	*this_cpu_ptr(&devirt_in_guest) = 1;
 	/* Make sure the write is comleted before the execution of

@@ -88,11 +88,6 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
 		best->edx |= F(APIC);
 
 	if (apic) {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (devirt_enable(vcpu->kvm) &&
-			devirt_host_server_type == DEVIRT_HOST_SERVER_AMD)
-			best->ecx &= ~F(TSC_DEADLINE_TIMER);
-#endif
 		if (best->ecx & F(TSC_DEADLINE_TIMER))
 			apic->lapic_timer.timer_mode_mask = 3 << 17;
 		else

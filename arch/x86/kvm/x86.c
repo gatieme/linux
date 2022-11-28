@@ -1843,16 +1843,6 @@ static int set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz, bool scale)
 {
 	u64 ratio;
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-    /* The passthrough of tscdeadline mode timer requires Guest TSC keeps same
-     * frequency as host TSC.
-     */
-	if (devirt_enable_intel(vcpu->kvm)) {
-		vcpu->arch.tsc_scaling_ratio = kvm_default_tsc_scaling_ratio;
-		return 0;
-	}
-#endif
-
 	/* Guest TSC same frequency as host TSC? */
 	if (!scale) {
 		vcpu->arch.tsc_scaling_ratio = kvm_default_tsc_scaling_ratio;

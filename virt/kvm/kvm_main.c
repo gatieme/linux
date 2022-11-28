@@ -93,6 +93,9 @@ unsigned int halt_poll_ns_shrink;
 module_param(halt_poll_ns_shrink, uint, 0644);
 EXPORT_SYMBOL_GPL(halt_poll_ns_shrink);
 
+unsigned int kvm_devirt_enable = true;
+module_param(kvm_devirt_enable, uint, 0644);
+
 /*
  * Ordering of locks:
  *
