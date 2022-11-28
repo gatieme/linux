@@ -8563,18 +8563,11 @@ out:
 static inline int vcpu_block(struct kvm *kvm, struct kvm_vcpu *vcpu)
 {
 	if (!kvm_arch_vcpu_runnable(vcpu) &&
-	    (!kvm_x86_ops->pre_block || kvm_x86_ops->pre_block(vcpu) == 0)
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		&& devirt_pre_block(vcpu) == 0
-#endif
-		) {
+	    (!kvm_x86_ops->pre_block || kvm_x86_ops->pre_block(vcpu) == 0)) {
 		srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
 		kvm_vcpu_block(vcpu);
 		vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		devirt_post_block(vcpu);
-#endif
 		if (kvm_x86_ops->post_block)
 			kvm_x86_ops->post_block(vcpu);
 
@@ -10256,11 +10249,6 @@ static inline bool kvm_vcpu_has_events(struct kvm_vcpu *vcpu)
 
 	if (kvm_hv_has_stimer_pending(vcpu))
 		return true;
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(vcpu->kvm) && devirt_has_guest_interrupt(vcpu))
-		return true;
-#endif
 
 	return false;
 }

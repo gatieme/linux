@@ -1701,13 +1701,6 @@ static void init_vmcb(struct vcpu_svm *svm)
 		clr_exception_intercept(svm, UD_VECTOR);
 	}
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (devirt_enable(svm->vcpu.kvm)) {
-		clr_intercept(svm, INTERCEPT_INTR);
-		svm->vmcb->control.int_ctl &= ~V_INTR_MASKING_MASK;
-	}
-#endif
-
 	mark_all_dirty(svm->vmcb);
 
 	enable_gif(svm);
@@ -5802,24 +5795,6 @@ static void svm_cancel_injection(struct kvm_vcpu *vcpu)
 }
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-static bool svm_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
-{
-	struct vcpu_svm *svm = to_svm(vcpu);
-	struct vmcb_control_area *control;
-	u32 info;
-
-	control = &svm->vmcb->control;
-	info = control->event_inj;
-
-	if (is_external_interrupt(info)) {
-		apic_extirq_clear(vcpu);
-		control->event_inj &= ~SVM_EVTINJ_VALID;
-		*v = info & SVM_EVTINJ_VEC_MASK;
-		return true;
-	}
-	return false;
-}
-
 static void svm_tigger_failed_vm_entry(struct kvm_vcpu *vcpu)
 {
 }
@@ -5835,13 +5810,6 @@ struct devirt_kvm_operations devirt_svm_kvm_ops = {
 
 static void devirt_svm_enter_guest(struct kvm_vcpu *vcpu)
 {
-	u32 injected_vector = 0;
-
-	if (devirt_host_system_interrupt_pending())
-		svm_tigger_failed_vm_entry(vcpu);
-
-	if (svm_extirq_get_and_clear(vcpu, &injected_vector))
-		apic->send_IPI_self(injected_vector);
 }
 
 static void devirt_svm_exit_guest(struct kvm_vcpu *vcpu)

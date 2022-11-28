@@ -15,30 +15,9 @@
 #include "ops.h"
 #include "vmx.h"
 
-bool vmx_extirq_get_and_clear(struct kvm_vcpu *vcpu, u32 *v)
-{
-	u32 intr_info = vmcs_read32(VM_ENTRY_INTR_INFO_FIELD);
-
-	if (is_external_intr(intr_info)) {
-		apic_extirq_clear(vcpu);
-		vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr_info & ~INTR_INFO_VALID_MASK);
-		*v = intr_info & INTR_INFO_VECTOR_MASK;
-		return true;
-	}
-
-	return false;
-}
-
-static DEFINE_PER_CPU(int, devirt_in_guest);
-
 int devirt_vmx_enter_guest(struct kvm_vcpu *vcpu)
 {
-	u32 injected_vector;
-
-	if (vmx_extirq_get_and_clear(vcpu, &injected_vector))
-		apic->send_IPI_self(injected_vector);
-
-	return devirt_host_system_interrupt_pending();
+	return 0;
 }
 
 void devirt_vmx_exit_guest(struct kvm_vcpu *vcpu)

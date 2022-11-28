@@ -1182,24 +1182,6 @@ static int apic_set_eoi(struct kvm_lapic *apic)
 	return vector;
 }
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-int apic_extirq_clear(struct kvm_vcpu *vcpu)
-{
-	struct kvm_lapic *apic = vcpu->arch.apic;
-	int vector = apic_find_highest_isr(apic);
-
-	if (vector == -1)
-		return vector;
-
-	apic_clear_isr(vector, apic);
-	apic_update_ppr(apic);
-	kvm_ioapic_send_eoi(apic, vector);
-
-	return vector;
-}
-EXPORT_SYMBOL(apic_extirq_clear);
-#endif
-
 /*
  * this interface assumes a trap-like exit, which has already finished
  * desired side effect including vISR and vPPR update.
