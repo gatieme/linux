@@ -205,9 +205,4 @@ config GENERIC_ARCH_TOPOLOGY
 	  appropriate scaling, sysfs interface for reading capacity values at
 	  runtime.
 
-config BYTEDANCE_DYN_ISOLCPUS
-	bool "Isolating CPU at runtime"
-	depends on SMP
-	help
-	  This option allows the CPU to be isolated on-demand at runtime.
 endmenu
