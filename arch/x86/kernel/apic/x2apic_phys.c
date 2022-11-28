@@ -2,9 +2,6 @@
 
 #include <linux/cpumask.h>
 #include <linux/acpi.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "local.h"
 
@@ -71,7 +68,7 @@ static void x2apic_send_IPI(int cpu, int vector)
 	u32 dest = per_cpu(x86_cpu_to_apicid, cpu);
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (vector != NMI_VECTOR && cpumask_test_cpu(cpu, &nmi_ipi_mask)) {
+	if (cpumask_test_cpu(cpu, &nmi_ipi_mask)) {
 		if (devirt_set_ipi_pending(cpu, vector))
 			return;
 		vector = NMI_VECTOR;
@@ -102,7 +99,7 @@ __x2apic_send_IPI_mask(const struct cpumask *mask, int vector, int apic_dest)
 			continue;
 
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (vector != NMI_VECTOR && cpumask_test_cpu(query_cpu, &nmi_ipi_mask)) {
+		if (cpumask_test_cpu(query_cpu, &nmi_ipi_mask)) {
 			if (devirt_set_ipi_pending(query_cpu, vector))
 				continue;
 			vector_tmp = NMI_VECTOR;
@@ -235,24 +232,8 @@ int x2apic_phys_pkg_id(int initial_apicid, int index_msb)
 
 void x2apic_send_IPI_self(int vector)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	struct devirt_nmi_operations *ops = devirt_nmi_ops;
-
-	/* x2apic_send_IPI_self() would be called in NMI handler. So we must prevent
-	 * the self IPI from being sent to guest mode.
-	 */
-	if (ops && ops->devirt_in_guest_mode())
-		ops->devirt_tigger_failed_vm_entry(NULL);
-#endif
 	apic_write(APIC_SELF_IPI, vector);
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void x2apic_send_IPI_self_devirt(int vector)
-{
-	apic_write(APIC_SELF_IPI, vector);
-}
-#endif
 
 static struct apic apic_x2apic_phys __ro_after_init = {
 
@@ -289,9 +270,6 @@ static struct apic apic_x2apic_phys __ro_after_init = {
 	.send_IPI_allbutself		= x2apic_send_IPI_allbutself,
 	.send_IPI_all			= x2apic_send_IPI_all,
 	.send_IPI_self			= x2apic_send_IPI_self,
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	.send_IPI_self_devirt			= x2apic_send_IPI_self_devirt,
-#endif
 
 	.inquire_remote_apic		= NULL,
 

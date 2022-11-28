@@ -296,9 +296,6 @@ struct apic {
 	void	(*send_IPI_allbutself)(int vector);
 	void	(*send_IPI_all)(int vector);
 	void	(*send_IPI_self)(int vector);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	void	(*send_IPI_self_devirt)(int vector);
-#endif
 
 	/* dest_logical is used by the IPI functions */
 	u32	dest_logical;

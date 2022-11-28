@@ -335,9 +335,9 @@ static int devirt_handle_nmi_IPI(struct pt_regs *regs)
 				 * in host immediately.
 				 */
 				ops->devirt_tigger_failed_vm_entry(NULL);
-				apic->send_IPI_self_devirt(vector);
+				apic->send_IPI_self(vector);
 			} else
-				apic->send_IPI_self_devirt(vector);
+				apic->send_IPI_self(vector);
 		}
 		return NMI_HANDLED;
 	}
@@ -346,8 +346,6 @@ static int devirt_handle_nmi_IPI(struct pt_regs *regs)
 
 struct cpumask nmi_ipi_mask;
 EXPORT_SYMBOL(nmi_ipi_mask);
-unsigned long nmi_ipi_mask_change_timeout;
-EXPORT_SYMBOL(nmi_ipi_mask_change_timeout);
 static int __init nmi_ipi_cpus_setup(char *str)
 {
 	int err;
@@ -361,13 +359,6 @@ static int __init nmi_ipi_cpus_setup(char *str)
 	return 1;
 }
 __setup("nmi_ipi_cpus=", nmi_ipi_cpus_setup);
-
-static inline unsigned long get_nmi_ipi_mask_change_timeout(void)
-{
-	/* Pairs with smp_wmb in dyn_nmi_ipi_store */
-	smp_rmb();
-	return nmi_ipi_mask_change_timeout;
-}
 #endif
 
 static void default_do_nmi(struct pt_regs *regs)
@@ -477,29 +468,10 @@ static void default_do_nmi(struct pt_regs *regs)
 	 */
 	if (b2b && __this_cpu_read(swallow_nmi))
 		__this_cpu_add(nmi_stats.swallow, 1);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	/* If this cpu is in nmi_ipi_mask, the unknown NMIs are normal.
-	 * Considering the case that two other cpus concurrently send two NMIs
-	 * to this cpu and the NMI handler triggered by the first NMI handles
-	 * both pending requests in devirt_ipi_pending and so the sencond NMI
-	 * becomes unknown. To handle this, we swallow any unknown NMIs when the
-	 * cpu is in nmi_ipi_mask.
-	 */
-	else if (cpumask_test_cpu(smp_processor_id(), &nmi_ipi_mask))
-		return;
-	/* When the bit in nmi_ipi_mask is changed from one to zero, we may also
-	 * accidentally get a unknown NMI. Considering the case that the NMI is
-	 * just ready to be sent at sending core, but not be received on the recieving
-	 * core. At this moment, the corresponding bit in nmi_ipi_mask is changed to
-	 * zero. To handle this, we swallow any unknown NMIs within one second after
-	 * the change. One second is long enough for the NMI to be received and handled,
-	 * since the whole process is atomic.
-	 */
-	else if (ktime_get_ns() < get_nmi_ipi_mask_change_timeout())
-		return;
-#endif
+#ifndef CONFIG_BYTEDANCE_KVM_DEVIRT
 	else
 		unknown_nmi_error(reason, regs);
+#endif
 }
 NOKPROBE_SYMBOL(default_do_nmi);
 
@@ -594,6 +566,10 @@ NOKPROBE_SYMBOL(is_debug_stack);
 dotraplinkage notrace void
 do_nmi(struct pt_regs *regs, long error_code)
 {
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+	devirt_handle_nmi_IPI(regs);
+#endif
+
 	if (IS_ENABLED(CONFIG_SMP) && cpu_is_offline(smp_processor_id()))
 		return;
 
@@ -620,14 +596,6 @@ nmi_restart:
 
 	nmi_enter();
 
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	/* Since devirt_handle_nmi_IPI is not defined as notrace, it must be executed
-	 * after the judgement of is_debug_stack. Otherwise, the DB-NMI-DB triggered
-	 * in devirt_handle_nmi_IPI will corrupted the DB exception stack.
-	 */
-	devirt_handle_nmi_IPI(regs);
-#endif
-
 	inc_irq_stat(__nmi_count);
 
 	if (!ignore_nmis)
@@ -651,17 +619,6 @@ nmi_restart:
 		mds_user_clear_cpu_buffers();
 }
 NOKPROBE_SYMBOL(do_nmi);
-
-#if defined(CONFIG_X86_64) && IS_ENABLED(CONFIG_KVM_INTEL)
-__visible notrace void do_nmi_noist(struct pt_regs *regs)
-{
-	do_nmi(regs, -1);
-}
-#endif
-#if IS_MODULE(CONFIG_KVM_INTEL)
-void nmi_noist(void);
-EXPORT_SYMBOL_GPL(nmi_noist);
-#endif
 
 void stop_nmi(void)
 {
