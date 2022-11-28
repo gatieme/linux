@@ -56,9 +56,6 @@
 #include <asm/ioctl.h>
 #include <linux/uaccess.h>
 #include <asm/pgtable.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 
 #include "coalesced_mmio.h"
 #include "async_pf.h"
@@ -3986,44 +3983,6 @@ int kvm_io_bus_write(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx, gpa_t addr,
 	return r < 0 ? r : 0;
 }
 EXPORT_SYMBOL_GPL(kvm_io_bus_write);
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-int kvm_io_bus_handler(struct kvm *kvm, enum kvm_bus bus_idx,
-		       gpa_t addr, int len, const void *val)
-{
-	struct kvm_io_bus *bus;
-	struct kvm_io_range range;
-	struct kvm_vcpu *vcpu;
-	int idx, r;
-
-	range = (struct kvm_io_range) {
-		.addr = addr,
-		.len = len,
-	};
-	bus = srcu_dereference(kvm->buses[bus_idx], &kvm->srcu);
-	if (!bus)
-		return -ENOMEM;
-
-	idx = kvm_io_bus_get_first_dev(bus, range.addr, range.len);
-
-	if (idx < 0)
-		return -EOPNOTSUPP;
-
-	while (idx < bus->dev_count &&
-	       kvm_io_bus_cmp(&range, &bus->range[idx]) == 0) {
-		struct kvm_io_device *dev = bus->range[idx].dev;
-
-		if (dev->ops->write) {
-			r = dev->ops->write(vcpu, dev, range.addr, range.len, val);
-			if (r == 0)
-				return 0;
-		}
-		idx++;
-	}
-
-	return -1;
-}
-#endif
 
 /* kvm_io_bus_write_cookie - called under kvm->slots_lock */
 int kvm_io_bus_write_cookie(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx,

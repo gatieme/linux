@@ -7668,9 +7668,6 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = 0;
 		break;
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	case KVM_HC_DEVIRT_IOEVENTFD_CHECK:
-		ret = devirt_virtio_notify(vcpu->kvm, a0, a1, a2);
-		break;
 	case KVM_HC_DEVIRT_ICR_WRITE:
 		kvm_x2apic_msr_write(vcpu, a0, a1);
 		break;
