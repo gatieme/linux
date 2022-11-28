@@ -1816,11 +1816,7 @@ void kvm_arch_mmu_enable_log_dirty_pt_masked(struct kvm *kvm,
 				struct kvm_memory_slot *slot,
 				gfn_t gfn_offset, unsigned long mask)
 {
-	if (kvm_x86_ops->enable_log_dirty_pt_masked
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 && !devirt_enable(kvm)
-#endif
-	 )
+	if (kvm_x86_ops->enable_log_dirty_pt_masked)
 		kvm_x86_ops->enable_log_dirty_pt_masked(kvm, slot, gfn_offset,
 				mask);
 	else
@@ -4506,14 +4502,6 @@ static inline bool is_last_gpte(struct kvm_mmu *mmu,
 }
 
 #define PTTYPE_EPT 18 /* arbitrary */
-#define PTTYPE_DEVIRT 19 /* arbitrary */
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#define PTTYPE PTTYPE_DEVIRT
-#include "paging_tmpl.h"
-#undef PTTYPE
-#endif
-
 #define PTTYPE PTTYPE_EPT
 #include "paging_tmpl.h"
 #undef PTTYPE
@@ -5065,22 +5053,12 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
 		context->root_level = is_la57_mode(vcpu) ?
 				PT64_ROOT_5LEVEL : PT64_ROOT_4LEVEL;
 		reset_rsvds_bits_mask(vcpu, context);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (vcpu_to_devirt(vcpu)->devirt_mem_start)
-			context->gva_to_gpa = devirt_gva_to_gpa;
-		else
-#endif
-			context->gva_to_gpa = paging64_gva_to_gpa;
+		context->gva_to_gpa = paging64_gva_to_gpa;
 	} else if (is_pae(vcpu)) {
 		context->nx = is_nx(vcpu);
 		context->root_level = PT32E_ROOT_LEVEL;
 		reset_rsvds_bits_mask(vcpu, context);
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		if (vcpu_to_devirt(vcpu)->devirt_mem_start)
-			context->gva_to_gpa = devirt_gva_to_gpa;
-		else
-#endif
-			context->gva_to_gpa = paging64_gva_to_gpa;
+		context->gva_to_gpa = paging64_gva_to_gpa;
 	} else {
 		context->nx = false;
 		context->root_level = PT32_ROOT_LEVEL;
@@ -6523,10 +6501,3 @@ void kvm_mmu_pre_destroy_vm(struct kvm *kvm)
 	if (kvm->arch.nx_lpage_recovery_thread)
 		kthread_stop(kvm->arch.nx_lpage_recovery_thread);
 }
-
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-void devirt_memory_init_mmu_ops(struct kvm_vcpu *vcpu)
-{
-	vcpu->arch.walk_mmu->gva_to_gpa = devirt_gva_to_gpa;
-}
-#endif

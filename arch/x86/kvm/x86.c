@@ -2969,12 +2969,6 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_KVM_DEVIRT_VIRTIO_NOTIFY:
 	case MSR_KVM_DEVIRT_APIC_MAPS:
 		break;
-	case MSR_KVM_DEVIRT_MEM_START:
-		devirt_mem_start(vcpu, data);
-		break;
-	case MSR_KVM_DEVIRT_MEM_CONVERT:
-		devirt_mem_convert(vcpu, data);
-		break;
 #endif
 	case MSR_KVM_POLL_CONTROL:
 		/* only enable bit supported */
@@ -3233,12 +3227,6 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_KVM_DEVIRT_APIC_MAPS:
 		msr_info->data = vcpu->kvm->arch.devirt.apic_maps_msr_val;
-		break;
-	case MSR_KVM_DEVIRT_MEM_MAP_SIZE:
-		msr_info->data = vcpu->kvm->arch.devirt.map_total_size;
-		break;
-	case MSR_KVM_DEVIRT_MEM_RMAP_SIZE:
-		msr_info->data = vcpu->kvm->arch.devirt.rmap_size;
 		break;
 #endif
 	case MSR_KVM_POLL_CONTROL:
@@ -4916,11 +4904,7 @@ int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log)
 	/*
 	 * Flush potentially hardware-cached dirty pages to dirty_bitmap.
 	 */
-	if (kvm_x86_ops->flush_log_dirty
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 && !devirt_enable(kvm)
-#endif
-	 )
+	if (kvm_x86_ops->flush_log_dirty)
 		kvm_x86_ops->flush_log_dirty(kvm);
 
 	r = kvm_get_dirty_log_protect(kvm, log, &flush);
@@ -4947,11 +4931,7 @@ int kvm_vm_ioctl_clear_dirty_log(struct kvm *kvm, struct kvm_clear_dirty_log *lo
 	/*
 	 * Flush potentially hardware-cached dirty pages to dirty_bitmap.
 	 */
-	if (kvm_x86_ops->flush_log_dirty
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	 && !devirt_enable(kvm)
-#endif
-	 )
+	if (kvm_x86_ops->flush_log_dirty)
 		kvm_x86_ops->flush_log_dirty(kvm);
 
 	r = kvm_clear_dirty_log_protect(kvm, log, &flush);
@@ -7037,9 +7017,6 @@ restart:
 
 	return r;
 }
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-EXPORT_SYMBOL_GPL(x86_emulate_instruction);
-#endif
 
 int kvm_emulate_instruction(struct kvm_vcpu *vcpu, int emulation_type)
 {
@@ -7530,7 +7507,8 @@ void kvm_arch_exit(void)
 #endif
 	kvm_x86_ops = NULL;
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	devirt_exit();
+	devirt_kvm_ops = NULL;
+	devirt_nmi_ops = NULL;
 #endif
 	kvm_mmu_module_exit();
 	free_percpu(shared_msrs);
@@ -7709,10 +7687,6 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 	case KVM_HC_DEVIRT_GLOBAL_RIP:
 		vcpu->kvm->devirt_apic_rip_start = a0;
 		vcpu->kvm->devirt_apic_rip_end = a1;
-		break;
-	case KVM_HC_DEVIRT_PF_HANDLER:
-		devirt_kvm_ops->devirt_enable_pf_trap(vcpu);
-		ret = 0;
 		break;
 #endif
 	default:
@@ -9736,9 +9710,7 @@ int kvm_arch_hardware_setup(void)
 
 	kvm_init_msr_list();
 #ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	r = devirt_init();
-	if (r != 0)
-		return r;
+	devirt_init();
 #endif
 	return 0;
 }
@@ -9977,7 +9949,7 @@ void kvm_arch_sync_events(struct kvm *kvm)
 	kvm_free_pit(kvm);
 }
 
-int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u64 size, struct file *filp)
+int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 {
 	int i, r;
 	unsigned long hva;
@@ -9997,12 +9969,8 @@ int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u64 size, struct
 		 * MAP_SHARED to prevent internal slot pages from being moved
 		 * by fork()/COW.
 		 */
-		if (filp)
-			hva = vm_mmap(filp, 0, size, PROT_READ | PROT_WRITE,
-					  MAP_SHARED, 0);
-		else
-			hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
-					  MAP_SHARED | MAP_ANONYMOUS, 0);
+		hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
+			      MAP_SHARED | MAP_ANONYMOUS, 0);
 		if (IS_ERR((void *)hva))
 			return PTR_ERR((void *)hva);
 	} else {
@@ -10038,7 +10006,7 @@ int x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 	int r;
 
 	mutex_lock(&kvm->slots_lock);
-	r = __x86_set_memory_region(kvm, id, gpa, size, NULL);
+	r = __x86_set_memory_region(kvm, id, gpa, size);
 	mutex_unlock(&kvm->slots_lock);
 
 	return r;
@@ -10067,6 +10035,12 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 		x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
 		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
+#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
+		if (devirt_enable(kvm)) {
+			x86_set_memory_region(kvm, DEVIRT_VIRTIO_NOTIFY_MEMOSLOT, 0, 0);
+			x86_set_memory_region(kvm, DEVIRT_APIC_MAPS_PRIVATE_MEMSLOT, 0, 0);
+		}
+#endif
 	}
 	if (kvm_x86_ops->vm_destroy)
 		kvm_x86_ops->vm_destroy(kvm);
@@ -10243,20 +10217,12 @@ static void kvm_mmu_slot_apply_flags(struct kvm *kvm,
 	 * See the comments in fast_page_fault().
 	 */
 	if (new->flags & KVM_MEM_LOG_DIRTY_PAGES) {
-		if (kvm_x86_ops->slot_enable_log_dirty
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		 && !devirt_enable(kvm)
-#endif
-		 )
+		if (kvm_x86_ops->slot_enable_log_dirty)
 			kvm_x86_ops->slot_enable_log_dirty(kvm, new);
 		else
 			kvm_mmu_slot_remove_write_access(kvm, new);
 	} else {
-		if (kvm_x86_ops->slot_disable_log_dirty
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-		 && !devirt_enable(kvm)
-#endif
-		 )
+		if (kvm_x86_ops->slot_disable_log_dirty)
 			kvm_x86_ops->slot_disable_log_dirty(kvm, new);
 	}
 }

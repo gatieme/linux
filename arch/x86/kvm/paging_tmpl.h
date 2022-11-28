@@ -68,24 +68,6 @@
 	#ifdef CONFIG_X86_64
 	#define CMPXCHG "cmpxchgq"
 	#endif
-#elif PTTYPE == PTTYPE_DEVIRT
-	#define pt_element_t u64
-	#define guest_walker guest_walkerDEVIRT
-	#define FNAME(name) devirt_##name
-	#define PT_BASE_ADDR_MASK PT64_BASE_ADDR_MASK
-	#define PT_LVL_ADDR_MASK(lvl) PT64_LVL_ADDR_MASK(lvl)
-	#define PT_LVL_OFFSET_MASK(lvl) PT64_LVL_OFFSET_MASK(lvl)
-	#define PT_INDEX(addr, level) PT64_INDEX(addr, level)
-	#define PT_LEVEL_BITS PT64_LEVEL_BITS
-	#define PT_GUEST_DIRTY_SHIFT PT_DIRTY_SHIFT
-	#define PT_GUEST_ACCESSED_SHIFT PT_ACCESSED_SHIFT
-	#define PT_HAVE_ACCESSED_DIRTY(mmu) false
-	#ifdef CONFIG_X86_64
-	#define PT_MAX_FULL_LEVELS PT64_ROOT_MAX_LEVEL
-	#define CMPXCHG "cmpxchgq"
-	#else
-	#define PT_MAX_FULL_LEVELS 2
-	#endif
 #else
 	#error Invalid PTTYPE value
 #endif
@@ -114,19 +96,6 @@ struct guest_walker {
 	gfn_t gfn;
 	struct x86_exception fault;
 };
-
-#if PTTYPE == PTTYPE_DEVIRT
-static gfn_t devirt_pfn_to_gfn(struct kvm_vcpu *vcpu, gfn_t pfn)
-{
-	struct devirt_kvm_arch *devirt = &vcpu->kvm->arch.devirt;
-	gfn_t gfn, *p = (gfn_t *)devirt->rmap;
-
-	if (__get_user(gfn, p + (unsigned long)pfn))
-		gfn = ~0;
-
-	return gfn;
-}
-#endif
 
 static gfn_t gpte_to_gfn_lvl(pt_element_t gpte, int lvl)
 {
@@ -199,7 +168,6 @@ static int FNAME(cmpxchg_gpte)(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 	return r;
 }
 
-#if PTTYPE != PTTYPE_DEVIRT
 static bool FNAME(prefetch_invalid_gpte)(struct kvm_vcpu *vcpu,
 				  struct kvm_mmu_page *sp, u64 *spte,
 				  u64 gpte)
@@ -221,7 +189,6 @@ no_present:
 	drop_spte(vcpu->kvm, spte);
 	return true;
 }
-#endif
 
 /*
  * For PTTYPE_EPT, a page table can be executable but not readable
@@ -348,11 +315,7 @@ static int FNAME(walk_addr_generic)(struct guest_walker *walker,
 	trace_kvm_mmu_pagetable_walk(addr, access);
 retry_walk:
 	walker->level = mmu->root_level;
-#if PTTYPE == PTTYPE_DEVIRT
-	pte = devirt_kvm_ops->devirt_guest_cr3(vcpu);
-#else
 	pte           = mmu->get_cr3(vcpu);
-#endif
 	have_ad       = PT_HAVE_ACCESSED_DIRTY(mmu);
 
 #if PTTYPE == 64
@@ -394,12 +357,6 @@ retry_walk:
 		walker->table_gfn[walker->level - 1] = table_gfn;
 		walker->pte_gpa[walker->level - 1] = pte_gpa;
 
-#if PTTYPE == PTTYPE_DEVIRT
-		table_gfn = devirt_pfn_to_gfn(vcpu, table_gfn);
-		if (unlikely(table_gfn == ~0))
-			return 0;
-#endif
-
 		real_gfn = mmu->translate_gpa(vcpu, gfn_to_gpa(table_gfn),
 					      nested_access,
 					      &walker->fault);
@@ -427,12 +384,6 @@ retry_walk:
 		ptep_user = (pt_element_t __user *)((void *)host_addr + offset);
 		if (unlikely(__copy_from_user(&pte, ptep_user, sizeof(pte))))
 			goto error;
-
-#if PTTYPE == PTTYPE_DEVIRT
-		if (pte & _PAGE_SOFTW3)
-			pte |= _PAGE_PRESENT;
-#endif
-
 		walker->ptep_user[walker->level - 1] = ptep_user;
 
 		trace_kvm_mmu_paging_element(pte, walker->level);
@@ -471,14 +422,6 @@ retry_walk:
 
 	if (PTTYPE == 32 && walker->level == PT_DIRECTORY_LEVEL && is_cpuid_PSE36())
 		gfn += pse36_gfn_delta(pte);
-
-#if PTTYPE == PTTYPE_DEVIRT
-	if (pte & _PAGE_SOFTW2) {
-		gfn = devirt_pfn_to_gfn(vcpu, gfn);
-		if (unlikely(gfn == ~0))
-			return 0;
-	}
-#endif
 
 	real_gpa = mmu->translate_gpa(vcpu, gfn_to_gpa(gfn), access, &walker->fault);
 	if (real_gpa == UNMAPPED_GVA)
@@ -560,7 +503,7 @@ static int FNAME(walk_addr)(struct guest_walker *walker,
 					access);
 }
 
-#if PTTYPE != PTTYPE_EPT && PTTYPE != PTTYPE_DEVIRT
+#if PTTYPE != PTTYPE_EPT
 static int FNAME(walk_addr_nested)(struct guest_walker *walker,
 				   struct kvm_vcpu *vcpu, gva_t addr,
 				   u32 access)
@@ -570,7 +513,6 @@ static int FNAME(walk_addr_nested)(struct guest_walker *walker,
 }
 #endif
 
-#if PTTYPE != PTTYPE_DEVIRT
 static bool
 FNAME(prefetch_gpte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 		     u64 *spte, pt_element_t gpte, bool no_dirty_log)
@@ -1004,7 +946,6 @@ static void FNAME(invlpg)(struct kvm_vcpu *vcpu, gva_t gva, hpa_t root_hpa)
 	}
 	spin_unlock(&vcpu->kvm->mmu_lock);
 }
-#endif
 
 /* Note, @addr is a GPA when gva_to_gpa() translates an L2 GPA to an L1 GPA. */
 static gpa_t FNAME(gva_to_gpa)(struct kvm_vcpu *vcpu, gpa_t addr, u32 access,
@@ -1025,7 +966,7 @@ static gpa_t FNAME(gva_to_gpa)(struct kvm_vcpu *vcpu, gpa_t addr, u32 access,
 	return gpa;
 }
 
-#if PTTYPE != PTTYPE_EPT && PTTYPE != PTTYPE_DEVIRT
+#if PTTYPE != PTTYPE_EPT
 /* Note, gva_to_gpa_nested() is only used to translate L2 GVAs. */
 static gpa_t FNAME(gva_to_gpa_nested)(struct kvm_vcpu *vcpu, gpa_t vaddr,
 				      u32 access,
@@ -1052,7 +993,6 @@ static gpa_t FNAME(gva_to_gpa_nested)(struct kvm_vcpu *vcpu, gpa_t vaddr,
 }
 #endif
 
-#if PTTYPE != PTTYPE_DEVIRT
 /*
  * Using the cached information from sp->gfns is safe because:
  * - The spte has a reference to the struct page, so the pfn for a given gfn
@@ -1139,7 +1079,6 @@ static int FNAME(sync_page)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp)
 
 	return nr_present;
 }
-#endif
 
 #undef pt_element_t
 #undef guest_walker

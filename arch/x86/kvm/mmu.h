@@ -3,9 +3,6 @@
 #define __KVM_X86_MMU_H
 
 #include <linux/kvm_host.h>
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-#include <asm/devirt.h>
-#endif
 #include "kvm_cache_regs.h"
 
 #define PT64_PT_BITS 9
@@ -78,10 +75,6 @@ static inline unsigned long kvm_mmu_available_pages(struct kvm *kvm)
 
 static inline int kvm_mmu_reload(struct kvm_vcpu *vcpu)
 {
-#ifdef CONFIG_BYTEDANCE_KVM_DEVIRT
-	if (likely(vcpu_to_devirt(vcpu)->devirt_mem_start))
-		return 0;
-#endif
 	if (likely(vcpu->arch.mmu->root_hpa != INVALID_PAGE))
 		return 0;
 

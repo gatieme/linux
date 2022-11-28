@@ -147,35 +147,6 @@ void devirt_vmx_trigger_vm_shut_down(struct kvm_vcpu *vcpu)
 	vmcs_writel(GUEST_RFLAGS, guest_rflag | DEVIRT_VMENTRY_SHUTDOWN_FLAG);
 }
 
-void devirt_vmx_disable_pf_trap(struct kvm_vcpu *vcpu)
-{
-	vmcs_write32(EXCEPTION_BITMAP, vmcs_read32(EXCEPTION_BITMAP) & ~(1u << PF_VECTOR));
-}
-
-void devirt_vmx_set_mem_interception(struct kvm_vcpu *vcpu)
-{
-	secondary_exec_controls_clearbit(to_vmx(vcpu), SECONDARY_EXEC_ENABLE_EPT);
-	secondary_exec_controls_clearbit(to_vmx(vcpu), SECONDARY_EXEC_ENABLE_VPID);
-	secondary_exec_controls_clearbit(to_vmx(vcpu), SECONDARY_EXEC_UNRESTRICTED_GUEST);
-
-	devirt_vmx_disable_pf_trap(vcpu);
-}
-
-unsigned long devirt_vmx_guest_cr3(struct kvm_vcpu *vcpu)
-{
-	return vmcs_readl(GUEST_CR3);
-}
-
-void devirt_vmx_set_guest_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
-{
-	return vmcs_writel(GUEST_CR3, cr3);
-}
-
-void devirt_vmx_enable_pf_trap(struct kvm_vcpu *vcpu)
-{
-	vmcs_write32(EXCEPTION_BITMAP, vmcs_read32(EXCEPTION_BITMAP) | (1u << PF_VECTOR));
-}
-
 struct devirt_nmi_operations devirt_vmx_nmi_ops = {
 	.devirt_in_guest_mode = devirt_vmx_in_guest_mode,
 	.devirt_tigger_failed_vm_entry = devirt_vmx_tigger_failed_vm_entry,
@@ -185,8 +156,4 @@ struct devirt_kvm_operations devirt_vmx_kvm_ops = {
 	.devirt_set_msr_interception = devirt_vmx_set_msr_interception,
 	.devirt_tigger_failed_vm_entry = devirt_vmx_tigger_failed_vm_entry,
 	.devirt_trigger_vm_shut_down = devirt_vmx_trigger_vm_shut_down,
-	.devirt_set_mem_interception = devirt_vmx_set_mem_interception,
-	.devirt_guest_cr3 = devirt_vmx_guest_cr3,
-	.devirt_set_guest_cr3 = devirt_vmx_set_guest_cr3,
-	.devirt_enable_pf_trap = devirt_vmx_enable_pf_trap,
 };
