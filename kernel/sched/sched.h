@@ -2422,7 +2422,7 @@ extern void set_cpus_allowed_common(struct task_struct *p, struct affinity_conte
 
 static inline struct task_struct *get_push_task(struct rq *rq)
 {
-	struct task_struct *p = rq->curr;
+	struct task_struct *p = rq_selected(rq);
 
 	lockdep_assert_rq_held(rq);
 
@@ -3564,5 +3564,10 @@ static inline void init_sched_mm_cid(struct task_struct *t) { }
 
 extern u64 avg_vruntime(struct cfs_rq *cfs_rq);
 extern int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se);
+#ifdef CONFIG_SMP
+void push_task_chain(struct rq *rq, struct rq *dst_rq, struct task_struct *task);
+struct task_struct *find_exec_ctx(struct rq *rq, struct task_struct *p);
+int pushable_chain(struct rq *rq, struct task_struct *p, int cpu);
+#endif
 
 #endif /* _KERNEL_SCHED_SCHED_H */
