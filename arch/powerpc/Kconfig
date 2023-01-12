@@ -1025,6 +1025,15 @@ config PPC_RTAS_FILTER
 	  Say Y unless you know what you are doing and the filter is causing
 	  problems for you.
 
+config PPC_HCA_HOTNESS
+	prompt "PowerPC HCA engine based page hotness"
+	def_bool y
+	depends on PPC_BOOK3S_64 && LRU_GEN
+	help
+	  Use HCA engine to find page hotness
+
+	  If unsure, say N.
+
 endmenu
 
 config ISA_DMA_API

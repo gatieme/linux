@@ -68,6 +68,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
+#include <asm/hca.h>
+
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -3645,7 +3647,7 @@ static bool positive_ctrl_err(struct ctrl_pos *sp, struct ctrl_pos *pv)
  ******************************************************************************/
 
 /* promote pages accessed through page tables */
-static int folio_update_gen(struct folio *folio, int gen)
+int folio_update_gen(struct folio *folio, int gen)
 {
 	unsigned long new_flags, old_flags = READ_ONCE(folio->flags);
 
@@ -4308,7 +4310,7 @@ next:
 	return success;
 }
 
-static void inc_max_seq(struct lruvec *lruvec, bool can_swap, bool force_scan)
+void inc_max_seq(struct lruvec *lruvec, bool can_swap, bool force_scan)
 {
 	int prev, next;
 	int type, zone;
@@ -4371,6 +4373,7 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
 	struct lru_gen_mm_walk *walk;
 	struct mm_struct *mm = NULL;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 
 	VM_WARN_ON_ONCE(max_seq > READ_ONCE(lrugen->max_seq));
 
@@ -4515,8 +4518,18 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc, unsigned 
 			return false;
 	}
 
-	if (need_aging)
-		try_to_inc_max_seq(lruvec, max_seq, sc, swappiness, false);
+	if (need_aging) {
+		bool success;
+		struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+
+		if (hca_lru_age && (*hca_node_enabled)(pgdat->node_id)) {
+			success = hca_try_to_inc_max_seq(lruvec, nr_to_scan, max_seq);
+			if (success)
+				inc_max_seq(lruvec, swappiness, false);
+			return success;
+		} else
+			try_to_inc_max_seq(lruvec, max_seq, sc, swappiness, false);
+	}
 
 	return true;
 }
@@ -4544,6 +4557,8 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
 		sc->memcgs_need_aging = true;
 		return;
 	}
+
+	restablish_hotness_range(pgdat->node_id);
 
 	set_mm_walk(pgdat);
 
@@ -5082,6 +5097,7 @@ static unsigned long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *
 {
 	unsigned long nr_to_scan;
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
 
@@ -5101,7 +5117,15 @@ static unsigned long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *
 	if (current_is_kswapd())
 		return 0;
 
-	if (try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, false))
+	if (hca_lru_age && (*hca_node_enabled)(pgdat->node_id)) {
+		bool success;
+
+		success = hca_try_to_inc_max_seq(lruvec, nr_to_scan, max_seq);
+		if (success) {
+			inc_max_seq(lruvec, can_swap, false);
+			return nr_to_scan;
+		}
+	} else if (try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, false))
 		return nr_to_scan;
 done:
 	return min_seq[!can_swap] + MIN_NR_GENS <= max_seq ? nr_to_scan : 0;
@@ -5613,6 +5637,7 @@ static const struct seq_operations lru_gen_seq_ops = {
 static int run_aging(struct lruvec *lruvec, unsigned long seq, struct scan_control *sc,
 		     bool can_swap, bool force_scan)
 {
+	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 	DEFINE_MAX_SEQ(lruvec);
 	DEFINE_MIN_SEQ(lruvec);
 
@@ -5625,7 +5650,12 @@ static int run_aging(struct lruvec *lruvec, unsigned long seq, struct scan_contr
 	if (!force_scan && min_seq[!can_swap] + MAX_NR_GENS - 1 <= max_seq)
 		return -ERANGE;
 
-	try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, force_scan);
+	restablish_hotness_range(pgdat->node_id);
+	if (hca_lru_age && (*hca_node_enabled)(pgdat->node_id)) {
+		if (hca_try_to_inc_max_seq(lruvec, SWAP_CLUSTER_MAX, max_seq))
+			inc_max_seq(lruvec, can_swap, force_scan);
+	} else
+		try_to_inc_max_seq(lruvec, max_seq, sc, can_swap, force_scan);
 
 	return 0;
 }

@@ -319,6 +319,11 @@ void arch_free_page(struct page *page, int order);
 #define HAVE_ARCH_FREE_PAGE
 #endif
 
+#ifdef CONFIG_PPC_HCA_HOTNESS
+void arch_alloc_page(struct page *page, int order);
+#define HAVE_ARCH_ALLOC_PAGE
+#endif
+
 struct vm_area_struct;
 
 extern unsigned long kernstart_virt_addr;

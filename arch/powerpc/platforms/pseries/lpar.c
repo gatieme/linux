@@ -40,6 +40,7 @@
 #include <asm/kexec.h>
 #include <asm/fadump.h>
 #include <asm/dtl.h>
+#include <asm/hca.h>
 
 #include "pseries.h"
 
@@ -1798,6 +1799,16 @@ static void pSeries_set_page_state(struct page *page, int order,
 
 void arch_free_page(struct page *page, int order)
 {
+	int i;
+
+	if (hca_clear_entry) {
+		return;
+
+		/* zero the counter value when we allocate the page */
+		for (i = 0; i < (1 << order); i++)
+		hca_clear_entry(page_to_pfn(page + i));
+	}
+
 	if (radix_enabled())
 		return;
 	if (!cmo_free_hint_flag || !firmware_has_feature(FW_FEATURE_CMO))
