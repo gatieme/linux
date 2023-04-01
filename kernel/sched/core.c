@@ -95,6 +95,8 @@
 #include "../../io_uring/io-wq.h"
 #include "../smpboot.h"
 
+#include "qos.h"
+
 /*
  * Export tracepoints that act as a bare tracehook (ie: have no trace event
  * associated with them) to allow external modules to probe them.
@@ -1227,24 +1229,36 @@ int walk_tg_tree_from(struct task_group *from,
 {
 	struct task_group *parent, *child;
 	int ret;
-
 	parent = from;
-
 down:
 	ret = (*down)(parent, data);
-	if (ret)
+	if (ret == TG_WALK_SKIP) {
+		/*
+		 * Skip means the current node doesn't want to be affected by its parent
+		 * node. If the current node is an interior node and returns skip, we
+		 * stop and go up.
+		 *
+		 * However if we change the configuration of a skip node, its
+		 * descendents may still want to inherit the configuration. This is
+		 * handled by the if statement below: down operation of the starting
+		 * node will return skip, but since it's the starting node, we will
+		 * still go into its descendents.
+		 */
+		if (parent != from)
+			goto prepare_to_up;
+	} else if (ret != TG_WALK_OK) {
 		goto out;
+	}
 	list_for_each_entry_rcu(child, &parent->children, siblings) {
 		parent = child;
 		goto down;
-
 up:
 		continue;
 	}
+prepare_to_up:
 	ret = (*up)(parent, data);
 	if (ret || parent == from)
 		goto out;
-
 	child = parent;
 	parent = parent->parent;
 	if (parent)
@@ -4435,8 +4449,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.nr_migrations		= 0;
 	p->se.vruntime			= 0;
 	INIT_LIST_HEAD(&p->se.group_node);
-
 #ifdef CONFIG_FAIR_GROUP_SCHED
+	INIT_LIST_HEAD(&p->se.fdl_list_node);
 	p->se.cfs_rq			= NULL;
 #endif
 
@@ -6618,6 +6632,10 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 
 		migrate_disable_switch(rq, prev);
 		psi_sched_switch(prev, next, !task_on_rq_queued(prev));
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		sched_fdl_update_rq_dl(rq);
+#endif
 
 		trace_sched_switch(sched_mode & SM_MASK_PREEMPT, prev, next, prev_state);
 
@@ -9812,6 +9830,7 @@ void __init sched_init(void)
 		ptr += nr_cpu_ids * sizeof(void **);
 
 		root_task_group.shares = ROOT_TASK_GROUP_LOAD;
+		root_task_group.legacy_shares = ROOT_TASK_GROUP_LOAD;
 		init_cfs_bandwidth(&root_task_group.cfs_bandwidth);
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -9901,6 +9920,10 @@ void __init sched_init(void)
 		rq->max_idle_balance_cost = sysctl_sched_migration_cost;
 
 		INIT_LIST_HEAD(&rq->cfs_tasks);
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		INIT_LIST_HEAD(&rq->fdl_tasks);
+#endif
 
 		rq_attach_root(rq, &def_root_domain);
 #ifdef CONFIG_NO_HZ_COMMON
@@ -10658,12 +10681,26 @@ static int cpu_uclamp_max_show(struct seq_file *sf, void *v)
 #endif /* CONFIG_UCLAMP_TASK_GROUP */
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
+
+DEFINE_MUTEX(qos_config_mutex);
+
 static int cpu_shares_write_u64(struct cgroup_subsys_state *css,
-				struct cftype *cftype, u64 shareval)
+				struct cftype *cftype, u64 val)
 {
-	if (shareval > scale_load_down(ULONG_MAX))
-		shareval = MAX_SHARES;
-	return sched_group_set_shares(css_tg(css), scale_load(shareval));
+	struct task_group *tg = css_tg(css);
+	int ret = 0;
+
+	if (val > scale_load_down(ULONG_MAX))
+		val = MAX_SHARES;
+
+	tg->legacy_shares = scale_load(val);
+
+	mutex_lock(&qos_config_mutex);
+	if (!tg->guaranteed_shares) {
+		ret = sched_group_set_shares(css_tg(css), scale_load(val));
+	}
+	mutex_unlock(&qos_config_mutex);
+	return ret;
 }
 
 static u64 cpu_shares_read_u64(struct cgroup_subsys_state *css,
@@ -10671,7 +10708,91 @@ static u64 cpu_shares_read_u64(struct cgroup_subsys_state *css,
 {
 	struct task_group *tg = css_tg(css);
 
-	return (u64) scale_load_down(tg->shares);
+	return (u64) scale_load_down(tg->legacy_shares);
+}
+
+static int guaranteed_shares_valid(struct task_group *tg, int shares)
+{
+	return 1;
+}
+
+static int cpu_guaranteed_shares_write_u64(struct cgroup_subsys_state *css, struct cftype *cftype,
+  u64 val)
+{
+	struct task_group *tg = css_tg(css);
+	int ret = 0;
+
+	val = scale_load(val);
+
+	mutex_lock(&qos_config_mutex);
+
+	if (tg->guaranteed_shares == val)
+		goto out;
+	if (guaranteed_shares_valid(tg, val))
+		ret = sched_group_set_guaranteed_shares(tg, val);
+	else
+		ret = -EINVAL;
+
+out:
+	mutex_unlock(&qos_config_mutex);
+	return ret;
+}
+
+static u64 cpu_guaranteed_shares_read_u64(struct cgroup_subsys_state *css, struct cftype *cft)
+{
+	return (u64) scale_load_down(css_tg(css)->guaranteed_shares);
+}
+
+static int cpu_deadline_wakeup_write_u64(struct cgroup_subsys_state *css, struct cftype *cftype,
+  u64 val)
+{
+	mutex_lock(&qos_config_mutex);
+	if (val && !css_tg(css)->deadline_rr)
+		return -EINVAL;
+	css_tg(css)->deadline_wakeup = val;
+	mutex_unlock(&qos_config_mutex);
+	return 0;
+}
+
+static u64 cpu_deadline_wakeup_read_u64(struct cgroup_subsys_state *css, struct cftype *cft)
+{
+	return css_tg(css)->deadline_wakeup;
+}
+
+static int cpu_deadline_rr_write_u64(struct cgroup_subsys_state *css, struct cftype *cftype,
+  u64 val)
+{
+	mutex_lock(&qos_config_mutex);
+	css_tg(css)->deadline_rr = val;
+	if (!val)
+		css_tg(css)->deadline_wakeup = 0;
+	mutex_unlock(&qos_config_mutex);
+	return 0;
+}
+
+static u64 cpu_deadline_rr_read_u64(struct cgroup_subsys_state *css, struct cftype *cft)
+{
+	return css_tg(css)->deadline_rr;
+}
+
+static int cpu_qos_debug_show(struct seq_file *sf, void *v)
+{
+	struct task_group *tg = css_tg(seq_css(sf));
+
+	seq_printf(sf, "deadline_rr %llu\n", tg->deadline_rr);
+	seq_printf(sf, "deadline_wakeup %llu\n", tg->deadline_wakeup);
+	seq_printf(sf, "guaranteed_shares %lu\n\n", scale_load_down(tg->guaranteed_shares));
+
+	seq_printf(sf, "(dynamic) shares %lu\n", scale_load_down(tg->shares));
+	seq_printf(sf, "(legacy) shares %lu\n", scale_load_down(tg->legacy_shares));
+	seq_printf(sf, "absolute guaranteed shares %lu\n", scale_load_down(tg->abs_guaranteed));
+	seq_printf(sf, "dynamic shares increased %d    dynamic shares decreased %d\n\n",
+	  tg->shares_increased, tg->shares_decreased);
+
+	seq_printf(sf, "avg usage %llu\n", qos_get_avg_usage(tg));
+	seq_printf(sf, "avg wait %llu\n", qos_get_avg_wait(tg));
+
+	return 0;
 }
 
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -11049,6 +11170,25 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "idle",
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	{
+		.name = "guaranteed_shares",
+		.read_u64 = cpu_guaranteed_shares_read_u64,
+		.write_u64 = cpu_guaranteed_shares_write_u64,
+	},
+	{
+		.name = "qos_debug",
+		.seq_show = cpu_qos_debug_show,
+	},
+	{
+		.name = "deadline_wakeup",
+		.read_u64 = cpu_deadline_wakeup_read_u64,
+		.write_u64 = cpu_deadline_wakeup_write_u64,
+	},
+	{
+		.name = "deadline_rr",
+		.read_u64 = cpu_deadline_rr_read_u64,
+		.write_u64 = cpu_deadline_rr_write_u64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH

@@ -374,10 +374,34 @@ struct task_group {
 	struct sched_entity	**se;
 	/* runqueue "owned" by this group on each CPU */
 	struct cfs_rq		**cfs_rq;
+	/* Think as dynamic_shares not controlled by user when fdl is enabled */
 	unsigned long		shares;
 
 	/* A positive value indicates that this is a SCHED_IDLE group. */
 	int			idle;
+
+	/* Map to "cpu.shares". Copied to tg->shares if guaranteed_shares is not set */
+	unsigned long legacy_shares;
+	/* Control loop tries to maintain this share. 1024 == 1 cpu for first level cgroups */
+	unsigned long guaranteed_shares;
+	/* 1024 == 1 cpu for all cgroups. Need to be calculated for subgroups */
+	unsigned long abs_guaranteed;
+	/* Used to calculated abs_guaranteed */
+	unsigned long children_total_guaranteed;
+
+	/* Latency parameter for round robin */
+	u64 deadline_rr;
+	/* Latency parameter for wake up */
+	u64 deadline_wakeup;
+
+	u64 last_acc_usage;
+	u64 __percpu *acc_wait;
+	u64 curr_usage;
+	u64 avg_usage;
+	u64 curr_wait;
+	u64 avg_wait;
+	int shares_increased;
+	int shares_decreased;
 
 #ifdef	CONFIG_SMP
 	/*
@@ -435,6 +459,18 @@ struct task_group {
 #define MAX_SHARES		(1UL << 18)
 #endif
 
+/*
+ * TG_WALK_SKIP means the current node doesn't want to be affected by its parent
+ * node. The tree walk should still check other nodes outside of the subtree.
+ *
+ * TG_WALK_ABORT means something is wrong and we should immediately stop.
+ *
+ * See comments in walk_tg_tree_from for more details.
+ */
+#define TG_WALK_OK 0
+#define TG_WALK_ABORT 1
+#define TG_WALK_SKIP 2
+
 typedef int (*tg_visitor)(struct task_group *, void *);
 
 extern int walk_tg_tree_from(struct task_group *from,
@@ -485,6 +521,7 @@ extern void sched_move_task(struct task_struct *tsk);
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 extern int sched_group_set_shares(struct task_group *tg, unsigned long shares);
+extern int sched_group_set_guaranteed_shares(struct task_group *tg, unsigned long shares);
 
 extern int sched_group_set_idle(struct task_group *tg, long idle);
 
@@ -553,6 +590,9 @@ struct cfs_rq {
 	unsigned int		h_nr_running;      /* SCHED_{NORMAL,BATCH,IDLE} */
 	unsigned int		idle_nr_running;   /* SCHED_IDLE */
 	unsigned int		idle_h_nr_running; /* SCHED_IDLE */
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	unsigned int fdl_nr_running;
+#endif
 
 	u64			exec_clock;
 	u64			min_vruntime;
@@ -563,6 +603,14 @@ struct cfs_rq {
 
 #ifndef CONFIG_64BIT
 	u64			min_vruntime_copy;
+#endif
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	u64 vdt_lag; /* virtual deadline time lag */
+	struct rb_root_cached tasks_deadline;
+	u64 fc_dl; /* fair container dl - deadline regular cfs tasks */
+	u64 curr_dl;
+	u64 next_queued_miss;
 #endif
 
 	struct rb_root_cached	tasks_timeline;
@@ -1083,6 +1131,12 @@ struct rq {
 #ifdef CONFIG_HOTPLUG_CPU
 	struct rcuwait		hotplug_wait;
 #endif
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	u32 fdl_t_nr_running;
+	struct list_head fdl_tasks;
+#endif
+
 #endif /* CONFIG_SMP */
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
@@ -2158,6 +2212,8 @@ extern const u32		sched_prio_to_wmult[40];
 #define ENQUEUE_MIGRATED	0x00
 #endif
 
+#define ENQUEUE_UNTHROTTLE	0x100
+
 #define RETRY_TASK		((void *)-1UL)
 
 struct affinity_context {
@@ -2170,7 +2226,8 @@ struct sched_class {
 
 #ifdef CONFIG_UCLAMP_TASK
 	int uclamp_enabled;
-#endif
+#endi
+	f
 
 	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int flags);
 	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
@@ -3307,3 +3364,7 @@ static inline void switch_mm_cid(struct task_struct *prev, struct task_struct *n
 #endif
 
 #endif /* _KERNEL_SCHED_SCHED_H */
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+void sched_fdl_update_rq_dl(struct rq *rq);
+#endif

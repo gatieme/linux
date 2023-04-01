@@ -188,6 +188,11 @@ static u64 cpuusage_read(struct cgroup_subsys_state *css, struct cftype *cft)
 	return __cpuusage_read(css, CPUACCT_STAT_NSTATS);
 }
 
+u64 qos_cpuusage_read(struct cgroup_subsys_state *css)
+{
+	return __cpuusage_read(css, CPUACCT_STAT_NSTATS);
+}
+
 static int cpuusage_write(struct cgroup_subsys_state *css, struct cftype *cft,
 			  u64 val)
 {

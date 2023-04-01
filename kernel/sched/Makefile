@@ -30,5 +30,6 @@ endif
 #
 obj-y += core.o
 obj-y += fair.o
+obj-$(CONFIG_FAIR_GROUP_SCHED) += qos.o
 obj-y += build_policy.o
 obj-y += build_utility.o

@@ -548,12 +548,19 @@ struct sched_entity {
 	/* For load-balancing: */
 	struct load_weight		load;
 	struct rb_node			run_node;
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	struct rb_node			dl_node;
+	struct list_head		fdl_list_node;
+#endif
 	struct list_head		group_node;
 	unsigned int			on_rq;
 
 	u64				exec_start;
 	u64				sum_exec_runtime;
 	u64				vruntime;
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	u64				dl;
+#endif
 	u64				prev_sum_exec_runtime;
 
 	u64				nr_migrations;

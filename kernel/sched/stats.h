@@ -216,6 +216,8 @@ static inline void sched_info_dequeue(struct rq *rq, struct task_struct *t)
 	rq_sched_info_dequeue(rq, delta);
 }
 
+void qos_record_wait(struct task_group *tg, u64 delta);
+
 /*
  * Called when a task finally hits the CPU.  We can now calculate how
  * long it was waiting to run.  We also note when it began so that we
@@ -223,7 +225,10 @@ static inline void sched_info_dequeue(struct rq *rq, struct task_struct *t)
  */
 static void sched_info_arrive(struct rq *rq, struct task_struct *t)
 {
+	extern const struct sched_class fair_sched_class;
+
 	unsigned long long now, delta = 0;
+	struct cfs_rq *cfs_rq;
 
 	if (!t->sched_info.last_queued)
 		return;
@@ -236,6 +241,11 @@ static void sched_info_arrive(struct rq *rq, struct task_struct *t)
 	t->sched_info.pcount++;
 
 	rq_sched_info_arrive(rq, delta);
+
+	if (t->sched_class == &fair_sched_class) {
+		cfs_rq = cfs_rq_of(&t->se);
+		qos_record_wait(cfs_rq->tg, delta);
+	}
 }
 
 /*

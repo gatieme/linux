@@ -56,6 +56,8 @@
 #include "stats.h"
 #include "autogroup.h"
 
+#include "qos.h"
+
 /*
  * Targeted preemption latency for CPU-bound tasks:
  *
@@ -601,6 +603,62 @@ static inline bool entity_before(const struct sched_entity *a,
 	return (s64)(a->vruntime - b->vruntime) < 0;
 }
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static inline unsigned int cfs_normal_nr_running(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->nr_running - cfs_rq->fdl_nr_running;
+}
+#else
+static inline unsigned int cfs_normal_nr_running(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->nr_running;
+}
+#endif
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+void fdl_dump_rq(struct cfs_rq *cfs_rq, char * tag)
+{
+	struct rb_node *node;
+	struct sched_entity *se;
+	u64 vdt = vdt_cfs_rq(cfs_rq, ktime_to_ns(ktime_get()));
+	char pathname[256] = "";
+	int plen = sizeof(pathname);
+
+	cgroup_path(cfs_rq->tg->css.cgroup, pathname, plen);
+	printk("==QOS dump fdl rq of %s for %s at vdt %llu, nr running %u fdl nr running %u\n",
+	  pathname, tag, vdt, cfs_rq->nr_running, cfs_rq->fdl_nr_running);
+
+	if (cfs_rq->curr) {
+		if (entity_is_task(cfs_rq->curr)) {
+			printk("curr is non dl\n");
+		} else {
+			cgroup_path(cfs_rq->curr->my_q->tg->css.cgroup, pathname, plen);
+			printk("curr is %s, dl: %llu (%lldus ahead)\n", pathname, cfs_rq->curr->dl,
+			  cfs_rq->curr->dl ? (s64)(cfs_rq->curr->dl - vdt) / 1000 : 0);
+		}
+	} else {
+		printk("curr is null\n");
+	}
+
+	cgroup_path(cfs_rq->tg->css.cgroup, pathname, plen);
+	printk("%snon dl container under %s dl: %llu (%lldus ahead)\n", cfs_rq->nr_running -
+	  cfs_rq->fdl_nr_running ? "" : "(inactive) ", pathname, cfs_rq->fc_dl,
+	  cfs_rq->fc_dl ? (s64)(cfs_rq->fc_dl - vdt) / 1000 : 0);
+
+	node = rb_first_cached(&cfs_rq->tasks_deadline);
+	if (!node) {
+		printk("fdl tree empty\n");
+		return;
+	}
+	for (; node; node = rb_next(node)) {
+		se = rb_entry(node, struct sched_entity, dl_node);
+		cgroup_path(se->my_q->tg->css.cgroup, pathname, plen);
+		printk("se %s dl: %llu (%lldus ahead)\n", pathname, se->dl,
+		  se->dl ? (s64)(se->dl - vdt) / 1000 : 0);
+	}
+}
+#endif
+
 #define __node_2_se(node) \
 	rb_entry((node), struct sched_entity, run_node)
 
@@ -642,13 +700,81 @@ static inline bool __entity_less(struct rb_node *a, const struct rb_node *b)
  */
 static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		if (se->my_q) cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS Enqueue regular for %s\n", pathname);
+	}
+#endif
 	rb_add_cached(&se->run_node, &cfs_rq->tasks_timeline, __entity_less);
 }
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static void __enqueue_entity_fdl(struct cfs_rq *cfs_rq, struct sched_entity *se)
+{
+	struct rb_node **link = &cfs_rq->tasks_deadline.rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	struct sched_entity *entry;
+	bool leftmost = true;
+
+	BUG_ON(entity_is_task(se));
+
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		if (se->my_q) cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS Enqueue fdl for %s\n", pathname);
+	}
+
+	/*
+	 * Find the right place in the rbtree:
+	 */
+	while (*link) {
+		parent = *link;
+		entry = rb_entry(parent, struct sched_entity, dl_node);
+		/*
+		 * We dont care about collisions. Nodes with
+		 * the same key stay together.
+		 */
+		if (se->dl < entry->dl) {
+			link = &parent->rb_left;
+		} else {
+			link = &parent->rb_right;
+			leftmost = false;
+		}
+	}
+
+	rb_link_node(&se->dl_node, parent, link);
+	rb_insert_color_cached(&se->dl_node, &cfs_rq->tasks_deadline, leftmost);
+}
+#endif
+
 static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		if (se->my_q) cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS Dequeue regular for %s\n", pathname);
+	}
+#endif
+
 	rb_erase_cached(&se->run_node, &cfs_rq->tasks_timeline);
 }
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static void __dequeue_entity_fdl(struct cfs_rq *cfs_rq, struct sched_entity *se)
+{
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		if (se->my_q) cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS Dequeue fdl for %s\n", pathname);
+	}
+
+	BUG_ON(!cfs_rq->fdl_nr_running);
+	rb_erase_cached(&se->dl_node, &cfs_rq->tasks_deadline);
+}
+#endif
 
 struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
 {
@@ -659,6 +785,18 @@ struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
 
 	return __node_2_se(left);
 }
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+struct sched_entity *__pick_first_entity_fdl(struct cfs_rq *cfs_rq)
+{
+	struct rb_node *left = rb_first_cached(&cfs_rq->tasks_deadline);
+
+	if (!left)
+		return NULL;
+
+	return rb_entry(left, struct sched_entity, dl_node);
+}
+#endif
 
 static struct sched_entity *__pick_next_entity(struct sched_entity *se)
 {
@@ -740,12 +878,13 @@ static bool sched_idle_cfs_rq(struct cfs_rq *cfs_rq);
  */
 static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	unsigned int nr_running = cfs_rq->nr_running;
+	unsigned int nr_running = cfs_normal_nr_running(cfs_rq);
 	struct sched_entity *init_se = se;
 	unsigned int min_gran;
 	u64 slice;
 
 	if (sched_feat(ALT_PERIOD))
+		/* XXX incorrect if there are fdl tasks */
 		nr_running = rq_of(cfs_rq)->cfs.h_nr_running;
 
 	slice = __sched_period(nr_running + !se->on_rq);
@@ -778,6 +917,144 @@ static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 	return slice;
 }
+
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+
+u64 sched_fdl_queued_dl(struct cfs_rq *cfs_rq, int fdl_running)
+{
+	struct rb_node *left;
+	u64 dl = 0;
+
+	left = rb_first_cached(&cfs_rq->tasks_deadline);
+	if (left) {
+		dl = rb_entry(left, struct sched_entity, dl_node)->dl;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS queued next dl %llu\n", dl);
+	}
+
+	if (!cfs_normal_nr_running(cfs_rq))
+		return dl;
+
+	/*
+	 * Need to consider non dl container if regular tasks are running
+	 * If next is dl we need to add non dl container into next dl comparison
+	 * If next is regular we don't include non dl container as dl container is current
+	 * or going to be current
+	 */
+	if (!dl) {
+		dl = cfs_rq->fc_dl;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS queued next dl is non dl container dl %llu\n", dl);
+	} else if (fdl_running && cfs_rq->fc_dl && cfs_rq->fc_dl < dl) {
+		dl = cfs_rq->fc_dl;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS change next queued dl to non dl container dl %llu\n", dl);
+	}
+
+	return dl;
+}
+
+void sched_fdl_update_rq_dl(struct rq *rq)
+{
+	struct cfs_rq *cfs_rq = &rq->cfs;
+	struct task_struct *curr = rq->curr;
+	struct sched_entity *top_se = NULL;
+	u64 gdl, wdl, dl;
+
+	if (!qosp_wake_dl_scan && !sched_feat(HRTICK))
+		return;
+
+	if (curr == rq->idle) {
+		WRITE_ONCE(cfs_rq->curr_dl, 0);
+	} else if (dl_policy(curr->policy) || rt_policy(curr->policy)){
+		WRITE_ONCE(cfs_rq->curr_dl, 1);
+	} else if (fair_policy(curr->policy)) {
+		top_se = top_se_of(&curr->se);
+		if (entity_is_task(top_se))
+			gdl = 0;
+		else
+			gdl = entity_rdl(top_se);
+		WRITE_ONCE(cfs_rq->curr_dl, gdl);
+	} else {
+		WRITE_ONCE(cfs_rq->curr_dl, 0);
+	}
+
+	dl = sched_fdl_queued_dl(cfs_rq, top_se && entity_fdl_active(top_se));
+	wdl = dl ? dl + cfs_rq->vdt_lag : 0;
+	WRITE_ONCE(cfs_rq->next_queued_miss, wdl);
+}
+
+void sched_fdl_update_target_dl(struct task_struct *p, int cpu)
+{
+	struct sched_entity *top_se = top_se_of(&p->se);
+	struct cfs_rq *cfs_rq = &cpu_rq(cpu)->cfs;
+	u64 rdl, wdl = 0, gdl, dl;
+
+	if (!qosp_wake_dl_scan)
+		return;
+
+	if (entity_is_task(top_se))
+		rdl = 0;
+	else
+		rdl = entity_rdl(top_se);
+	if (rdl)
+		wdl = entity_wdl(top_se);
+	gdl = wdl ? wdl : rdl;
+	if (!gdl)
+		return;
+
+	dl = max(1ULL, gdl/4); /* set a low number to "reserve" the cpu */
+	if (READ_ONCE(cfs_rq->curr_dl) > dl)
+		WRITE_ONCE(cfs_rq->curr_dl, dl);
+}
+
+int sched_fdl_check_dl_cpu(int cpu, u64 wt, u64 *dl)
+{
+	struct cfs_rq *cfs_rq = &cpu_rq(cpu)->cfs;
+	u64 curr_est_dl = 0;
+	u64 queued_dl = 0;
+	int cd, qd;
+
+	if (!cfs_rq->fdl_nr_running) {
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS: check dl of cpu %d    no fdl\n", cpu);
+		*dl = 0;
+		return 0;
+	}
+
+	curr_est_dl = READ_ONCE(cfs_rq->curr_dl);
+	cd = !!curr_est_dl;
+	/*
+	 * If we move a task to the rq and preempt curr, what would be the deadline for getting
+	 * curr back on cpu
+	 * Do a simple estimation to reduce overhead. Otherwise need to run update_curr_fdl
+	 * from a remote cpu
+	 */
+	curr_est_dl = curr_est_dl / 2;
+
+	queued_dl = READ_ONCE(cfs_rq->next_queued_miss);
+	qd = !!queued_dl;
+	if (qd)
+		/* convert to relative time for load balancing scan */
+		queued_dl = queued_dl > wt ? queued_dl - wt : 0;
+
+	if (!cd && !qd) {
+		return 0;
+	} else if (cd && qd) {
+		*dl = min(curr_est_dl, queued_dl);
+	} else {
+		*dl = max(curr_est_dl, queued_dl);
+	}
+
+	if (qos_show_hf_debug(NULL))
+		printk("==QOS: check dl of cpu %d    dl %llu    (curr est dl %llu    queued dl %llu    cd %d    qd %d)\n",
+		  cpu, *dl, curr_est_dl, queued_dl, cd, qd);
+
+	return 1;
+}
+
+#endif
 
 /*
  * We calculate the vruntime slice of a to-be-inserted task.
@@ -891,6 +1168,159 @@ static void update_tg_load_avg(struct cfs_rq *cfs_rq)
 }
 #endif /* CONFIG_SMP */
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+void update_curr_fdl(struct sched_entity *se, u64 delta_exec)
+{
+	struct cfs_rq *cfs_rq = cfs_rq_of(se);
+	struct sched_entity *cse;
+	struct rb_node *node;
+	u64 wt, vdt, vdt_back;
+	u64 global_share = QOS_SCALE;
+	u64 dl, sdl, gdl;
+	int is_fc = 0;
+	int do_shrink = 0;
+
+	wt = ktime_to_ns(ktime_get());
+	vdt = vdt_se(se, wt);
+
+	if (entity_is_task(se)) /* Task level dl is not currently supported */
+		gdl = 0;
+	else
+		gdl = READ_ONCE(se->my_q->tg->deadline_rr);
+
+	if (!se->dl) {
+		if (!cfs_rq->fc_dl)
+			return;
+		gdl = qosp_default_fair_dl;
+		is_fc = 1;
+	} else if (!gdl) {
+		gdl = qosp_default_fair_dl * 10;
+		if (qos_show_hf_debug(se))
+			printk("==QOS update curr: FDL task's cgroup is no longer fdl, set a large dl such "
+			  "that it can be off cpu soon - se->dl will be cleared on enqueue\n");
+	}
+
+	cse = se;
+	for_each_sched_entity(cse) {
+		struct load_weight load, rqload;
+		struct sched_entity *tse;
+
+		load = cse->load;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS update curr: se's own weight %lu\n", load.weight);
+		if (is_fc && cse == se) {
+			for (node = rb_first_cached(&cfs_rq_of(cse)->tasks_timeline); node; node =
+			  rb_next(node)) {
+				tse = rb_entry(node, struct sched_entity, run_node);
+				if (tse != se) {
+					if (qos_show_hf_debug(NULL))
+						printk("==QOS update curr: add other non dl weight se weight %lu\n",
+						  tse->load.weight);
+					update_load_add(&load, tse->load.weight);
+				}
+			}
+		}
+
+		rqload = cfs_rq_of(cse)->load;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS update curr: rq weight %lu\n", rqload.weight);
+		if (!cse->on_rq) {
+			if (qos_show_hf_debug(NULL))
+				printk("==QOS update curr: add curr weight %lu to rq weight\n", cse->load.weight);
+			update_load_add(&rqload, cse->load.weight);
+		}
+
+		global_share = __calc_delta(global_share, load.weight, &rqload);
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS update curr: global share %llu\n", global_share);
+	}
+	global_share = (global_share * qosp_dl_slack) >> QOS_SHIFT;
+	global_share = max(1ULL, global_share);
+
+	dl = is_fc ? cfs_rq->fc_dl : se->dl;
+	dl += (delta_exec  << QOS_SHIFT) / global_share;
+
+	if (vdt > dl) { /* deadline miss, move vdt back */
+		u64 min_dl = dl;
+		u64 mgdl;
+		int overlimit;
+
+		if (!is_fc && cfs_rq->fc_dl && cfs_rq->fc_dl < dl)
+			min_dl = cfs_rq->fc_dl;
+		else
+			min_dl = dl;
+		mgdl = gdl;
+		for (node = rb_first_cached(&cfs_rq->tasks_deadline); node; node = rb_next(node)) {
+			cse = rb_entry(node, struct sched_entity, dl_node);
+			min_dl = min(min_dl, cse->dl);
+			mgdl = min(mgdl, READ_ONCE(cse->my_q->tg->deadline_rr));
+		}
+		vdt_back = vdt - min_dl + mgdl / 4;
+		/* Don't put put dl too soon and run into consecutive misses */
+		vdt_back = max(vdt_back, qosp_dl_skip);
+		cfs_rq->vdt_lag += vdt_back;
+		vdt -= vdt_back;
+
+		/* check and reduce dl spread if needed */
+		for (;;) {
+			overlimit = 0;
+			if (do_shrink)
+				cfs_rq->fc_dl = vdt + (cfs_rq->fc_dl -vdt) / 2;
+			if (cfs_rq->fc_dl > vdt + qosp_default_fair_dl)
+				overlimit = 1;
+			for (node = rb_first_cached(&cfs_rq->tasks_deadline); node; node = rb_next(node)) {
+				cse = rb_entry(node, struct sched_entity, dl_node);
+				sdl = READ_ONCE(cse->my_q->tg->deadline_rr);
+				if (do_shrink)
+					cse->dl = vdt + (cse->dl -vdt) / 2;
+				if (cse->dl > vdt + sdl)
+					overlimit = 1;
+			}
+			if (overlimit)
+				do_shrink = 1;
+			else
+				break;
+		}
+	} else {
+		vdt_back = 0;
+		dl = min(vdt + gdl, dl); /* cap dl such that it won't wait too long next time */
+	}
+
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		char fc[] = "(non dl container under) ";
+		int fclen = sizeof(fc) - 1;
+		char hitlimit[] = "hit dl limit and capped";
+		char dlmiss[128] = "";
+		u64 olddl;
+		if (is_fc) {
+			strncpy(pathname, fc, fclen);
+			cgroup_path(cfs_rq->tg->css.cgroup, pathname + fclen, 256 -fclen);
+			olddl = cfs_rq->fc_dl;
+		} else {
+			cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+			olddl = se->dl;
+		}
+		if (vdt_back)
+			sprintf(dlmiss, "dl missed / vdt moved back by %llu%s", vdt_back, do_shrink?
+			  ", deadline range compressed":"");
+		printk("==QOS cpu %d update deadline of %s from %llu to %llu (+%llu, %s%s)   at "
+		  "vdt %llu wt %llu    global dl %llu    global share %llu    delta exec %llu\n",
+		  smp_processor_id(), pathname, olddl, dl, dl - olddl, dlmiss, dl>=vdt+gdl?hitlimit:"",
+		  wt - cfs_rq->vdt_lag, wt, gdl, global_share, delta_exec);
+	}
+	BUG_ON(!dl);
+	if (is_fc) {
+		if (!cfs_rq->fdl_nr_running && dl >= vdt + gdl)
+			cfs_rq->fc_dl = 0; /* Stop updating if hit limit, reinit next time */
+		else
+			cfs_rq->fc_dl = dl;
+	} else {
+		se->dl = dl;
+	}
+}
+#endif
+
 /*
  * Update the current task's runtime statistics.
  */
@@ -919,6 +1349,10 @@ static void update_curr(struct cfs_rq *cfs_rq)
 
 	curr->sum_exec_runtime += delta_exec;
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	update_curr_fdl(curr, delta_exec);
+#endif
 
 	curr->vruntime += calc_delta_fair(delta_exec, curr);
 	update_min_vruntime(cfs_rq);
@@ -3226,6 +3660,17 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	cfs_rq->nr_running++;
 	if (se_is_idle(se))
 		cfs_rq->idle_nr_running++;
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (entity_is_task(se) && entity_fdl_active(top_se_of(se))) {
+		rq_of(cfs_rq)->fdl_t_nr_running++;
+		list_add(&se->fdl_list_node, &rq_of(cfs_rq)->fdl_tasks);
+	}
+
+	if (entity_fdl_active(se)) {
+		cfs_rq->fdl_nr_running++;
+	}
+#endif
 }
 
 static void
@@ -3241,6 +3686,24 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	cfs_rq->nr_running--;
 	if (se_is_idle(se))
 		cfs_rq->idle_nr_running--;
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (!list_empty(&se->fdl_list_node) && se->fdl_list_node.next) {
+		BUG_ON(!rq_of(cfs_rq)->fdl_t_nr_running);
+		BUG_ON(!entity_is_task(se));
+		rq_of(cfs_rq)->fdl_t_nr_running--;
+		list_del_init(&se->fdl_list_node);
+		BUG_ON(!list_empty(&se->fdl_list_node));
+	}
+
+	if (entity_fdl_active(se)) {
+		BUG_ON(cfs_rq->fdl_nr_running == 0);
+		cfs_rq->fdl_nr_running--;
+	}
+
+	if (cfs_rq->fc_dl && !cfs_normal_nr_running(cfs_rq))
+		cfs_rq->fc_dl = 0;
+#endif
 }
 
 /*
@@ -4733,6 +5196,77 @@ static void check_enqueue_throttle(struct cfs_rq *cfs_rq);
 
 static inline bool cfs_bandwidth_used(void);
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+void enqueue_set_account_fdl(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags, int account)
+{
+	u64 wt, vdt;
+	u64 gdl, rdl, wdl, odl, dl;
+
+	if (entity_is_task(se))
+		rdl = 0;
+	else
+		rdl = entity_rdl(se);
+
+	/* Only set dl on wakeup or on mismatch (cgroup dl / non dl changed) */
+	if (!(flags & ENQUEUE_WAKEUP) && !se->dl == !rdl) {
+		if (qos_show_hf_debug(se))
+			printk("==QOS cpu %d enqueue: early return flags %d dl %llu\n", smp_processor_id(), flags, se->dl);
+		return;
+	}
+
+	dl = odl = se->dl;
+
+	wt = ktime_to_ns(ktime_get());
+	vdt = vdt_se(se, wt);
+
+	if (!rdl) {
+		if (cfs_rq->fc_dl && !cfs_normal_nr_running(cfs_rq)) {
+			/* Only need to reinit on # of cfs tasks 0->1 */
+			if (qos_show_hf_debug(se))
+				printk("==QOS cpu %d enqueue: init non dl container dl\n", smp_processor_id());
+			cfs_rq->fc_dl = vdt + qosp_default_fair_dl;
+		}
+		se->dl = dl = 0;
+		goto account;
+	}
+
+	wdl = entity_wdl(se);
+	gdl = wdl ? wdl : rdl;
+
+	if (flags & ENQUEUE_UNTHROTTLE) { /* No wakeup boost for unthrottle */
+		dl = vdt + gdl;
+		se->dl = dl;
+		goto account;
+	}
+
+	/*
+	 * Assume a task only become blocked when nothing in its queue - no credit from sleeping.
+	 * Instead a task can get  optional wake up boost based on wake dl.
+	 * A blocked task can still have debts - prevent a task from getting more cycles
+	 * on wakeups by not moving dl backward. (This logic is only useful when wakeup dl is set).
+	 * An exception is dl can move back when re-capping dl due to vdt moving back.
+	 */
+	dl = clamp(dl, vdt + gdl, vdt + rdl);
+
+	if (qos_show_hf_debug(se)) {
+		char pathname[256] = "";
+		if (se->my_q)
+			cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS cpu %d enqueue %s: new deadline %llu    old deadline %llu    at vdt %llu wt %llu\n",
+		  smp_processor_id(), pathname, dl, odl, vdt, wt);
+	}
+	se->dl = dl;
+
+account:
+	if (account) {
+		if (!odl && dl)
+			cfs_rq->fdl_nr_running++;
+		else if (odl && !dl)
+			cfs_rq->fdl_nr_running--;
+	}
+}
+#endif
+
 /*
  * MIGRATION
  *
@@ -4787,6 +5321,11 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	if (renorm && !curr)
 		se->vruntime += cfs_rq->min_vruntime;
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	/* Not transferring dl because dl is at cgroup level */
+	enqueue_set_account_fdl(cfs_rq, se, flags, 0);
+#endif
+
 	/*
 	 * When enqueuing a sched_entity, we must:
 	 *   - Update loads to have both entity and cfs_rq synced with now.
@@ -4810,8 +5349,14 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	check_schedstat_required();
 	update_stats_enqueue_fair(cfs_rq, se, flags);
 	check_spread(cfs_rq, se);
-	if (!curr)
-		__enqueue_entity(cfs_rq, se);
+	if (!curr) {
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		if (entity_fdl_active(se))
+			__enqueue_entity_fdl(cfs_rq, se);
+		else
+#endif
+			__enqueue_entity(cfs_rq, se);
+	}
 	se->on_rq = 1;
 
 	if (cfs_rq->nr_running == 1) {
@@ -4897,8 +5442,14 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	clear_buddies(cfs_rq, se);
 
-	if (se != cfs_rq->curr)
-		__dequeue_entity(cfs_rq, se);
+	if (se != cfs_rq->curr) {
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		if (entity_fdl_active(se))
+			__dequeue_entity_fdl(cfs_rq, se);
+		else
+#endif
+			__dequeue_entity(cfs_rq, se);
+	}
 	se->on_rq = 0;
 	account_entity_dequeue(cfs_rq, se);
 
@@ -4966,6 +5517,7 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 		return;
 
 	se = __pick_first_entity(cfs_rq);
+	BUG_ON(!se);
 	delta = curr->vruntime - se->vruntime;
 
 	if (delta < 0)
@@ -4988,7 +5540,12 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		 * runqueue.
 		 */
 		update_stats_wait_end_fair(cfs_rq, se);
-		__dequeue_entity(cfs_rq, se);
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		if (entity_fdl_active(se))
+			__dequeue_entity_fdl(cfs_rq, se);
+		else
+#endif
+			__dequeue_entity(cfs_rq, se);
 		update_load_avg(cfs_rq, se, UPDATE_TG);
 	}
 
@@ -5013,6 +5570,41 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	se->prev_sum_exec_runtime = se->sum_exec_runtime;
 }
 
+static void dump_cfs_rq_state(struct cfs_rq *cfs_rq)
+{
+#if defined(CONFIG_FAIR_GROUP_SCHED) && defined(CONFIG_CFS_BANDWIDTH)
+	char pathname[256];
+	struct sched_entity *pse;
+	int cpu = smp_processor_id();
+
+	*pathname = '\0';
+
+	/* first dump state from the current runqueue */
+	cgroup_path(cfs_rq->tg->css.cgroup, pathname, 256);
+	printk(KERN_CRIT "path=%s nr_running=%u fdl_nr_running=%u throttled=%d last=%p "
+		"load_wt=%lu\n",
+		pathname, cfs_rq->nr_running, cfs_rq->fdl_nr_running, cfs_rq->throttled,
+		cfs_rq->last, cfs_rq->load.weight);
+
+	/* now get pointer to parent se and recursively print info */
+	pse = (cfs_rq->tg)->se[cpu];
+	for_each_sched_entity(pse) {
+		struct cfs_rq *cfs_rq = cfs_rq_of(pse);
+		struct task_group *tg = cfs_rq->tg;
+		struct sched_entity *left = __pick_first_entity(cfs_rq);
+
+		cgroup_path(tg->css.cgroup, pathname, 256);
+		printk(KERN_CRIT "path=%s(%p) cfs_rq->nr_running=%u cfs_rq->fdl_nr_running=%u "
+			"pse->on_rq=%d cfs_rq->throttled=%d "
+			"cfs_rq->last=%p cfs_rq->left_most=%p cfs_rq->curr=%p "
+			"cfs_rq->load.weight=%lu\n",
+			pathname, pse, cfs_rq->nr_running, cfs_rq->fdl_nr_running, pse->on_rq,
+		       cfs_rq->throttled, cfs_rq->last, left, cfs_rq->curr,
+			cfs_rq->load.weight);
+	}
+#endif
+}
+
 static int
 wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se);
 
@@ -5029,6 +5621,57 @@ pick_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	struct sched_entity *left = __pick_first_entity(cfs_rq);
 	struct sched_entity *se;
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if (qos_dump_fdl_rq(cfs_rq))
+		fdl_dump_rq(cfs_rq, "pick next");
+
+	if (!cfs_rq->fc_dl && cfs_normal_nr_running(cfs_rq) && cfs_rq->fdl_nr_running) {
+		/*
+		 * Init non dl container dl here as it can be more complex to prevent non dl starvation
+		 * if we init elsewhere
+		 */
+		u64 wt = ktime_to_ns(ktime_get());
+		u64 vdt = vdt_cfs_rq(cfs_rq, wt);
+
+		cfs_rq->fc_dl = vdt + qosp_default_fair_dl;
+		if (qos_show_hf_debug(NULL))
+			printk("==QOS enqueue init non dl container dl to %llu in pick next\n",
+			  cfs_rq->fc_dl);
+	}
+
+	se = __pick_first_entity_fdl(cfs_rq);
+
+	if (!se) {
+		if (curr && entity_fdl_active(curr) ) {
+			if(qos_show_hf_debug(se))
+				printk("==QOS pick maybe curr, no left, curr dl %llu\n", curr->dl);
+			se = curr;
+		}
+	} else if (curr && entity_fdl_active(curr) && curr->dl <= se->dl) {
+			if(qos_show_hf_debug(se))
+				printk("==QOS pick maybe curr, left dl %llu, curr dl %llu\n", se->dl, curr->dl);
+			se = curr;
+	}
+
+	if (se && cfs_normal_nr_running(cfs_rq) && cfs_rq->fc_dl && cfs_rq->fc_dl < se->dl) {
+		if(qos_show_hf_debug(se))
+			printk("==QOS pick non dl container, dl %llu, fc_dl %llu\n", se->dl, cfs_rq->fc_dl);
+		se = NULL;
+	}
+
+	if (se) {
+		if(qos_show_hf_debug(se)) {
+			char pathname[256];
+			*pathname = '\0';
+			if (se->my_q)
+				cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+			printk("==QOS dl pick entity	cpu %d	  dl %llu	 cgroup %s\n", smp_processor_id(),
+			  se->dl, pathname);
+		}
+		goto done;
+	}
+#endif
+
 	/*
 	 * If curr is set we have to see if its left of the leftmost entity
 	 * still in the tree, provided there was anything in the tree at all.
@@ -5037,6 +5680,12 @@ pick_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 		left = curr;
 
 	se = left; /* ideally we run the leftmost entity */
+
+	if (unlikely(!se)) {
+		dump_cfs_rq_state(cfs_rq);
+		printk("first %p    curr %p\n", __pick_first_entity(cfs_rq), curr);
+		BUG();
+	}
 
 	/*
 	 * Avoid running the skip buddy, if running something else can
@@ -5069,6 +5718,17 @@ pick_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 		se = cfs_rq->last;
 	}
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	if(qos_show_hf_debug(se)) {
+		char pathname[256];
+		*pathname = '\0';
+		if (se->my_q)
+			cgroup_path(se->my_q->tg->css.cgroup, pathname, 256);
+		printk("==QOS non dl pick entity    cpu %d    cgroup %s\n", smp_processor_id(), pathname);
+	}
+
+done:
+#endif
 	return se;
 }
 
@@ -5091,7 +5751,13 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 	if (prev->on_rq) {
 		update_stats_wait_start_fair(cfs_rq, prev);
 		/* Put 'current' back into the tree. */
-		__enqueue_entity(cfs_rq, prev);
+#ifdef CONFIG_FAIR_GROUP_SCHED
+		enqueue_set_account_fdl(cfs_rq, prev, 0, 1);
+		if (entity_fdl_active(prev))
+			__enqueue_entity_fdl(cfs_rq, prev);
+		else
+#endif
+			__enqueue_entity(cfs_rq, prev);
 		/* in !on_rq case, update occurred at dequeue */
 		update_load_avg(cfs_rq, prev, 0);
 	}
@@ -5121,6 +5787,12 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
 		resched_curr(rq_of(cfs_rq));
 		return;
 	}
+
+	if (!sched_feat(HRTICK) && cfs_rq->fdl_nr_running) {
+		resched_curr(rq_of(cfs_rq));
+		return;
+	}
+
 	/*
 	 * don't let the period tick interfere with the hrtick preemption
 	 */
@@ -5129,7 +5801,7 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
 		return;
 #endif
 
-	if (cfs_rq->nr_running > 1)
+	if (cfs_normal_nr_running(cfs_rq) > 1)
 		check_preempt_tick(cfs_rq, curr);
 }
 
@@ -5469,7 +6141,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		if (se->on_rq)
 			break;
-		enqueue_entity(qcfs_rq, se, ENQUEUE_WAKEUP);
+		enqueue_entity(qcfs_rq, se, ENQUEUE_WAKEUP  | ENQUEUE_UNTHROTTLE);
 
 		if (cfs_rq_is_idle(group_cfs_rq(se)))
 			idle_task_delta = cfs_rq->h_nr_running;
@@ -6132,21 +6804,68 @@ static void hrtick_start_fair(struct rq *rq, struct task_struct *p)
 {
 	struct sched_entity *se = &p->se;
 	struct cfs_rq *cfs_rq = cfs_rq_of(se);
+	u64 dl, wdl = 0;
+	s64 fdl_delta = 0;
+	s64 delta = 0;
+	s64 combined_delta;
 
 	SCHED_WARN_ON(task_rq(p) != rq);
 
-	if (rq->cfs.h_nr_running > 1) {
+	if (rq->cfs.h_nr_running < 2)
+		return;
+
+	if (qos_dump_fdl_rq(&rq->cfs))
+		fdl_dump_rq(&rq->cfs, "hrtick");
+
+	dl = sched_fdl_queued_dl(&rq->cfs, entity_fdl_active(top_se_of(se)));
+	if (dl) {
+		wdl = dl + rq->cfs.vdt_lag;
+		fdl_delta = wdl - ktime_to_ns(ktime_get());
+		if (fdl_delta > 0)
+			fdl_delta = (fdl_delta * qosp_tick_margin) >> QOS_SHIFT;
+		if (qos_show_hf_debug(se))
+			printk("==QOS hrtick dl tick should happen after %lldus\n", fdl_delta/1000LL);
+	}
+
+	if (!dl || fdl_delta > 0) {
 		u64 slice = sched_slice(cfs_rq, se);
 		u64 ran = se->sum_exec_runtime - se->prev_sum_exec_runtime;
-		s64 delta = slice - ran;
 
-		if (delta < 0) {
-			if (task_current(rq, p))
-				resched_curr(rq);
-			return;
-		}
-		hrtick_start(rq, delta);
+		delta = slice - ran;
+		if (qos_show_hf_debug(se))
+			printk("==QOS hrtick - regular tick should happen after %lldus\n", delta/1000LL);
 	}
+
+	if (!rq->fdl_t_nr_running && !dl && delta <= 0) { /* regular cfs behavior */
+		if (task_current(rq, p))
+			resched_curr(rq);
+		return;
+	}
+
+	if (fdl_delta > 0 && delta > 0) {
+		combined_delta = min(fdl_delta, delta);
+	} else if (dl) {
+		combined_delta = fdl_delta;
+	} else {
+		combined_delta = delta;
+	}
+
+	if (combined_delta <= 0) {
+		if (qos_show_hf_debug(se))
+			printk("==QOS hrtick missed by %lldus, next dl tick after %lldus\n",
+			  -combined_delta/1000LL, qosp_tick_skip/1000ULL);
+		combined_delta = qosp_tick_skip;
+	}
+
+	if (combined_delta > qosp_max_tick_interval) {
+		if (qos_show_hf_debug(se))
+			printk("==QOS warning: long tick %lld    next miss %llu overridden\n", combined_delta, wdl);
+		combined_delta = qosp_max_tick_interval;
+	}
+
+	if (qos_show_hf_debug(se))
+		printk("==QOS hrtick - finally set tick to happen after %lldus\n", combined_delta/1000LL);
+	hrtick_start(rq, combined_delta);
 }
 
 /*
@@ -6161,7 +6880,8 @@ static void hrtick_update(struct rq *rq)
 	if (!hrtick_enabled_fair(rq) || curr->sched_class != &fair_sched_class)
 		return;
 
-	if (cfs_rq_of(&curr->se)->nr_running < sched_nr_latency)
+	if (cfs_rq_of(&curr->se)->fdl_nr_running || cfs_normal_nr_running(cfs_rq_of(&curr->se))
+	  < sched_nr_latency)
 		hrtick_start_fair(rq, curr);
 }
 #else /* !CONFIG_SCHED_HRTICK */
@@ -6233,6 +6953,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	struct sched_entity *se = &p->se;
 	int idle_h_nr_running = task_has_idle_policy(p);
 	int task_new = !(flags & ENQUEUE_WAKEUP);
+	int unthrottle = flags & ENQUEUE_UNTHROTTLE;
 
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
@@ -6266,7 +6987,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		if (cfs_rq_throttled(cfs_rq))
 			goto enqueue_throttle;
 
-		flags = ENQUEUE_WAKEUP;
+		flags = ENQUEUE_WAKEUP | unthrottle;
 	}
 
 	for_each_sched_entity(se) {
@@ -6309,6 +7030,10 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 enqueue_throttle:
 	assert_list_leaf_cfs_rq(rq);
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	sched_fdl_update_rq_dl(rq);
+#endif
 
 	hrtick_update(rq);
 }
@@ -6387,6 +7112,11 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 dequeue_throttle:
 	util_est_update(&rq->cfs, p, task_sleep);
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	sched_fdl_update_rq_dl(rq);
+#endif
+
 	hrtick_update(rq);
 }
 
@@ -6888,6 +7618,39 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, bool 
 	struct sched_domain *this_sd = NULL;
 	u64 time = 0;
 
+	u64 rdl, wdl = 0, gdl = 0;
+	u64 fdl_max_slack = 0;
+	int fdl_max_slack_cpu = -1;
+	int no_fdl_cpu_found = 0;
+	u64 dl;
+	u64 wt = 0;
+
+	if (qosp_wake_dl_scan &&
+	  !((1ULL << qosp_wake_dl_interval_shift) - 1 & p->stats.nr_wakeups)) {
+		struct sched_entity *top_se = top_se_of(&p->se);
+
+		if (entity_is_task(top_se))
+			rdl = 0;
+		else
+			rdl = entity_rdl(top_se);
+		if (rdl)
+			wdl = entity_wdl(top_se);
+		gdl = wdl ? wdl : rdl;
+		if (gdl)
+			wt = ktime_to_ns(ktime_get());
+	}
+
+	if (gdl && qos_show_hf_debug(&p->se))
+		printk("==QOS: select idle checking dl, gdl %llu\n", gdl);
+
+	if (qosp_wake_prefer_preempt_prev && gdl) {
+		int prev = task_cpu(p);
+		if (!sched_fdl_check_dl_cpu(prev, wt, &dl))
+			return prev;
+		else if (dl > gdl * qosp_wake_dl_margin >> QOS_SHIFT)
+			return prev;
+	}
+
 	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
 
 	if (sched_feat(SIS_PROP) && !has_idle_core) {
@@ -6945,7 +7708,30 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, bool 
 			idle_cpu = __select_idle_cpu(cpu, p);
 			if ((unsigned int)idle_cpu < nr_cpumask_bits)
 				break;
+			if (gdl && !no_fdl_cpu_found && sched_cpu_cookie_match(cpu_rq(cpu), p)) {
+				if (!sched_fdl_check_dl_cpu(cpu, wt, &dl)) {
+					fdl_max_slack_cpu = cpu;
+					no_fdl_cpu_found = 1;
+				} else if (dl > gdl * qosp_wake_dl_margin >> QOS_SHIFT
+				  && dl > fdl_max_slack) {
+					fdl_max_slack = dl;
+					fdl_max_slack_cpu = cpu;
+				}
+				if (qos_show_hf_debug(&p->se))
+					printk("==QOS: select idle check cpu %d    has dl %d	dl %llu\n",
+					  cpu, !no_fdl_cpu_found, no_fdl_cpu_found ? 0 : dl);
+			}
 		}
+		if (qosp_wake_prefer_preempt_others && gdl &&
+		  fdl_max_slack_cpu != -1)
+			break;
+	}
+
+	if (idle_cpu >= nr_cpumask_bits && fdl_max_slack_cpu != -1) {
+		if (qos_show_hf_debug(&p->se))
+			printk("==QOS: select idle pick cpu %d based on dl, dl %llu\n",
+			  fdl_max_slack_cpu, fdl_max_slack);
+		idle_cpu = fdl_max_slack_cpu;
 	}
 
 	if (has_idle_core)
@@ -7650,6 +8436,10 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 	}
 	rcu_read_unlock();
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	sched_fdl_update_target_dl(p, new_cpu);
+#endif
+
 	return new_cpu;
 }
 
@@ -7796,9 +8586,13 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 	struct task_struct *curr = rq->curr;
 	struct sched_entity *se = &curr->se, *pse = &p->se;
 	struct cfs_rq *cfs_rq = task_cfs_rq(curr);
-	int scale = cfs_rq->nr_running >= sched_nr_latency;
+	int scale = cfs_normal_nr_running(cfs_rq) >= sched_nr_latency;
 	int next_buddy_marked = 0;
 	int cse_is_idle, pse_is_idle;
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	u64 sedl, psedl;
+	struct cfs_rq *common_rq;
+#endif
 
 	if (unlikely(se == pse))
 		return;
@@ -7848,6 +8642,32 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 	cse_is_idle = se_is_idle(se);
 	pse_is_idle = se_is_idle(pse);
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	common_rq = cfs_rq_of(se);
+	sedl = se->dl;
+	psedl = pse->dl;
+
+	if (qos_show_hf_debug(se) || qos_show_hf_debug(pse))
+		printk("==QOS check preempt    curr dl %llu    new task dl %llu\n", sedl, psedl);
+
+	if (sedl && psedl) {
+		if (psedl < sedl)
+			goto fdl_preempt;
+		else
+			goto fdl_no_preempt;
+	} else if (sedl || psedl) { /* one side dl, need to consider non dl container */
+		if (!common_rq->fc_dl) {/* non dl container untracked if no fdl running */
+			if (psedl)
+				goto fdl_preempt;
+			else
+				goto fdl_no_preempt;
+		} else if ((!sedl && psedl < common_rq->fc_dl) ||(!psedl && common_rq->fc_dl < sedl)) {
+			goto fdl_preempt;
+		}
+		goto fdl_no_preempt;
+	}
+#endif
+
 	/*
 	 * Preempt an idle group in favor of a non-idle group (and don't preempt
 	 * in the inverse case).
@@ -7869,6 +8689,37 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 	}
 
 	return;
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+
+fdl_preempt:
+	if (qos_show_hf_debug(se) || qos_show_hf_debug(pse)) {
+		char pathnew[256] = "";
+		char pathcurr[256] = "";
+		if (pse->my_q)
+			cgroup_path(pse->my_q->tg->css.cgroup, pathnew, 256);
+		if (se->my_q)
+			cgroup_path(se->my_q->tg->css.cgroup, pathcurr, 256);
+		printk("==QOS cpu %d new task %d(%s) preempting curr %d(%s)\n",
+		  smp_processor_id(), p->pid, pathnew, curr->pid, pathcurr);
+	}
+	resched_curr(rq);
+	return;
+
+fdl_no_preempt:
+	if (qos_show_hf_debug(se) || qos_show_hf_debug(pse)) {
+		char pathnew[256] = "";
+		char pathcurr[256] = "";
+		if (pse->my_q)
+			cgroup_path(pse->my_q->tg->css.cgroup, pathnew, 256);
+		if (se->my_q)
+			cgroup_path(se->my_q->tg->css.cgroup, pathcurr, 256);
+		printk("==QOS cpu %d new task %d(%s) NOT preempting curr %d(%s)\n",
+		  smp_processor_id(), p->pid, pathnew, curr->pid, pathcurr);
+	}
+	hrtick_start_fair(rq, curr);
+	return;
+#endif
 
 preempt:
 	resched_curr(rq);
@@ -12244,6 +13095,9 @@ static void set_next_task_fair(struct rq *rq, struct task_struct *p, bool first)
 void init_cfs_rq(struct cfs_rq *cfs_rq)
 {
 	cfs_rq->tasks_timeline = RB_ROOT_CACHED;
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	cfs_rq->tasks_deadline = RB_ROOT_CACHED;
+#endif
 	u64_u32_store(cfs_rq->min_vruntime, (u64)(-(1LL << 20)));
 #ifdef CONFIG_SMP
 	raw_spin_lock_init(&cfs_rq->removed.lock);
@@ -12283,6 +13137,7 @@ void free_fair_sched_group(struct task_group *tg)
 
 	kfree(tg->cfs_rq);
 	kfree(tg->se);
+	free_percpu(tg->acc_wait);
 }
 
 int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
@@ -12298,7 +13153,12 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 	if (!tg->se)
 		goto err;
 
-	tg->shares = NICE_0_LOAD;
+	tg->acc_wait = alloc_percpu(u64);
+	if (!tg->acc_wait)
+		goto err;
+
+	tg->legacy_shares = NICE_0_LOAD;
+	tg->shares = tg->legacy_shares;
 
 	init_cfs_bandwidth(tg_cfs_bandwidth(tg));
 
@@ -12402,7 +13262,7 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	se->parent = parent;
 }
 
-static DEFINE_MUTEX(shares_mutex);
+DEFINE_MUTEX(shares_mutex);
 
 static int __sched_group_set_shares(struct task_group *tg, unsigned long shares)
 {
@@ -12449,6 +13309,29 @@ int sched_group_set_shares(struct task_group *tg, unsigned long shares)
 		ret = -EINVAL;
 	else
 		ret = __sched_group_set_shares(tg, shares);
+	mutex_unlock(&shares_mutex);
+
+	return ret;
+}
+
+int sched_group_set_guaranteed_shares(struct task_group *tg, unsigned long shares)
+{
+	int ret = -EINVAL;
+	int eng = !tg->guaranteed_shares && shares;
+	int disg = tg->guaranteed_shares && !shares;
+
+	if (!tg->se[0])
+		return -EINVAL;
+
+	mutex_lock(&shares_mutex);
+	if (!tg_is_idle(tg)) {
+		tg->guaranteed_shares = shares;
+		if (disg)
+			ret = __sched_group_set_shares(tg, tg->legacy_shares);
+		if (eng)
+			ret = __sched_group_set_shares(tg, tg->guaranteed_shares);
+		/* otherwise leave (dynamic) shares to the control loop */
+	}
 	mutex_unlock(&shares_mutex);
 
 	return ret;
