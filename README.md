@@ -12,6 +12,8 @@
 | Latency Nice | [sched/latency_nice/linux-5.19-rc5-latency_nice-v2](https://github.com/gatieme/linux/tree/sched/latency_nice/linux-5.19-rc5-latency_nice-v2) | [Add latency_nice priority, Vincent Guittot, 2023/02/24](https://lore.kernel.org/all/20230224093454.956298-1-vincent.guittot@linaro.org/)<br>*-*-*-*-*-*-*-* <br>[sched: EEVDF using latency-nice, Peter Zijlstra, 20230328](https://lore.kernel.org/all/20230328092622.062917921@infradead.org) |
 | Scheduler eBPF | [sched/scheduler_ebpf/linux-5.15-rc3-scheduler_ebpf-v1](https://github.com/gatieme/linux/tree/sched/scheduler_ebpf/linux-5.15-rc3-scheduler_ebpf-v1)<br>[sched/scheduler_ebpf/linux-6.1-rc7-scheduler_ebpf-v2](https://github.com/gatieme/linux/tree/sched/scheduler_ebpf/linux-5.15-rc3-scheduler_ebpf-v1) | [sched: Implement BPF extensible scheduler class, Tejun Heo, 20230128](https://lore.kernel.org/lkml/20230128001639.3510083-1-tj@kernel.org) |
 | UMCG(User Managed Concurrency Groups) | [sched/umcg](https://github.com/gatieme/linux/tree/sched/umcg) | [sched,mm,x86/uaccess: implement User Managed Concurrency Groups, Peter Oskolkov, 2021/11/22](https://patchwork.kernel.org/project/linux-mm/cover/20211122211327.5931-1-posk@google.com)<br>*-*-*-*-*-*-*-* <br>[sched: User Managed Concurrency Groups, Peter Zijlstra, 20220120](https://patchwork.kernel.org/project/linux-mm/cover/20220120155517.066795336@infradead.org)|
+| Proxy Execution | [priority-inversion/proxy_execution-arm_valentin-sched-rfc-v3](https://github.com/gatieme/linux/tree/priority-inversion/proxy_execution-arm_valentin-sched-rfc-v3)<br>[priority-inversion/proxy_execution-jlelli-deadline-rfc-v2-debug](https://github.com/gatieme/linux/tree/priority-inversion/proxy_execution-jlelli-deadline-rfc-v2-debug) | NA |
+| EEVDF | [sched/eevdf/linux-6.4-rc5-eevdf-v1](https://github.com/gatieme/linux/tree/sched/eevdf/linux-6.4-rc5-eevdf-v1) | [sched: EEVDF and latency-nice and/or slice-attr](https://lore.kernel.org/all/20230531124603.654144274@infradead.org) |
 
 ## 1.2 MM
 -------
@@ -34,9 +36,12 @@
 | damon/master | NA |
 | livepatching | NA |
 | master | NA |
-| mm  | NA |
+| mm  | maintainer/mm | 原始地址 [](https://git.kernel.org/pub/scm/linux/kernel/git/akpm/mm.git) |
 | rt  | NA |
-| tip | NA |
+| TIP | [maintainer/tip](https://github.com/gatieme/linux/tree/tip) | x86 架构的三个主要维护者 Thomas Gleixner, Ingo Molnar 和 Peter Anvin. 因为工作相互重叠, 于 2007 年建立了 TIP 分支; 最初专注于 x86 架构, 但后来扩展到调度等主要核心内核领域. 参见 [Git tree maintenance](https://lwn.net/Articles/572068). 原始地址 [tip/tip.git](https://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git) |
+
+
+
 
 # 3 各发行版
 -------
@@ -45,4 +50,3 @@
 | BRANCH | DESCRIPITION |
 |:------:|:------------:|
 | openanolis/devel-4.19<br>openanolis/devel-5.10 | NA |
-| priority-inversion/proxy_execution-arm_valentin-sched-rfc-v3<br>priority-inversion/proxy_execution-jlelli-deadline-rfc-v2-debug | NA |
