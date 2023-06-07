@@ -2472,6 +2472,7 @@ extern const_debug unsigned int sysctl_sched_migration_cost;
 extern unsigned int sysctl_sched_base_slice;
 
 #ifdef CONFIG_SCHED_DEBUG
+extern unsigned int sysctl_sched_wakeup_granularity;
 extern int sysctl_resched_latency_warn_ms;
 extern int sysctl_resched_latency_warn_once;
 

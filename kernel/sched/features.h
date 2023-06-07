@@ -13,7 +13,11 @@ SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)
  * wakeup-preemption), since its likely going to consume data we
  * touched, increases cache locality.
  */
+#ifdef CONFIG_SCHED_BORE
+SCHED_FEAT(NEXT_BUDDY, true)
+#else // CONFIG_SCHED_BORE
 SCHED_FEAT(NEXT_BUDDY, false)
+#endif // CONFIG_SCHED_BORE
 
 /*
  * Consider buddies to be cache hot, decreases the likeliness of a
