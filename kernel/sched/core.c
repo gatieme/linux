@@ -4364,6 +4364,57 @@ int wake_up_state(struct task_struct *p, unsigned int state)
 	return try_to_wake_up(p, state, 0);
 }
 
+#ifdef CONFIG_SCHED_BORE
+#define CHILD_BURST_CUTOFF_BITS 9
+extern unsigned int sched_burst_cache_lifetime;
+
+void __init sched_init_bore(void) {
+	init_task.child_burst_cache = 0;
+	init_task.child_burst_last_cached = 0;
+	init_task.se.prev_burst_time = 0;
+	init_task.se.burst_time = 0;
+	init_task.se.max_burst_time = 0;
+}
+
+void inline __sched_fork_bore(struct task_struct *p) {
+	p->child_burst_cache = 0;
+	p->child_burst_last_cached = 0;
+	p->se.burst_time = 0;
+}
+
+static inline void update_task_child_burst_time_cache(struct task_struct *p) {
+	u64 sum = 0, avg_burst_time = 0;
+	u32 cnt = 0;
+	struct task_struct *child;
+
+	read_lock(&tasklist_lock);
+	list_for_each_entry(child, &p->children, sibling) {
+		cnt++;
+		sum += child->se.max_burst_time >> CHILD_BURST_CUTOFF_BITS;
+	}
+	read_unlock(&tasklist_lock);
+
+	if (cnt) avg_burst_time = div_u64(sum, cnt) << CHILD_BURST_CUTOFF_BITS;
+	p->child_burst_cache = max(avg_burst_time, p->se.max_burst_time);
+}
+
+static void update_task_initial_burst_time(struct task_struct *task) {
+	struct sched_entity *se = &task->se;
+	struct task_struct *par = task->real_parent;
+	u64 ktime = ktime_to_ns(ktime_get());
+
+	if (likely(par)) {
+		if (par->child_burst_last_cached + sched_burst_cache_lifetime < ktime) {
+			par->child_burst_last_cached = ktime;
+			update_task_child_burst_time_cache(par);
+		}
+		se->prev_burst_time = max(se->prev_burst_time, par->child_burst_cache);
+	}
+
+	se->max_burst_time = se->prev_burst_time;
+}
+#endif // CONFIG_SCHED_BORE
+
 /*
  * Perform scheduler related setup for a newly forked process p.
  * p is forked by current.
@@ -4380,6 +4431,9 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.prev_sum_exec_runtime	= 0;
 	p->se.nr_migrations		= 0;
 	p->se.vruntime			= 0;
+#ifdef CONFIG_SCHED_BORE
+	__sched_fork_bore(p);
+#endif // CONFIG_SCHED_BORE
 	INIT_LIST_HEAD(&p->se.group_node);
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -4594,6 +4648,9 @@ late_initcall(sched_core_sysctl_init);
 int sched_fork(unsigned long clone_flags, struct task_struct *p)
 {
 	__sched_fork(clone_flags, p);
+#ifdef CONFIG_SCHED_BORE
+	update_task_initial_burst_time(p);
+#endif // CONFIG_SCHED_BORE
 	/*
 	 * We mark the process as NEW here. This guarantees that
 	 * nobody will actually run it, and a signal or other external
@@ -9673,6 +9730,11 @@ void __init sched_init(void)
 #ifdef CONFIG_SMP
 	BUG_ON(&dl_sched_class != &stop_sched_class + 1);
 #endif
+
+#ifdef CONFIG_SCHED_BORE
+	sched_init_bore();
+	printk(KERN_INFO "BORE (Burst-Oriented Response Enhancer) CPU Scheduler modification 2.4.0 by Masahito Suzuki");
+#endif // CONFIG_SCHED_BORE
 
 	wait_bit_init();
 
