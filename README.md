@@ -14,6 +14,7 @@
 | UMCG(User Managed Concurrency Groups) | [sched/umcg](https://github.com/gatieme/linux/tree/sched/umcg) | [sched,mm,x86/uaccess: implement User Managed Concurrency Groups, Peter Oskolkov, 2021/11/22](https://patchwork.kernel.org/project/linux-mm/cover/20211122211327.5931-1-posk@google.com)<br>*-*-*-*-*-*-*-* <br>[sched: User Managed Concurrency Groups, Peter Zijlstra, 20220120](https://patchwork.kernel.org/project/linux-mm/cover/20220120155517.066795336@infradead.org)|
 | Proxy Execution | [priority-inversion/proxy_execution-arm_valentin-sched-rfc-v3](https://github.com/gatieme/linux/tree/priority-inversion/proxy_execution-arm_valentin-sched-rfc-v3)<br>[priority-inversion/proxy_execution-jlelli-deadline-rfc-v2-debug](https://github.com/gatieme/linux/tree/priority-inversion/proxy_execution-jlelli-deadline-rfc-v2-debug) | NA |
 | EEVDF | [sched/eevdf/linux-6.4-rc5-eevdf-v1](https://github.com/gatieme/linux/tree/sched/eevdf/linux-6.4-rc5-eevdf-v1) | [sched: EEVDF and latency-nice and/or slice-attr](https://lore.kernel.org/all/20230531124603.654144274@infradead.org) |
+| BORE | [sched/bore/linux-6.1.33-bore_v2.4.0](https://github.com/gatieme/linux/tree/sched/bore/linux-6.1.33-bore_v2.4.0)<br>[sched/bore/linux-6.4-rc5-eevdf_bore_v2.4.0](https://github.com/gatieme/linux/tree/sched/bore/linux-6.4-rc5-eevdf_bore_v2.4.0) | [BORE (Burst-Oriented Response Enhancer) CPU Scheduler](https://github.com/firelzrd/bore-scheduler) |
 
 ## 1.2 MM
 -------
