@@ -3804,28 +3804,51 @@ static inline void ttwu_do_wakeup(struct task_struct *p)
 #ifdef CONFIG_PROXY_EXEC
 static void activate_task_and_blocked_ent(struct rq *rq, struct task_struct *p, int en_flags)
 {
+	if (!sched_proxy_exec()) {
+		activate_task(rq, p, en_flags);
+		return;
+	}
+
+	if (p->sleeping_owner) {
+		struct task_struct *owner = p->sleeping_owner;
+
+		raw_spin_lock(&owner->blocked_lock);
+		list_del_init(&p->blocked_node);
+		p->sleeping_owner = NULL;
+		raw_spin_unlock(&owner->blocked_lock);
+	}
+
 	/*
 	 * By calling activate_task with blocked_lock held, we order against
 	 * the proxy() blocked_task case such that no more blocked tasks will
 	 * be enqueued on p once we release p->blocked_lock.
 	 */
 	raw_spin_lock(&p->blocked_lock);
+	WARN_ON(task_cpu(p) != cpu_of(rq));
 	activate_task(rq, p, en_flags);
-	raw_spin_unlock(&p->blocked_lock);
 
 	/*
 	 * A whole bunch of 'proxy' tasks back this blocked task, wake
 	 * them all up to give this task its 'fair' share.
 	 */
-	while (!list_empty(&p->blocked_entry)) {
-		struct task_struct *pp =
-			list_first_entry(&p->blocked_entry,
-					 struct task_struct,
-					 blocked_entry);
-		raw_spin_lock(&pp->blocked_lock);
-		BUG_ON(pp->blocked_entry.prev != &p->blocked_entry);
+	while (!list_empty(&p->blocked_head)) {
+		struct task_struct *pp;
+		unsigned int state;
 
-		list_del_init(&pp->blocked_entry);
+		pp = list_first_entry(&p->blocked_head,
+				      struct task_struct,
+				       blocked_node);
+
+		list_del_init(&pp->blocked_node);
+		WARN_ON(!pp->sleeping_owner);
+		pp->sleeping_owner = NULL;
+		smp_rmb();
+		state = READ_ONCE(pp->__state);
+
+		/* Avoid racing with ttwu */
+		if (state == TASK_WAKING)
+			continue;
+
 		if (READ_ONCE(pp->on_rq)) {
 			/*
 			 * We raced with a non mutex handoff activation of pp.
@@ -3833,14 +3856,15 @@ static void activate_task_and_blocked_ent(struct rq *rq, struct task_struct *p, 
 			 * all of the tasks after pp in the blocked_entry list,
 			 * so we're done here.
 			 */
-			raw_spin_unlock(&pp->blocked_lock);
-			break;
+			continue;
 		}
 		__set_task_cpu(pp, cpu_of(rq));
-		activate_task(rq, pp, en_flags);
+		raw_spin_unlock(&p->blocked_lock);
+		activate_task_and_blocked_ent(rq, pp, en_flags);
 		resched_curr(rq);
-		raw_spin_unlock(&pp->blocked_lock);
+		raw_spin_lock(&p->blocked_lock);
 	}
+	raw_spin_unlock(&p->blocked_lock);
 }
 #else
 static inline void activate_task_and_blocked_ent(struct rq *rq, struct task_struct *p, int en_flags)
@@ -6966,8 +6990,10 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 		 * ttwu_do_activate must not have a chance to activate p
 		 * elsewhere before it's fully extricated from its old rq.
 		 */
+		WARN_ON(next->sleeping_owner);
+		next->sleeping_owner = owner;
 		smp_mb();
-		list_add(&next->blocked_entry, &owner->blocked_entry);
+		list_add(&next->blocked_node, &owner->blocked_head);
 	}
 }
 
@@ -7079,7 +7105,7 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 
 		if (!owner->on_rq) {
 			/*
-			 * rq->curr must not be added to the blocked_entry list or else
+			 * rq->curr must not be added to the blocked_head list or else
 			 * ttwu_do_activate could enqueue it elsewhere before it switches
 			 * out here. The approach to avoiding this is the same as in the
 			 * migrate_task case.
@@ -7311,6 +7337,7 @@ pick_again:
 		set_tsk_need_resched(rq->idle);
 		next = rq->idle;
 	}
+	WARN_ON(task_cpu(next) != cpu_of(rq));
 
 	if (!preserve_need_resched)
 		clear_tsk_need_resched(prev);
