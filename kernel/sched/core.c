@@ -6885,17 +6885,17 @@ proxy_migrate_task(struct rq *rq, struct task_struct *next,
 	rq_set_selected(rq, rq->idle);
 	set_next_task(rq, rq_selected(rq));
 
-	wake_cpu = next->wake_cpu;
+	wake_cpu = p->wake_cpu;
 
-	WARN_ON(next == rq->curr);
+	WARN_ON(p == rq->curr);
 
-	deactivate_task(rq, next, 0);
-	set_task_cpu(next, that_cpu);
+	deactivate_task(rq, p, 0);
+	set_task_cpu(p, that_cpu);
 	/*
 	 * Preserve p->wake_cpu, such that we can tell where it
 	 * used to run later.
 	 */
-	next->wake_cpu = wake_cpu;
+	p->wake_cpu = wake_cpu;
 
 	if (rq->balance_callback)
 		__balance_callbacks(rq);
@@ -6904,8 +6904,8 @@ proxy_migrate_task(struct rq *rq, struct task_struct *next,
 	raw_spin_rq_unlock(rq);
 	raw_spin_rq_lock(that_rq);
 
-	activate_task(that_rq, next, 0);
-	check_preempt_curr(that_rq, next, 0);
+	activate_task(that_rq, p, 0);
+	check_preempt_curr(that_rq, p, 0);
 
 	raw_spin_rq_unlock(that_rq);
 	raw_spin_rq_lock(rq);
